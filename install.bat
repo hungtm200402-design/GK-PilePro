@@ -29,7 +29,7 @@ echo Dang nang cap pip...
 
 echo.
 echo Dang cai thu vien can thiet...
-.\.venv\Scripts\python.exe -m pip install --no-cache-dir --force-reinstall pillow python-dotenv openpyxl google-genai
+.\.venv\Scripts\python.exe -m pip install --no-cache-dir --force-reinstall -r requirements.txt
 
 echo.
 echo ============================================

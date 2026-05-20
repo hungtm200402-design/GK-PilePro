@@ -1,6 +1,16 @@
 .env
+.venv/
 __pycache__/
+*.pyc
+
+build/
 last_run_v12/
-*.spec
 gk_pilepro_error.log
+
+dist/*
+!dist/*.exe
+
+dist/gk_pilepro_*.json
+dist/tool_kl_*.json
+dist/last_run_v12/
 dist/gk_pilepro_error.log
