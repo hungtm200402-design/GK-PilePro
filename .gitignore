@@ -2,3 +2,5 @@
 __pycache__/
 last_run_v12/
 *.spec
+gk_pilepro_error.log
+dist/gk_pilepro_error.log
