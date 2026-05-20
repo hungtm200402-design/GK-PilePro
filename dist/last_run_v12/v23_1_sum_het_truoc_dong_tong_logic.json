@@ -1,0 +1,336 @@
+{
+  "rule": "V23_1_SUM_HET_TRUOC_DONG_TONG",
+  "sheet": "VL500",
+  "header_row": 4,
+  "total_row_before": 59,
+  "insert_at": 59,
+  "rows_added": 1,
+  "data_rows": [
+    59
+  ],
+  "total_row_after": 60,
+  "last_stt_before": 51,
+  "new_stt_start": 52,
+  "new_stt_end": 52,
+  "first_data_row_detected_old": 7,
+  "first_data_row_strict": 7,
+  "sum_last_row_before_total": 59,
+  "sum_columns": [
+    {
+      "col": 4,
+      "letter": "D",
+      "start_row": 7,
+      "formula": "=SUM(D7:D59)"
+    },
+    {
+      "col": 5,
+      "letter": "E",
+      "start_row": 7,
+      "formula": "=SUM(E7:E59)"
+    },
+    {
+      "col": 6,
+      "letter": "F",
+      "start_row": 7,
+      "formula": "=SUM(F7:F59)"
+    },
+    {
+      "col": 7,
+      "letter": "G",
+      "start_row": 7,
+      "formula": "=SUM(G7:G59)"
+    },
+    {
+      "col": 8,
+      "letter": "H",
+      "start_row": 7,
+      "formula": "=SUM(H7:H59)"
+    },
+    {
+      "col": 9,
+      "letter": "I",
+      "start_row": 7,
+      "formula": "=SUM(I7:I59)"
+    },
+    {
+      "col": 10,
+      "letter": "J",
+      "start_row": 7,
+      "formula": "=SUM(J7:J59)"
+    },
+    {
+      "col": 11,
+      "letter": "K",
+      "start_row": 7,
+      "formula": "=SUM(K7:K59)"
+    },
+    {
+      "col": 12,
+      "letter": "L",
+      "start_row": 7,
+      "formula": "=SUM(L7:L59)"
+    },
+    {
+      "col": 13,
+      "letter": "M",
+      "start_row": 7,
+      "formula": "=SUM(M7:M59)"
+    },
+    {
+      "col": 14,
+      "letter": "N",
+      "start_row": 7,
+      "formula": "=SUM(N7:N59)"
+    },
+    {
+      "col": 15,
+      "letter": "O",
+      "start_row": 7,
+      "formula": "=SUM(O7:O59)"
+    },
+    {
+      "col": 17,
+      "letter": "Q",
+      "start_row": 7,
+      "formula": "=SUM(Q7:Q59)"
+    }
+  ],
+  "mapping": [
+    {
+      "source": "Ngày xuất",
+      "excel_col": 2,
+      "excel_letter": "B"
+    },
+    {
+      "source": "Số phiếu",
+      "excel_col": 3,
+      "excel_letter": "C"
+    },
+    {
+      "source": "Độ dài 5",
+      "excel_col": 4,
+      "excel_letter": "D"
+    },
+    {
+      "source": "Độ dài 6",
+      "excel_col": 5,
+      "excel_letter": "E"
+    },
+    {
+      "source": "Độ dài 7",
+      "excel_col": 6,
+      "excel_letter": "F"
+    },
+    {
+      "source": "Độ dài 8",
+      "excel_col": 7,
+      "excel_letter": "G"
+    },
+    {
+      "source": "Độ dài 9",
+      "excel_col": 8,
+      "excel_letter": "H"
+    },
+    {
+      "source": "Độ dài 10",
+      "excel_col": 9,
+      "excel_letter": "I"
+    },
+    {
+      "source": "Độ dài 11",
+      "excel_col": 10,
+      "excel_letter": "J"
+    },
+    {
+      "source": "Độ dài 12",
+      "excel_col": 11,
+      "excel_letter": "K"
+    },
+    {
+      "source": "Độ dài 13",
+      "excel_col": 12,
+      "excel_letter": "L"
+    },
+    {
+      "source": "Độ dài 14",
+      "excel_col": 13,
+      "excel_letter": "M"
+    },
+    {
+      "source": "Độ dài 15",
+      "excel_col": 14,
+      "excel_letter": "N"
+    },
+    {
+      "source": "Mũi D300",
+      "excel_col": 15,
+      "excel_letter": "O"
+    },
+    {
+      "source": "Xe vận chuyển",
+      "excel_col": 16,
+      "excel_letter": "P"
+    },
+    {
+      "source": "Tổng số m cọc D500",
+      "excel_col": 17,
+      "excel_letter": "Q"
+    },
+    {
+      "source": "Ghi chú",
+      "excel_col": 18,
+      "excel_letter": "R"
+    },
+    {
+      "source": "Hợp đồng",
+      "excel_col": 19,
+      "excel_letter": "S"
+    }
+  ],
+  "written_cell_validation": [
+    {
+      "row": 59,
+      "cell": "B59",
+      "source": "Ngày xuất",
+      "image_value": "2026-05-11",
+      "excel_value": "2026-05-11",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "C59",
+      "source": "Số phiếu",
+      "image_value": "XC11312605110013",
+      "excel_value": "XC11312605110013",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "D59",
+      "source": "Độ dài 5",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "E59",
+      "source": "Độ dài 6",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "F59",
+      "source": "Độ dài 7",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "G59",
+      "source": "Độ dài 8",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "H59",
+      "source": "Độ dài 9",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "I59",
+      "source": "Độ dài 10",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "J59",
+      "source": "Độ dài 11",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "K59",
+      "source": "Độ dài 12",
+      "image_value": "14",
+      "excel_value": 14,
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "L59",
+      "source": "Độ dài 13",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "M59",
+      "source": "Độ dài 14",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "N59",
+      "source": "Độ dài 15",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "O59",
+      "source": "Mũi D300",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "P59",
+      "source": "Xe vận chuyển",
+      "image_value": "15E-01954",
+      "excel_value": "15E-01954",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "Q59",
+      "source": "Tổng số m cọc D500",
+      "image_value": "168",
+      "excel_value": "=D59*5+E59*6+F59*7+G59*8+H59*9+I59*10+J59*11+K59*12+L59*13+M59*14+N59*15",
+      "status": "FORMULA_GIU_THEO_EXCEL_MAU"
+    },
+    {
+      "row": 59,
+      "cell": "R59",
+      "source": "Ghi chú",
+      "image_value": "",
+      "excel_value": "",
+      "status": "OK"
+    },
+    {
+      "row": 59,
+      "cell": "S59",
+      "source": "Hợp đồng",
+      "image_value": "8102260027",
+      "excel_value": 8102260027,
+      "status": "OK"
+    }
+  ]
+}
