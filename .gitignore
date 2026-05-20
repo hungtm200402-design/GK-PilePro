@@ -1,0 +1,6 @@
+.env
+__pycache__/
+last_run_v12/
+build/
+dist/
+*.spec
