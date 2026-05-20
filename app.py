@@ -38,6 +38,90 @@ def rounded_icon_image(image, size=(128, 128), radius_ratio=0.18):
     image.putalpha(Image.composite(alpha, Image.new("L", size, 0), mask))
     return image
 
+def sharp_icon_image(image, size):
+    """
+    Resize an icon for Windows/taskbar use without soft masking.
+    """
+    img = image.convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+    try:
+        from PIL import ImageEnhance
+        img = ImageEnhance.Sharpness(img).enhance(1.35)
+        img = ImageEnhance.Contrast(img).enhance(1.06)
+    except Exception:
+        pass
+    return img
+
+def build_simplified_taskbar_icon(size=256):
+    """
+    Tạo app-mark phẳng, dễ đọc ở kích thước nhỏ cho taskbar/shortcut.
+    """
+    from PIL import ImageDraw, ImageFont, ImageEnhance
+
+    img = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(img)
+
+    bg = "#0f2b4d"
+    bg2 = "#153d6c"
+    gold = "#d7a21f"
+    white = "#f5f7fb"
+    accent = "#7fb2ff"
+
+    # Rounded square background, but keep the inner content large and bold.
+    draw.rounded_rectangle((6, 6, size - 6, size - 6), radius=max(20, size // 8), fill=bg)
+    draw.rounded_rectangle((12, 12, size - 12, size - 12), radius=max(18, size // 9), fill=bg2)
+    draw.rounded_rectangle((18, 18, size - 18, size - 18), radius=max(16, size // 10), outline=accent, width=max(2, size // 110))
+
+    # A compact mark that stays readable at 16 px.
+    try:
+        font = ImageFont.truetype(r"C:\Windows\Fonts\arialbd.ttf", max(82, size // 2))
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Center the letters manually using measured bounds.
+    g_x = int(size * 0.11)
+    k_x = int(size * 0.50)
+    y = int(size * 0.18)
+    draw.text((g_x, y), "G", font=font, fill=white)
+    draw.text((k_x, y), "K", font=font, fill=gold)
+
+    # Small base bar to hint the pilepress brand without clutter.
+    bar_y = int(size * 0.78)
+    draw.rounded_rectangle((int(size * 0.14), bar_y, int(size * 0.86), bar_y + max(9, size // 18)), radius=max(4, size // 28), fill="#09213c")
+    draw.rectangle((int(size * 0.43), int(size * 0.14), int(size * 0.49), int(size * 0.75)), fill="#091b31")
+    draw.rectangle((int(size * 0.49), int(size * 0.14), int(size * 0.52), int(size * 0.75)), fill=accent)
+
+    img = ImageEnhance.Sharpness(img).enhance(1.12)
+    img = ImageEnhance.Contrast(img).enhance(1.06)
+    return img
+
+def build_detailed_app_icon(source_path, size=256):
+    """
+    Build the app/desktop icon from the original detailed logo.
+    """
+    img = Image.open(source_path).convert("RGBA")
+    w, h = img.size
+    # Keep the emblem only, matching the reference icon style.
+    img = img.crop((0, 0, w, int(h * 0.76)))
+    bbox = img.getchannel("A").getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    canvas = Image.new("RGBA", (size, size), (17, 17, 17, 255))
+    fit_w = int(size * 0.88)
+    fit_h = int(size * 0.88)
+    scale = min(fit_w / img.size[0], fit_h / img.size[1])
+    new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+    img = img.resize(new_size, Image.Resampling.LANCZOS)
+    canvas.alpha_composite(img, ((size - new_size[0]) // 2, int(size * 0.06)))
+    img = canvas
+    try:
+        from PIL import ImageEnhance, ImageFilter
+        img = ImageEnhance.Sharpness(img).enhance(1.15)
+        img = ImageEnhance.Contrast(img).enhance(1.04)
+        img = img.filter(ImageFilter.UnsharpMask(radius=0.7, percent=140, threshold=1))
+    except Exception:
+        pass
+    return img
+
 UI_BG = "#f4f7fb"
 UI_SURFACE = "#ffffff"
 UI_SURFACE_2 = "#eef3f8"
@@ -352,6 +436,64 @@ def current_user_role_labels():
             return "Admin", "Quản trị viên"
     return "Thành viên", "Người dùng"
 
+def current_os_username():
+    username = str(os.environ.get("USERNAME") or "").strip()
+    if username:
+        return username
+    try:
+        return os.getlogin()
+    except Exception:
+        return "Unknown"
+
+def default_app_user_name():
+    if getattr(sys, "frozen", False):
+        return "Admin" if is_admin_build() else "User"
+    return current_os_username()
+
+def load_app_user_name_setting():
+    load_dotenv(env_path())
+    name = str(os.getenv("APP_USER_NAME") or "").strip()
+    if name:
+        return name
+    try:
+        settings = json.loads(user_settings_path().read_text(encoding="utf-8"))
+        name = str(settings.get("APP_USER_NAME") or "").strip()
+        if name:
+            return name
+    except Exception:
+        pass
+    return default_app_user_name()
+
+def current_app_user_name():
+    return default_app_user_name()
+
+def lookup_assigned_machine_user_name(machine_code):
+    machine_code = str(machine_code or "").strip().upper()
+    if not machine_code:
+        return ""
+    try:
+        for item in load_admin_approved_machines():
+            if str(item.get("machine_code", "")).strip().upper() == machine_code:
+                return str(item.get("user_name") or "").strip()
+    except Exception:
+        pass
+    return ""
+
+def resolve_member_display_name(machine_code=None):
+    machine_code = str(machine_code or get_machine_code() or "").strip().upper()
+    name = lookup_assigned_machine_user_name(machine_code)
+    if name:
+        return name
+    try:
+        data = json.loads(approval_path().read_text(encoding="utf-8"))
+        if str(data.get("machine_code", "")).strip().upper() == machine_code:
+            name = str(data.get("user_name") or "").strip()
+            if name:
+                return name
+    except Exception:
+        pass
+    return "Người dùng"
+
 def is_admin_build():
     if not getattr(sys, "frozen", False):
         return False
@@ -467,12 +609,14 @@ def save_machine_approval(approval_code):
     current_version = machine_approval_version(machine_code)
     if str(approval_code or "").strip().upper() != make_approval_code(machine_code, current_version):
         return False
+    assigned_name = lookup_assigned_machine_user_name(machine_code) or "Người dùng"
     approval_path().write_text(
         json.dumps(
             {
                 "machine_code": machine_code,
                 "approval_code": make_approval_code(machine_code, current_version),
                 "approval_version": current_version,
+                "user_name": assigned_name,
             },
             ensure_ascii=False,
             indent=2,
@@ -480,7 +624,7 @@ def save_machine_approval(approval_code):
         encoding="utf-8",
     )
     try:
-        remember_admin_approved_machine(machine_code)
+        remember_admin_approved_machine(machine_code, assigned_name)
     except Exception:
         pass
     return True
@@ -500,12 +644,13 @@ def save_admin_approved_machines(items):
         encoding="utf-8",
     )
 
-def remember_admin_approved_machine(machine_code):
+def remember_admin_approved_machine(machine_code, user_name=None):
     machine_code = str(machine_code or "").strip().upper()
     if not machine_code:
         return None
     approval_version = machine_approval_version(machine_code)
     approval_code = make_approval_code(machine_code, approval_version)
+    user_name = str(user_name or "").strip()
     items = load_admin_approved_machines()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     found = False
@@ -514,6 +659,8 @@ def remember_admin_approved_machine(machine_code):
             item["approval_code"] = approval_code
             item["approval_version"] = approval_version
             item["approved_at"] = now
+            if user_name:
+                item["user_name"] = user_name
             found = True
             break
     if not found:
@@ -522,6 +669,7 @@ def remember_admin_approved_machine(machine_code):
             "approval_code": approval_code,
             "approval_version": approval_version,
             "approved_at": now,
+            "user_name": user_name,
         })
     save_admin_approved_machines(items)
     return approval_code
@@ -545,12 +693,13 @@ def import_local_approval_to_admin_list():
         machine_code = data.get("machine_code", "")
         approval_code = data.get("approval_code", "")
         approval_version = int(data.get("approval_version") or 1)
+        user_name = str(data.get("user_name", "") or lookup_assigned_machine_user_name(machine_code) or "").strip()
         if (
             machine_code
             and approval_version == machine_approval_version(machine_code)
             and approval_code == make_approval_code(machine_code, approval_version)
         ):
-            remember_admin_approved_machine(machine_code)
+            remember_admin_approved_machine(machine_code, user_name)
     except Exception:
         pass
 
@@ -566,6 +715,9 @@ def env_path():
 
 def user_settings_path():
     return app_dir() / "tool_kl_settings.json"
+
+def selected_excel_files_path():
+    return app_dir() / "tool_kl_selected_excels.json"
 
 def load_env_values():
     load_dotenv(env_path())
@@ -584,7 +736,13 @@ def load_env_values():
 def save_env(api_key, model):
     if getattr(sys, "frozen", False):
         user_settings_path().write_text(
-            json.dumps({"GEMINI_MODEL": (model.strip() or DEFAULT_MODEL)}, ensure_ascii=False, indent=2),
+            json.dumps(
+                {
+                    "GEMINI_MODEL": (model.strip() or DEFAULT_MODEL),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8"
         )
         return
@@ -592,6 +750,46 @@ def save_env(api_key, model):
         f"GEMINI_API_KEY={api_key.strip()}\nGEMINI_MODEL={(model.strip() or DEFAULT_MODEL)}\n",
         encoding="utf-8"
     )
+
+def load_selected_excel_files():
+    try:
+        data = json.loads(selected_excel_files_path().read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            out = []
+            seen = set()
+            for item in data:
+                path = str(item or "").strip()
+                if not path:
+                    continue
+                key = str(Path(path).resolve()).casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(str(Path(path).resolve()))
+            return out
+    except Exception:
+        pass
+    return []
+
+def save_selected_excel_files(paths):
+    try:
+        unique = []
+        seen = set()
+        for path in paths or []:
+            p = str(path or "").strip()
+            if not p:
+                continue
+            key = str(Path(p).resolve()).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(str(Path(p).resolve()))
+        selected_excel_files_path().write_text(
+            json.dumps(unique, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 def clean_text(v):
     s = str(v or "").strip()
@@ -626,7 +824,7 @@ def extract_json(text):
     m = re.search(r"\[[\s\S]*\]", s)
     if m:
         return {"tables":[{"title":"","columns":[],"rows":json.loads(m.group(0))}]}
-    raise ValueError("Không parse được JSON từ Gemini.")
+    raise ValueError("Không parse được JSON từ AI.")
 
 def build_prompt():
     return """
@@ -660,6 +858,8 @@ QUY TẮC TỔ HỢP CỌC:
   + cột con thứ 4 = D4
   + cột con thứ 5 = D5
   + cột con thứ 6 = D6
+- Nếu ảnh không ghi sẵn D1/D2/D3... nhưng ô "Tổ hợp cọc" chứa nhiều giá trị kiểu 11 + 13 + 14,
+  thì tự tách theo thứ tự trái sang phải thành D1, D2, D3... để điền vào từng cột riêng.
 - Ví dụ trong ảnh có "Tổ hợp cọc" gồm 2 ô: 6 | 10
   thì trả về D1 = 6, D2 = 10.
 - Không được gộp thành "6 10".
@@ -673,6 +873,11 @@ QUY TẮC SỐ LIỆU:
 - Không đổi 90 thành 9.0.
 - Không đổi D300 thành D30 hoặc 0300.
 - Không đổi tên cọc/tim cọc, ví dụ 22, 21, C262, RBH1-C46.
+- Với khối lượng, lực ép, chiều dài, số lượng:
+  + chỉ trả phần số
+  + bỏ đơn vị như t, kg, m, mm nếu có
+  + giữ nguyên dấu thập phân đang xuất hiện trong ảnh
+  + không tự làm tròn hoặc tự đổi dấu phẩy thành dấu chấm
 
 QUY TẮC DỪNG DÒNG:
 - Chỉ lấy các dòng có dữ liệu thật.
@@ -801,6 +1006,11 @@ QUY TẮC SỐ:
 - Giữ dấu phẩy thập phân: 14,5 giữ là 14,5.
 - Giữ ngày như ảnh: 11/05/2026.
 - D300 giữ là D300, PHC500 giữ là PHC500.
+- Với cột khối lượng/số lượng/chiều dài/lực ép:
+  - chỉ lấy số
+  - bỏ đơn vị nếu có
+  - giữ nguyên dấu thập phân đang có trong ảnh
+  - không tự làm tròn và không tự đổi dấu phẩy thành dấu chấm
 
 KIỂM TRA: mỗi row phải có đúng {n_cols} ô.
 
@@ -851,8 +1061,8 @@ Output JSON thuần:
 
 def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
     """
-    Gọi Gemini đọc phiếu cọc từ ảnh.
-    Nếu truyền excel_columns, Gemini sẽ trả về dữ liệu khớp với cột Excel.
+    Gọi AI đọc phiếu cọc từ ảnh.
+    Nếu truyền excel_columns, AI sẽ trả về dữ liệu khớp với cột Excel.
     """
     from google import genai
     from google.genai import types
@@ -887,7 +1097,7 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
                 raw = response.text or ""
                 data = extract_json(raw)
                 if "tables" not in data:
-                    raise ValueError("Gemini không trả về khóa tables.")
+                    raise ValueError("AI không trả về khóa tables.")
 
                 tables = []
                 for t in data.get("tables", []):
@@ -918,7 +1128,7 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
             except Exception as e:
                 last_error = e
                 msg = str(e)
-                if "503" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
+                if "503" in msg or "500" in msg or "INTERNAL" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
                     time.sleep(3 + attempt * 2)
                     continue
                 if any(x in msg for x in [
@@ -930,7 +1140,7 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
                 raise
 
     raise RuntimeError(
-        "Không gọi được Gemini (phiếu cọc) sau khi thử các model: "
+        "Không gọi được AI (phiếu cọc) sau khi thử các model: "
         + ", ".join(tried)
         + "\nLỗi cuối: "
         + repr(last_error)
@@ -939,7 +1149,7 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
 
 def call_gemini(image_path, api_key, model_name):
     """
-    Gọi Gemini đọc bảng từ ảnh.
+    Gọi AI đọc bảng từ ảnh.
     Có retry khi 503 quá tải và fallback model.
     """
     from google import genai
@@ -974,7 +1184,7 @@ def call_gemini(image_path, api_key, model_name):
                 raw = response.text or ""
                 data = extract_json(raw)
                 if "tables" not in data:
-                    raise ValueError("Gemini không trả về khóa tables.")
+                    raise ValueError("AI không trả về khóa tables.")
 
                 tables = []
                 for t in data.get("tables", []):
@@ -1006,8 +1216,8 @@ def call_gemini(image_path, api_key, model_name):
                 last_error = e
                 msg = str(e)
 
-                # Gemini quá tải tạm thời
-                if "503" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
+                # Dịch vụ AI quá tải tạm thời
+                if "503" in msg or "500" in msg or "INTERNAL" in msg or "UNAVAILABLE" in msg or "high demand" in msg:
                     time.sleep(3 + attempt * 2)
                     continue
 
@@ -1022,7 +1232,7 @@ def call_gemini(image_path, api_key, model_name):
                 raise
 
     raise RuntimeError(
-        "Không gọi được Gemini sau khi thử các model: "
+        "Không gọi được AI sau khi thử các model: "
         + ", ".join(tried)
         + "\nLỗi cuối: "
         + repr(last_error)
@@ -1123,7 +1333,7 @@ def find_best_source_for_target(target_name, source_cols):
 
 def normalize_table_for_template(table, template_name):
     """
-    Nếu chọn preset có khung cố định, ép bảng Gemini về đúng thứ tự cột chuẩn của mẫu đó.
+    Nếu chọn preset có khung cố định, ép bảng AI về đúng thứ tự cột chuẩn của mẫu đó.
     """
     canonical = CANONICAL_TEMPLATE_COLUMNS.get(template_name)
     if not canonical or not table:
@@ -1814,6 +2024,56 @@ def convert_excel_value(value):
         pass
 
     return s
+
+def normalize_numeric_like_text(value):
+    """
+    Lấy số đầu tiên trong một chuỗi OCR có thể dính đơn vị/khoảng trắng.
+    Giữ nguyên nếu không tìm thấy số hợp lệ.
+    """
+    if value is None:
+        return ""
+    s = str(value).strip()
+    if s == "":
+        return ""
+    if not re.search(r"\d", s):
+        return s
+
+    cleaned = s.replace("\u00a0", " ").replace(" ", "")
+    matches = re.findall(r"[-+]?\d[\d.,]*", cleaned)
+    if not matches:
+        return convert_excel_value(s)
+
+    token = max(matches, key=lambda x: sum(ch.isdigit() for ch in x))
+    token = token.strip(".,")
+
+    if not token:
+        return convert_excel_value(s)
+
+    if "," in token and "." in token:
+        last_comma = token.rfind(",")
+        last_dot = token.rfind(".")
+        decimal_sep = "," if last_comma > last_dot else "."
+        thousand_sep = "." if decimal_sep == "," else ","
+        token = token.replace(thousand_sep, "")
+        token = token.replace(decimal_sep, ".")
+    elif token.count(",") == 1 and token.count(".") == 0:
+        token = token.replace(",", ".")
+    elif token.count(".") == 1 and token.count(",") == 0:
+        left, right = token.split(".")
+        if len(right) == 3 and left.lstrip("+-").isdigit() and len(left.lstrip("+-")) > 1:
+            token = left + right
+    elif token.count(",") > 1 and "." not in token:
+        token = token.replace(",", "")
+    elif token.count(".") > 1 and "," not in token:
+        token = token.replace(".", "")
+
+    try:
+        f = float(token)
+        if f.is_integer():
+            return int(f)
+        return f
+    except Exception:
+        return token.replace(".", ",")
 
 def force_workbook_recalculate(wb):
     """
@@ -2838,7 +3098,7 @@ class MappingEditor(tk.Frame):
 def postprocess_to_hop_coc_d1_d2(tables):
     """
     Fix riêng cho form mới:
-    Nếu Gemini đọc header "Tổ hợp cọc" thành 1 cột nhưng dữ liệu thực tế là 2 cột con,
+    Nếu AI đọc header "Tổ hợp cọc" thành 1 cột nhưng dữ liệu thực tế là 2 cột con,
     ví dụ: D300 | 6 | 10 | 16 | 14,5 | +1,5 | 90
     thì đổi thành:
     D300 | D1=6 | D2=10 | Chiều dài cọc=16 | Chiều dài ép=14,5 | Ép âm dương=+1,5 | Lực ép=90
@@ -2879,7 +3139,7 @@ def postprocess_to_hop_coc_d1_d2(tables):
         if idx is None:
             continue
 
-        # Nếu ngay sau Tổ hợp cọc là Chiều dài cọc thì khả năng cao Gemini bị thiếu header D2
+        # Nếu ngay sau Tổ hợp cọc là Chiều dài cọc thì khả năng cao AI bị thiếu header D2
         next_name = norm_cols[idx + 1] if idx + 1 < len(norm_cols) else ""
         should_split = False
 
@@ -3232,8 +3492,21 @@ class App:
         self.header_row = None
         self.excel_headers = []
         self.tables = []
+        self.selected_excel_files = load_selected_excel_files()
+        self.excel_recent_listbox = None
+        self.excel_recent_panel = None
+        self.filters_card = None
+        self.home_page = None
+        self.excel_page = None
+        self.current_page = "home"
+        self.excel_recent_selected_key = None
+        self.nav_widgets = {}
         self.user_name, self.user_role = current_user_role_labels()
+        if not is_admin_build():
+            self.user_role = resolve_member_display_name(get_machine_code())
+        self.user_role_var = tk.StringVar(value=self.user_role)
         self.approval_dialog_open = False
+        self.admin_approval_panel = None
         self.member_locked = (not is_admin_build()) and (not is_machine_approved())
         if self.member_locked:
             try:
@@ -3245,6 +3518,245 @@ class App:
         self.root.bind_all("<Control-v>", self.paste_image_from_clipboard)
         self.root.bind_all("<Control-V>", self.paste_image_from_clipboard)
         self.root.after(300, self._check_member_approval_loop)
+
+    def _excel_file_key(self, path):
+        try:
+            return str(Path(path).resolve()).casefold()
+        except Exception:
+            return str(path or "").strip().casefold()
+
+    def _excel_file_label(self, path):
+        try:
+            p = Path(path)
+            name = p.name or str(path)
+            parent = p.parent.name
+            if parent and parent not in {".", ""}:
+                label = f"{name}  ({parent})"
+            else:
+                label = name
+        except Exception:
+            label = str(path or "")
+        if len(label) > 34:
+            label = f"{label[:16]}...{label[-14:]}"
+        return label
+
+    def _excel_recent_modified_label(self, path):
+        try:
+            p = Path(path)
+            if not p.exists():
+                return "Không rõ"
+            dt = datetime.fromtimestamp(p.stat().st_mtime)
+            now = datetime.now()
+            time_txt = dt.strftime("%I:%M %p").lstrip("0")
+            if dt.date() == now.date():
+                return f"Hôm nay lúc {time_txt}"
+            if (now.date().toordinal() - dt.date().toordinal()) == 1:
+                return f"Hôm qua lúc {time_txt}"
+            if dt.year == now.year:
+                return dt.strftime("%d Tháng %m")
+            return dt.strftime("%d/%m/%Y")
+        except Exception:
+            return "Không rõ"
+
+    def _excel_recent_path_label(self, path):
+        try:
+            p = Path(path)
+            parts = list(p.parts)
+            if len(parts) <= 1:
+                return str(path)
+            tail = parts[-3:] if len(parts) >= 3 else parts[-2:]
+            return " \u00bb ".join(tail)
+        except Exception:
+            return str(path or "")
+
+    def _clear_excel_recent_rows(self):
+        inner = getattr(self, "excel_recent_inner", None)
+        if inner is None:
+            return
+        try:
+            for child in inner.winfo_children():
+                child.destroy()
+        except Exception:
+            pass
+
+    def _render_excel_recent_rows(self):
+        inner = getattr(self, "excel_recent_inner", None)
+        if inner is None:
+            return
+        self._clear_excel_recent_rows()
+        try:
+            items = list(self.selected_excel_files or [])
+            if getattr(self, "excel_recent_mode", "recent") == "pinned":
+                items = []
+            selected_key = getattr(self, "excel_recent_selected_key", None) or (self._excel_file_key(self.excel_path) if self.excel_path else None)
+            if not items:
+                empty = tk.Frame(inner, bg=UI_SURFACE, padx=16, pady=24)
+                empty.pack(fill="x")
+                if getattr(self, "excel_recent_mode", "recent") == "pinned":
+                    tk.Label(empty, text="Chưa có file nào được ghim.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center")
+                    tk.Label(empty, text="Chọn một file ở tab Gần đây, rồi ghim nếu cần trong bản tiếp theo.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
+                else:
+                    tk.Label(empty, text="Chưa có file Excel nào được chọn.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center")
+                    tk.Label(empty, text="Bấm Chọn Excel để thêm file vào danh sách gần đây.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
+                return
+
+            for idx, path in enumerate(items):
+                p = Path(path)
+                key = self._excel_file_key(path)
+                is_active = key == selected_key
+                row_bg = "#eaf2ff" if is_active else "#ffffff"
+                row_border = "#c7dfff" if is_active else "#e7edf6"
+                row = tk.Frame(inner, bg=row_bg, highlightthickness=1, highlightbackground=row_border, padx=10, pady=8)
+                row.pack(fill="x", pady=(0, 8))
+
+                icon_box = tk.Frame(row, bg="#e8f5e9", width=28, height=28)
+                icon_box.pack(side="left", padx=(0, 10))
+                icon_box.pack_propagate(False)
+                tk.Label(icon_box, text="X", bg="#1f8b4c", fg="#ffffff", font=("Segoe UI", 10, "bold"), width=2, height=1).pack(fill="both", expand=True)
+
+                mid = tk.Frame(row, bg=row_bg)
+                mid.pack(side="left", fill="both", expand=True)
+                tk.Label(mid, text=p.stem, bg=row_bg, fg=UI_TEXT, font=("Segoe UI", 9, "bold"), anchor="w").pack(anchor="w")
+                tk.Label(mid, text=self._excel_recent_path_label(path), bg=row_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(2, 0))
+
+                right = tk.Frame(row, bg=row_bg)
+                right.pack(side="right", padx=(10, 0))
+                tk.Label(right, text=self._excel_recent_modified_label(path), bg=row_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="e").pack(anchor="e")
+
+                def open_row(_e=None, item_path=str(path)):
+                    self._load_excel_file(item_path)
+                    self.show_home_page()
+                    return "break"
+
+                for widget in (row, icon_box, mid, right):
+                    widget.bind("<Double-Button-1>", open_row)
+                for child in mid.winfo_children() + right.winfo_children():
+                    child.bind("<Double-Button-1>", open_row)
+        except Exception:
+            pass
+
+    def _sync_excel_recent_sidebar(self):
+        inner = getattr(self, "excel_recent_inner", None)
+        if inner is None:
+            return
+        self._render_excel_recent_rows()
+
+    def _set_excel_recent_visible(self, visible):
+        panel = getattr(self, "excel_recent_panel", None)
+        filters = getattr(self, "filters_card", None)
+        if panel is None:
+            return
+        try:
+            if visible:
+                if filters is not None:
+                    panel.pack(fill="x", pady=(0, 12), before=filters)
+                else:
+                    panel.pack(fill="x", pady=(0, 12))
+            else:
+                panel.pack_forget()
+            self.excel_recent_visible = bool(visible)
+        except Exception:
+            pass
+
+    def show_page(self, page_name):
+        page_name = "excel" if page_name == "excel" else "home"
+        self.current_page = page_name
+        try:
+            if self.home_page is not None:
+                if page_name == "home":
+                    self.home_page.pack(fill="both", expand=True)
+                else:
+                    self.home_page.pack_forget()
+            if self.excel_page is not None:
+                if page_name == "excel":
+                    self.excel_page.pack(fill="both", expand=True)
+                    self._sync_excel_recent_sidebar()
+                else:
+                    self.excel_page.pack_forget()
+        except Exception:
+            pass
+        self._refresh_nav_state()
+        return "break"
+
+    def show_home_page(self, event=None):
+        return self.show_page("home")
+
+    def show_excel_page(self, event=None):
+        return self.show_page("excel")
+
+    def _refresh_nav_state(self):
+        active_page = getattr(self, "current_page", "home")
+        for page_name, widgets in getattr(self, "nav_widgets", {}).items():
+            row = widgets.get("row")
+            inner = widgets.get("inner")
+            accent = widgets.get("accent")
+            icon = widgets.get("icon")
+            label = widgets.get("label")
+            if row is None or icon is None or label is None:
+                continue
+            is_active = page_name == active_page
+            bg = "#eaf2ff" if is_active else "#f8fbff"
+            fg = UI_PRIMARY if is_active else "#667085"
+            try:
+                row.config(bg=bg)
+                row.config(highlightbackground=UI_PRIMARY if is_active else "#e7edf6")
+                if inner is not None:
+                    inner.config(bg=bg)
+                if accent is not None:
+                    accent.config(bg=UI_PRIMARY if is_active else bg)
+                icon.config(bg=bg, fg=fg)
+                label.config(bg=bg, fg=fg, font=("Segoe UI", 9, "bold" if is_active else "normal"))
+            except Exception:
+                pass
+
+    def _set_excel_recent_mode(self, mode):
+        if mode not in {"recent", "pinned"}:
+            mode = "recent"
+        self.excel_recent_mode = mode
+        try:
+            if hasattr(self, "excel_tab_recent"):
+                self.excel_tab_recent.config(fg=UI_TEXT if mode == "recent" else UI_MUTED, font=("Segoe UI", 10, "bold" if mode == "recent" else "normal"))
+            if hasattr(self, "excel_tab_pinned"):
+                self.excel_tab_pinned.config(fg=UI_TEXT if mode == "pinned" else UI_MUTED, font=("Segoe UI", 10, "bold" if mode == "pinned" else "normal"))
+        except Exception:
+            pass
+        self._render_excel_recent_rows()
+
+    def _remember_selected_excel_file(self, path):
+        if not path:
+            return
+        key = self._excel_file_key(path)
+        new_list = [p for p in self.selected_excel_files if self._excel_file_key(p) != key]
+        new_list.insert(0, str(Path(path).resolve()))
+        self.selected_excel_files = new_list
+        self.excel_recent_selected_key = key
+        save_selected_excel_files(self.selected_excel_files)
+        self._sync_excel_recent_sidebar()
+
+    def _load_excel_file(self, path):
+        self.excel_path = str(Path(path).resolve())
+        self.workbook = load_workbook(self.excel_path, data_only=False)
+        sheets = self.workbook.sheetnames
+        self.sheet_combo["values"] = sheets
+
+        profiles = self._profile_workbook(self.excel_path)
+        best = choose_best_sheet_profile(profiles)
+
+        if best and best.get("sheet") in sheets:
+            self.sheet_var.set(best["sheet"])
+            self.sheet_combo.current(sheets.index(best["sheet"]))
+        elif sheets:
+            self.sheet_combo.current(0)
+            self.sheet_var.set(sheets[0])
+
+        out = app_dir() / "last_run_v12"
+        out.mkdir(exist_ok=True)
+        (out / "current_workbook_profiles.json").write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        self._display_profiles(profiles, "Đã đọc toàn bộ file Excel vừa chọn")
+        self._remember_selected_excel_file(self.excel_path)
+        self.excel_recent_selected_key = self._excel_file_key(self.excel_path)
+        self.status.config(text="Đã đọc toàn bộ file Excel và tự chọn sheet phù hợp.")
 
     def _check_member_approval_loop(self):
         if is_admin_build():
@@ -3264,6 +3776,13 @@ class App:
                 try:
                     self.root.deiconify()
                     self.root.lift()
+                    if not is_admin_build():
+                        self.user_role = resolve_member_display_name(get_machine_code())
+                        self.user_role_var.set(self.user_role)
+                        try:
+                            self.root.update_idletasks()
+                        except Exception:
+                            pass
                     self.status.config(text="Máy đã được duyệt.")
                 except Exception:
                     pass
@@ -3367,14 +3886,29 @@ class App:
         self.root.wait_window(win)
 
     def open_admin_approval_panel(self):
-        win = tk.Toplevel(self.root)
-        win.title("Duyệt máy thành viên")
-        win.configure(bg=UI_SURFACE)
-        win.geometry("720x560")
-        win.minsize(640, 500)
+        if self.admin_approval_panel is not None:
+            try:
+                self.admin_approval_panel.lift()
+                self.admin_approval_panel.focus_set()
+            except Exception:
+                pass
+            return
 
-        body = tk.Frame(win, bg=UI_SURFACE, padx=22, pady=18)
+        panel = tk.Frame(self.root, bg=UI_BG)
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.admin_approval_panel = panel
+
+        shell = tk.Frame(panel, bg=UI_SURFACE, highlightthickness=1, highlightbackground="#dbe5f0")
+        shell.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.94, relheight=0.92)
+        body = tk.Frame(shell, bg=UI_SURFACE, padx=22, pady=18)
         body.pack(fill="both", expand=True)
+
+        def close_panel():
+            try:
+                panel.destroy()
+            finally:
+                self.admin_approval_panel = None
+
         tk.Label(body, text="Duyệt máy thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
         tk.Label(body, text="Nhập mã máy thành viên gửi, sau đó gửi lại mã duyệt cho họ.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
 
@@ -3382,6 +3916,11 @@ class App:
         machine_var = tk.StringVar()
         machine_entry = tk.Entry(body, textvariable=machine_var, width=42, relief="solid", bd=1, font=("Segoe UI", 10))
         machine_entry.pack(fill="x", pady=(4, 10))
+
+        tk.Label(body, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        name_var = tk.StringVar()
+        name_entry = tk.Entry(body, textvariable=name_var, width=42, relief="solid", bd=1, font=("Segoe UI", 10))
+        name_entry.pack(fill="x", pady=(4, 10))
 
         tk.Label(body, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
         approval_var = tk.StringVar()
@@ -3395,18 +3934,27 @@ class App:
         list_header = tk.Frame(body, bg=UI_SURFACE)
         list_header.pack(fill="x", pady=(18, 6))
         tk.Label(list_header, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+
+        search_bar = tk.Frame(body, bg=UI_SURFACE)
+        search_bar.pack(fill="x", pady=(0, 8))
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(search_bar, textvariable=search_var, width=34, relief="solid", bd=1, font=("Segoe UI", 10))
+        search_entry.pack(side="left", fill="x", expand=True)
+
         list_frame = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
         list_frame.pack(fill="both", expand=True)
         approved_tree = ttk.Treeview(
             list_frame,
-            columns=("machine", "code", "time"),
+            columns=("machine", "user", "code", "time"),
             show="headings",
             height=8,
         )
         approved_tree.heading("machine", text="Mã máy")
+        approved_tree.heading("user", text="User")
         approved_tree.heading("code", text="Mã duyệt")
         approved_tree.heading("time", text="Thời gian duyệt")
-        approved_tree.column("machine", width=230, anchor="w")
+        approved_tree.column("machine", width=210, anchor="center")
+        approved_tree.column("user", width=140, anchor="center")
         approved_tree.column("code", width=150, anchor="center")
         approved_tree.column("time", width=150, anchor="center")
         approved_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=approved_tree.yview)
@@ -3419,18 +3967,59 @@ class App:
         list_actions = tk.Frame(body, bg=UI_SURFACE)
         list_actions.pack(fill="x", pady=(8, 0))
 
+        def filter_rows(rows, query):
+            query = str(query or "").strip()
+            if not query:
+                return list(rows)
+            query_norm = norm(query)
+            filtered = []
+            for row in rows:
+                haystack = " ".join(
+                    [
+                        str(row.get("machine_code", "")),
+                        str(row.get("user_name", "")),
+                        str(row.get("approval_code", "")),
+                        str(row.get("approved_at", "")),
+                    ]
+                )
+                if query_norm in norm(haystack):
+                    filtered.append(row)
+            return filtered
+
         def refresh_list():
             import_local_approval_to_admin_list()
+            rows = filter_rows(load_admin_approved_machines(), search_var.get())
             for item in approved_tree.get_children():
                 approved_tree.delete(item)
-            for row in load_admin_approved_machines():
+            for row in rows:
                 machine = row.get("machine_code", "")
                 approved_tree.insert(
                     "",
                     "end",
                     iid=machine,
-                    values=(machine, row.get("approval_code", ""), row.get("approved_at", "")),
+                    values=(
+                        machine,
+                        str(row.get("user_name", "") or "").strip(),
+                        row.get("approval_code", ""),
+                        row.get("approved_at", ""),
+                    ),
                 )
+            children = approved_tree.get_children()
+            if children:
+                approved_tree.selection_set(children[0])
+                approved_tree.focus(children[0])
+                approved_tree.see(children[0])
+                fill_from_selected()
+            self.status.config(text=f"Đã tải {len(rows)} dòng.")
+
+        def search_rows():
+            refresh_list()
+            search_entry.focus_set()
+
+        def clear_search():
+            search_var.set("")
+            refresh_list()
+            search_entry.focus_set()
 
         def fill_from_selected(_event=None):
             selected = approved_tree.selection()
@@ -3439,15 +4028,17 @@ class App:
             values = approved_tree.item(selected[0], "values")
             if values:
                 machine_var.set(values[0])
+                name_var.set(values[1] if len(values) > 1 else "")
                 approval_entry.configure(state="normal")
-                approval_var.set(values[1] if len(values) > 1 else "")
+                approval_var.set(values[2] if len(values) > 2 else "")
                 approval_entry.configure(state="readonly")
 
         approved_tree.bind("<<TreeviewSelect>>", fill_from_selected)
+        search_entry.bind("<Return>", lambda _e: search_rows())
 
         def generate():
             machine = str(machine_var.get() or "").strip().upper()
-            code = remember_admin_approved_machine(machine_var.get())
+            code = remember_admin_approved_machine(machine_var.get(), name_var.get())
             if not code:
                 messagebox.showwarning("Thiếu mã máy", "Bạn chưa nhập mã máy cần duyệt.")
                 return
@@ -3480,12 +4071,14 @@ class App:
             refresh_list()
             self.status.config(text="Đã xóa máy và làm hết hiệu lực mã duyệt cũ.")
 
+        ui_button(list_header, "Xóa máy", delete_selected, width=10, variant="warn").pack(side="right")
+
         def open_list_menu(event):
             row_id = approved_tree.identify_row(event.y)
             if row_id:
                 approved_tree.selection_set(row_id)
                 fill_from_selected()
-            menu = tk.Menu(win, tearoff=0)
+            menu = tk.Menu(self.root, tearoff=0)
             menu.add_command(label="Xóa máy này", command=delete_selected)
             menu.tk_popup(event.x_root, event.y_root)
 
@@ -3494,10 +4087,11 @@ class App:
 
         ui_button(actions, "Tạo mã duyệt", generate, width=13, variant="primary").pack(side="left", padx=(0, 8))
         ui_button(actions, "Copy mã", copy_code, width=10, variant="soft").pack(side="left")
-        ui_button(actions, "Đóng", win.destroy, width=9).pack(side="right")
-        ui_button(list_header, "Xóa máy", delete_selected, width=10, variant="warn").pack(side="right")
+        ui_button(actions, "Đóng", close_panel, width=9).pack(side="right")
         ui_button(list_actions, "Xóa máy đã chọn", delete_selected, width=15, variant="warn").pack(side="left")
-        ui_button(list_actions, "Tải lại danh sách", refresh_list, width=14, variant="soft").pack(side="left", padx=(8, 0))
+        ui_button(search_bar, "Tìm", search_rows, width=8, variant="soft").pack(side="left", padx=(8, 0))
+        ui_button(search_bar, "Bỏ lọc", clear_search, width=10).pack(side="left", padx=(8, 0))
+        ui_button(list_actions, "Tải lại danh sách", clear_search, width=14, variant="soft").pack(side="left", padx=(8, 0))
         machine_entry.focus_set()
         refresh_list()
 
@@ -3522,43 +4116,42 @@ class App:
             pass
 
         if self.tiny_ui:
-            self.sidebar_w = 124
+            self.sidebar_w = 132
             self.main_padx = 10
             self.main_pady = 10
             self.card_padx = 10
             self.card_pady = 8
             self.workspace_mins = (170, 520, 255)
             self.mapping_canvas_h = 220
-            self.logo_max = (108, 100)
+            self.logo_max = (114, 106)
         elif self.compact_ui:
-            self.sidebar_w = 140
+            self.sidebar_w = 150
             self.main_padx = 14
             self.main_pady = 12
             self.card_padx = 11
             self.card_pady = 9
             self.workspace_mins = (200, 600, 285)
             self.mapping_canvas_h = 240
-            self.logo_max = (124, 114)
+            self.logo_max = (130, 120)
         else:
-            self.sidebar_w = 168
+            self.sidebar_w = 180
             self.main_padx = 22
             self.main_pady = 18
             self.card_padx = 14
             self.card_pady = 12
             self.workspace_mins = (245, 760, 340)
             self.mapping_canvas_h = 260
-            self.logo_max = (146, 136)
+            self.logo_max = (156, 144)
 
     def setup_window_icon(self):
         icon_file = resource_path(*APP_ICON_ICO.parts)
-        taskbar_file = resource_path(*APP_TASKBAR_PNG.parts)
-        self._apply_window_icon(icon_file, taskbar_file)
+        self._apply_window_icon(icon_file)
         try:
-            self.root.after(250, lambda: self._apply_window_icon(icon_file, taskbar_file))
+            self.root.after(250, lambda: self._apply_window_icon(icon_file))
         except Exception:
             pass
 
-    def _apply_window_icon(self, icon_file, taskbar_file):
+    def _apply_window_icon(self, icon_file):
         try:
             if icon_file.exists():
                 self.root.iconbitmap(default=str(icon_file))
@@ -3566,16 +4159,18 @@ class App:
         except Exception:
             pass
         try:
-            if taskbar_file.exists():
-                base = Image.open(taskbar_file).convert("RGBA")
-                icon_imgs = [
-                    ImageTk.PhotoImage(rounded_icon_image(base, (16, 16))),
-                    ImageTk.PhotoImage(rounded_icon_image(base, (32, 32))),
-                    ImageTk.PhotoImage(rounded_icon_image(base, (64, 64))),
-                    ImageTk.PhotoImage(rounded_icon_image(base, (128, 128))),
-                ]
-                self.root.iconphoto(True, *icon_imgs)
-                self.window_icon_imgs = icon_imgs
+            base = build_detailed_app_icon(resource_path(*APP_LOGO_PNG.parts), 256)
+            icon_imgs = [
+                ImageTk.PhotoImage(base.resize((16, 16), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((20, 20), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((24, 24), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((32, 32), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((48, 48), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((64, 64), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(base.resize((128, 128), Image.Resampling.LANCZOS)),
+            ]
+            self.root.iconphoto(True, *icon_imgs)
+            self.window_icon_imgs = icon_imgs
         except Exception:
             pass
 
@@ -3770,6 +4365,9 @@ class App:
         try:
             if logo_file.exists():
                 logo_source = Image.open(logo_file).convert("RGBA")
+                bbox = logo_source.getchannel("A").getbbox()
+                if bbox:
+                    logo_source = logo_source.crop(bbox)
                 logo_source.thumbnail(self.logo_max, Image.LANCZOS)
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
                 tk.Label(brand, image=self.app_logo_img, bg="#f8fbff").pack(anchor="center")
@@ -3777,38 +4375,51 @@ class App:
             self.app_logo_img = None
 
         nav_items = [
-            ("⌂", "Trang chủ", True),
-            ("▦", "Excel", False),
-            ("◷", "Lịch sử", False),
-            ("▤", "Mẫu mapping", False),
-            ("⚙", "Cài đặt", False),
-            ("?", "Trợ giúp", False),
-            ("i", "Giới thiệu", False),
+            ("home", "⌂", "Trang chủ", True),
+            ("excel", "▦", "Excel", False),
+            ("history", "◷", "Lịch sử", False),
+            ("mapping", "▤", "Mẫu mapping", False),
+            ("settings", "⚙", "Cài đặt", False),
+            ("help", "?", "Trợ giúp", False),
+            ("about", "i", "Giới thiệu", False),
         ]
-        for icon, text, active in nav_items:
-            bg = "#eaf2ff" if active else "#f8fbff"
+        for page_id, icon, text, active in nav_items:
+            bg = "#dbeafe" if active else "#f8fbff"
             fg = UI_PRIMARY if active else "#667085"
-            row = tk.Frame(sidebar, bg=bg, padx=10, pady=9)
+            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=UI_PRIMARY if active else "#e7edf6")
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=icon, width=2, bg=bg, fg=fg, font=("Segoe UI", 11)).pack(side="left")
-            tk.Label(row, text=text, bg=bg, fg=fg, font=("Segoe UI", 9, "bold" if active else "normal")).pack(side="left", padx=(6, 0))
+            inner = tk.Frame(row, bg=bg, padx=10, pady=9)
+            inner.pack(fill="both", expand=True)
+            accent = tk.Frame(inner, bg=UI_PRIMARY if active else bg, width=4, height=24)
+            accent.pack(side="left", padx=(0, 8), fill="y")
+            icon_label = tk.Label(inner, text=icon, width=2, bg=bg, fg=fg, font=("Segoe UI", 11))
+            icon_label.pack(side="left")
+            text_label = tk.Label(inner, text=text, bg=bg, fg=fg, font=("Segoe UI", 9, "bold" if active else "normal"))
+            text_label.pack(side="left", padx=(6, 0))
+            self.nav_widgets[page_id] = {"row": row, "inner": inner, "accent": accent, "icon": icon_label, "label": text_label}
+            if page_id == "excel":
+                for widget in (row, inner, accent, icon_label, text_label):
+                    widget.bind("<Button-1>", self.show_excel_page)
+            elif page_id == "home":
+                for widget in (row, inner, accent, icon_label, text_label):
+                    widget.bind("<Button-1>", self.show_home_page)
 
         sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff")
         sidebar_spacer.pack(fill="both", expand=True)
         user_box = card(sidebar, padx=8, pady=8)
         user_box.configure(bg="#ffffff")
         user_box.pack(fill="x", pady=(8, 0))
-        tk.Label(user_box, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_SURFACE, fg=UI_TEXT).pack(anchor="w")
-        tk.Label(user_box, text=self.user_role, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w")
+        tk.Label(user_box, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+        tk.Label(user_box, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
         self.status = tk.Label(
             user_box,
             text="● Sẵn sàng",
-            anchor="w",
+            anchor="center",
             fg=UI_SUCCESS,
             bg=UI_SURFACE,
             font=("Segoe UI", 8, "bold"),
             wraplength=128,
-            justify="left",
+            justify="center",
         )
         self.status.pack(fill="x", pady=(10, 0))
         if is_admin_build():
@@ -3830,10 +4441,16 @@ class App:
             tk.Label(header, text="A", bg="#6366f1", fg="#ffffff", width=3, height=2, font=("Segoe UI", 10 if self.compact_ui else 11, "bold")).pack(side="left", padx=(10, 6))
             profile = tk.Frame(header, bg=UI_BG)
             profile.pack(side="left")
-            tk.Label(profile, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_BG, fg=UI_TEXT).pack(anchor="w")
-            tk.Label(profile, text=self.user_role, font=("Segoe UI", 8), bg=UI_BG, fg=UI_MUTED).pack(anchor="w")
+            tk.Label(profile, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center")
+            tk.Label(profile, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
 
-        toolbar = card(main, padx=12 if self.compact_ui else 18, pady=10 if self.compact_ui else 14)
+        content = tk.Frame(main, bg=UI_BG)
+        content.pack(fill="both", expand=True)
+        self.home_page = tk.Frame(content, bg=UI_BG)
+        self.excel_page = tk.Frame(content, bg=UI_BG)
+        self.home_page.pack(fill="both", expand=True)
+
+        toolbar = card(self.home_page, padx=12 if self.compact_ui else 18, pady=10 if self.compact_ui else 14)
         toolbar.pack(fill="x", pady=(12 if self.compact_ui else 18, 10 if self.compact_ui else 12))
         toolbar.grid_columnconfigure(0, weight=5, uniform="toolbar")
         toolbar.grid_columnconfigure(1, weight=4, uniform="toolbar")
@@ -3886,7 +4503,8 @@ class App:
         ui_button(export_buttons, "Xem trước ghép", self.preview_excel, width=12 if self.compact_ui else 14, variant="soft").grid(row=0 if not self.compact_ui else 0, column=0, padx=4, pady=2)
         ui_button(export_buttons, "Xuất ra Excel", self.fill_excel, width=12 if self.compact_ui else 14, variant="success").grid(row=0 if not self.compact_ui else 1, column=1 if not self.compact_ui else 0, padx=4, pady=2)
 
-        filters = card(main, padx=14, pady=9)
+        filters = card(self.home_page, padx=14, pady=9)
+        self.filters_card = filters
         filters.pack(fill="x", pady=(0, 12))
         tk.Label(filters, text="Sheet:", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
         self.sheet_combo = RoundedMappingDropdown(
@@ -3915,7 +4533,7 @@ class App:
         self.template_combo["values"] = ["Bảng bất kỳ - tự nhận cột"]
         self.template_combo.pack(side="left")
 
-        workspace = tk.Frame(main, bg=UI_BG)
+        workspace = tk.Frame(self.home_page, bg=UI_BG)
         workspace.pack(fill="both", expand=True)
         left_min, center_min, right_min = self.workspace_mins
         workspace.grid_columnconfigure(0, weight=1, minsize=left_min)
@@ -3971,7 +4589,7 @@ class App:
         section_title(right_col, "XÁC NHẬN ÁNH XẠ CỘT", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn")
         self.mapping_editor = MappingEditor(right_col)
 
-        workflow = card(main, padx=12 if self.compact_ui else 18, pady=8 if self.compact_ui else 14)
+        workflow = card(self.home_page, padx=12 if self.compact_ui else 18, pady=8 if self.compact_ui else 14)
         workflow.pack(fill="x", pady=(8 if self.compact_ui else 12, 0))
         tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
         steps = tk.Frame(workflow, bg=UI_SURFACE)
@@ -3991,16 +4609,84 @@ class App:
             tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
             tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 7)).pack(anchor="w", pady=(2, 0))
 
+        self.excel_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+        excel_shell = card(self.excel_page, padx=16 if self.compact_ui else 18, pady=14)
+        excel_shell.pack(fill="both", expand=True)
+        top_bar = tk.Frame(excel_shell, bg=UI_SURFACE)
+        top_bar.pack(fill="x", pady=(0, 10))
+        tabs = tk.Frame(top_bar, bg=UI_SURFACE)
+        tabs.pack(side="left")
+        self.excel_recent_mode = "recent"
+
+        def make_tab(label, mode):
+            btn = tk.Label(
+                tabs,
+                text=label,
+                bg=UI_SURFACE,
+                fg=UI_TEXT if mode == self.excel_recent_mode else UI_MUTED,
+                font=("Segoe UI", 10, "bold" if mode == self.excel_recent_mode else "normal"),
+                padx=2,
+                pady=4,
+                cursor="hand2",
+            )
+            btn.pack(side="left", padx=(0, 18))
+            btn.bind("<Button-1>", lambda _e, m=mode: self._set_excel_recent_mode(m))
+            return btn
+
+        self.excel_tab_recent = make_tab("Gần đây", "recent")
+        self.excel_tab_pinned = make_tab("Đã ghim", "pinned")
+
+        ui_button(top_bar, "Trang chủ", self.show_home_page, width=12, variant="soft").pack(side="right")
+
+        list_card = tk.Frame(excel_shell, bg=UI_SURFACE)
+        list_card.pack(fill="both", expand=True)
+        recent_header = tk.Frame(list_card, bg=UI_SURFACE)
+        recent_header.pack(fill="x", pady=(0, 8))
+        tk.Label(recent_header, text="Tên", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="left", padx=(44, 0))
+        tk.Label(recent_header, text="Ngày sửa đổi", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="right", padx=(0, 10))
+
+        recent_wrap = tk.Frame(list_card, bg=UI_SURFACE)
+        recent_wrap.pack(fill="both", expand=True)
+        recent_scroll = ttk.Scrollbar(recent_wrap, orient="vertical")
+        recent_scroll.pack(side="right", fill="y")
+        canvas = tk.Canvas(recent_wrap, bg=UI_SURFACE, highlightthickness=0, bd=0, yscrollcommand=recent_scroll.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        recent_scroll.config(command=canvas.yview)
+        self.excel_recent_canvas = canvas
+        self.excel_recent_inner = tk.Frame(canvas, bg=UI_SURFACE)
+        self.excel_recent_canvas_window = canvas.create_window((0, 0), window=self.excel_recent_inner, anchor="nw")
+
+        def _sync_scrollregion(_e=None):
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except Exception:
+                pass
+
+        self.excel_recent_inner.bind("<Configure>", _sync_scrollregion)
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(self.excel_recent_canvas_window, width=e.width))
+
+        hint = tk.Label(
+            excel_shell,
+            text="Danh sách gộp theo đường dẫn file thật. File trùng chỉ giữ một bản. Bấm đúp để mở lại.",
+            bg=UI_SURFACE,
+            fg=UI_MUTED,
+            font=("Segoe UI", 8),
+        )
+        hint.pack(anchor="w", pady=(8, 0))
+        self._render_excel_recent_rows()
+
+        self.show_home_page()
+
     def save_key(self):
         save_env(self.api_key_var.get(), self.model_var.get())
-        self.status.config(text="Đã lưu model vào file .env")
+        self.status.config(text="Đã lưu cài đặt vào file .env")
 
     def run_gemini_phieu_coc(self):
         """
-        Đọc phiếu cọc bằng Gemini.
+        Đọc phiếu cọc bằng AI.
         Workflow:
           1. BẮT BUỘC phải chọn Excel trước để biết cột cần điền.
-          2. Gemini trả về 1 bảng duy nhất với cột Y HỆT Excel.
+          2. AI trả về 1 bảng duy nhất với cột Y HỆT Excel.
           3. Auto-map 1:1 vì tên cột đã khớp.
           4. Sẵn sàng điền vào Excel ngay.
         """
@@ -4009,7 +4695,7 @@ class App:
             return
         api_key = self.api_key_var.get().strip()
         if not api_key:
-            messagebox.showwarning("Thiếu API key", "Bạn chưa nhập Gemini API key.")
+            messagebox.showwarning("Thiếu khóa API", "Bạn chưa nhập khóa API.")
             return
         if not self.excel_headers:
             messagebox.showwarning(
@@ -4023,7 +4709,7 @@ class App:
         self.save_key()
         excel_col_names = [name for _, name in self.excel_headers]
         self.status.config(
-            text=f"Đang gửi phiếu cọc lên Gemini... ({len(excel_col_names)} cột Excel: "
+            text=f"Đang đọc phiếu cọc... ({len(excel_col_names)} cột Excel: "
                  + ", ".join(excel_col_names[:5])
                  + ("..." if len(excel_col_names) > 5 else "") + ")"
         )
@@ -4060,7 +4746,7 @@ class App:
                 except Exception:
                     pass
 
-            # Auto-map: vì cột Gemini trả về đã đặt tên y hệt Excel
+            # Auto-map: vì cột AI trả về đã đặt tên y hệt Excel
             # → auto_map_columns sẽ khớp 1:1, không cần user chỉnh
             self.build_mapping()
 
@@ -4347,34 +5033,29 @@ class App:
         if not p:
             return
         try:
-            self.excel_path = p
-            self.workbook = load_workbook(p, data_only=False)
-            sheets = self.workbook.sheetnames
-            self.sheet_combo["values"] = sheets
-
-            # Đọc toàn workbook ngay khi chọn file
-            profiles = self._profile_workbook(p)
-            best = choose_best_sheet_profile(profiles)
-
-            if best and best.get("sheet") in sheets:
-                self.sheet_var.set(best["sheet"])
-                self.sheet_combo.current(sheets.index(best["sheet"]))
-            elif sheets:
-                self.sheet_combo.current(0)
-                self.sheet_var.set(sheets[0])
-
-            out = app_dir() / "last_run_v12"
-            out.mkdir(exist_ok=True)
-            (out / "current_workbook_profiles.json").write_text(json.dumps(profiles, ensure_ascii=False, indent=2), encoding="utf-8")
-
-            self._display_profiles(profiles, "Đã đọc toàn bộ file Excel vừa chọn")
-            self.status.config(text="Đã đọc toàn bộ file Excel và tự chọn sheet phù hợp.")
+            self._load_excel_file(p)
         except Exception:
             out = app_dir() / "last_run_v12"
             out.mkdir(exist_ok=True)
             (out / "last_error_open_excel.txt").write_text(traceback.format_exc(), encoding="utf-8")
             messagebox.showerror("Lỗi mở Excel", "Có lỗi khi đọc Excel. Xem last_run_v12/last_error_open_excel.txt")
             self.status.config(text="Lỗi mở Excel.")
+
+    def open_selected_excel_from_sidebar(self, event=None):
+        try:
+            selected_key = getattr(self, "excel_recent_selected_key", None)
+            if selected_key:
+                for path in self.selected_excel_files:
+                    if self._excel_file_key(path) == selected_key:
+                        self._load_excel_file(path)
+                        self.show_excel_page()
+                        self._sync_excel_recent_sidebar()
+                        return
+            if self.excel_path:
+                self._load_excel_file(self.excel_path)
+                self.show_excel_page()
+        except Exception:
+            pass
 
     def refresh_excel_header_info(self):
         self.excel_info.delete("1.0", "end")
@@ -4516,11 +5197,11 @@ class App:
             return
         api_key = self.api_key_var.get().strip()
         if not api_key:
-            messagebox.showwarning("Thiếu API key", "Bạn chưa nhập Gemini API key.")
+            messagebox.showwarning("Thiếu khóa API", "Bạn chưa nhập khóa API.")
             return
 
         self.save_key()
-        self.status.config(text="Đang gửi ảnh lên Gemini...")
+        self.status.config(text="Đang đọc ảnh...")
         self.root.update()
 
         try:
@@ -4528,8 +5209,8 @@ class App:
             tables = postprocess_to_hop_coc_d1_d2(tables)
             out = app_dir() / "last_run_v12"
             out.mkdir(exist_ok=True)
-            (out / "gemini_raw_response.txt").write_text(raw, encoding="utf-8")
-            (out / "gemini_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
+            (out / "ai_raw_response.txt").write_text(raw, encoding="utf-8")
+            (out / "ai_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
 
             # V20: giữ nguyên cấu trúc bảng mà ảnh trả về, không ép mẫu cố định.
             self.tables = tables
@@ -4537,13 +5218,13 @@ class App:
             self.build_mapping()
 
             total_rows = sum(len(t["rows"]) for t in tables)
-            self.status.config(text=f"Gemini đọc xong: {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.")
+            self.status.config(text=f"Đọc xong: {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.")
         except Exception:
             out = app_dir() / "last_run_v12"
             out.mkdir(exist_ok=True)
             (out / "last_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-            messagebox.showerror("Lỗi Gemini API", "Có lỗi. Xem last_run_v12/last_error.txt")
-            self.status.config(text="Lỗi Gemini API")
+            messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
+            self.status.config(text="Lỗi đọc ảnh")
 
     def build_mapping(self):
         table = self.table_editor.get_current_table()
@@ -4602,7 +5283,7 @@ class App:
 
         table = self.table_editor.get_current_table()
         if not table:
-            raise ValueError("Chưa có dữ liệu Gemini.")
+            raise ValueError("Chưa có dữ liệu từ ảnh.")
 
         ws = wb[self.sheet_var.get()]
         header_row = find_header_row_smart(ws)
@@ -4853,7 +5534,7 @@ def _apply_rows_insert_before_total_chot(self, wb):
 
     table = self.table_editor.get_current_table()
     if not table:
-        raise ValueError("Chưa có dữ liệu Gemini.")
+        raise ValueError("Chưa có dữ liệu từ ảnh.")
 
     ws = wb[self.sheet_var.get()]
     header_row = find_header_row_smart(ws)
@@ -5267,9 +5948,9 @@ def _v229_filter_data_rows(rows):
 def postprocess_to_hop_coc_d1_d2(tables):
     """
     Bổ sung/ghi đè nhẹ rule Tổ hợp cọc:
-    - Nếu Gemini đã trả D1/D2 thì giữ nguyên.
-    - Nếu còn cột 'Tổ hợp cọc' + cột số kế bên thì đổi header thành D1/D2, không làm lệch dữ liệu.
-    - Nếu ô tổ hợp chứa '6 10' hoặc '6|10' thì tách thành D1/D2.
+    - Nếu AI đã trả D1/D2/D3... thì giữ nguyên.
+    - Nếu còn cột 'Tổ hợp cọc' nhưng chưa có D1/D2/D3... thì tách giá trị thành D1..D6.
+    - Nếu ô tổ hợp chứa '6 10', '6|10', '6 + 10 + 14' thì tách thành nhiều cột D1, D2, D3...
     """
     if not tables:
         return tables
@@ -5285,6 +5966,19 @@ def postprocess_to_hop_coc_d1_d2(tables):
         if s.startswith("+") or s.startswith("-"):
             s = s[1:]
         return bool(re.fullmatch(r"\d+(?:\.\d+)?", s))
+
+    def _extract_parts(value):
+        text = str(value or "").strip()
+        if not text:
+            return []
+        parts = re.findall(r"[-+]?\d+(?:[,.]\d+)?", text)
+        if len(parts) >= 2:
+            return parts[:6]
+        if any(sep in text for sep in ("|", "+", "/", "\\", ",", ";", " ")):
+            tokens = [p for p in re.split(r"[|+/\\,;\s]+", text) if p]
+            if len(tokens) >= 2:
+                return tokens[:6]
+        return parts[:1] if parts else []
 
     for t in tables:
         cols = list(t.get("columns", []))
@@ -5304,56 +5998,70 @@ def postprocess_to_hop_coc_d1_d2(tables):
             t["rows"] = rows
             continue
 
-        # Case A: cột tổ hợp chứa 2 số trong 1 ô
-        split_needed = False
-        for r in rows[:15]:
-            if idx < len(r):
-                s = str(r[idx] or "").strip()
-                nums = re.findall(r"[-+]?\d+(?:[,.]\d+)?", s)
-                if len(nums) >= 2:
-                    split_needed = True
-                    break
-        if split_needed:
-            new_cols = cols[:]
-            new_cols[idx] = "D1"
-            new_cols.insert(idx + 1, "D2")
-            new_rows = []
-            for r in rows:
-                rr = list(r)
-                s = str(rr[idx] if idx < len(rr) else "").strip()
-                nums = re.findall(r"[-+]?\d+(?:[,.]\d+)?", s)
-                if len(nums) >= 2:
-                    rr[idx] = nums[0]
-                    rr.insert(idx + 1, nums[1])
-                else:
-                    rr.insert(idx + 1, "")
-                if len(rr) < len(new_cols):
-                    rr += [""] * (len(new_cols) - len(rr))
-                new_rows.append(rr[:len(new_cols)])
-            t["columns"] = new_cols
-            t["rows"] = new_rows
+        has_any_d = any(x in {"d1", "đ1", "1st", "d2", "đ2", "2nd", "d3", "đ3", "3rd", "d4", "đ4", "4th", "d5", "đ5", "5th", "d6", "đ6", "6th"} for x in ncols)
+        if has_any_d:
+            t["rows"] = rows
             continue
 
-        # Case B: header thiếu D2 nhưng dữ liệu đã có cột số kế bên
-        if idx + 1 < len(cols):
-            sample = 0
-            ok = 0
-            for r in rows[:15]:
-                if idx + 1 < len(r):
-                    a = r[idx]
-                    b = r[idx + 1]
-                    if str(a or "").strip() or str(b or "").strip():
-                        sample += 1
-                        if _looks_number(a) and _looks_number(b):
-                            ok += 1
-            if sample and ok >= max(1, sample // 2):
-                cols[idx] = "D1"
-                # Không insert value, chỉ đổi tên header cột kế bên thành D2 để giữ đúng cột dữ liệu hiện có.
-                cols[idx + 1] = "D2"
-                t["columns"] = cols
-                t["rows"] = rows
-                continue
-        t["rows"] = rows
+        # Lấy số lượng cột cần tách theo dữ liệu thật, tối đa D6
+        max_parts = 0
+        for r in rows[:20]:
+            if idx < len(r):
+                parts = _extract_parts(r[idx])
+                if len(parts) > max_parts:
+                    max_parts = len(parts)
+            if max_parts >= 6:
+                break
+        if max_parts < 2:
+            # Nếu dữ liệu không đủ rõ thì vẫn thử xem có chuỗi số ở các ô kế bên không
+            for r in rows[:20]:
+                seq = []
+                for j in range(idx, min(len(r), idx + 6)):
+                    val = str(r[j] or "").strip()
+                    if not val:
+                        continue
+                    if _looks_number(val):
+                        seq.append(val)
+                    else:
+                        break
+                if len(seq) > max_parts:
+                    max_parts = len(seq)
+                if max_parts >= 2:
+                    break
+        if max_parts < 2:
+            t["rows"] = rows
+            continue
+        max_parts = min(6, max_parts)
+
+        new_cols = cols[:]
+        new_cols[idx] = "D1"
+        for offset in range(1, max_parts):
+            new_cols.insert(idx + offset, f"D{offset + 1}")
+
+        new_rows = []
+        for r in rows:
+            rr = list(r)
+            parts = _extract_parts(rr[idx] if idx < len(rr) else "")
+            if not parts:
+                parts = []
+                for j in range(idx, min(len(rr), idx + max_parts)):
+                    val = str(rr[j] or "").strip()
+                    if val and _looks_number(val):
+                        parts.append(val)
+                    elif j > idx:
+                        break
+            parts = parts[:max_parts]
+            rr[idx] = parts[0] if len(parts) >= 1 else ""
+            for offset in range(1, max_parts):
+                insert_at = idx + offset
+                rr.insert(insert_at, parts[offset] if offset < len(parts) else "")
+            if len(rr) < len(new_cols):
+                rr += [""] * (len(new_cols) - len(rr))
+            new_rows.append(rr[:len(new_cols)])
+
+        t["columns"] = new_cols
+        t["rows"] = new_rows
+        t["title"] = t.get("title") or f"Bảng đã tách Tổ hợp cọc D1-D{max_parts}"
     return tables
 
 
@@ -5370,7 +6078,7 @@ def _v229_apply_rows_to_workbook(self, wb):
         raise ValueError("Bạn chưa chọn sheet.")
     table = self.table_editor.get_current_table()
     if not table:
-        raise ValueError("Chưa có dữ liệu Gemini.")
+        raise ValueError("Chưa có dữ liệu từ ảnh.")
 
     # Đảm bảo bảng nguồn đã được xử lý Tổ hợp cọc
     fixed_tables = postprocess_to_hop_coc_d1_d2([table])
@@ -5604,6 +6312,8 @@ def _v23_convert_by_source(src_name, value):
     # các cột này phải giữ đúng như ảnh
     if any(x in n for x in ["ngay", "date", "gio", "time", "bat dau", "ket thuc", "ten", "pile", "loai", "type", "vi tri", "ghi chu", "note", "remark"]):
         return s
+    if any(x in n for x in ["khoi luong", "kl", "weight", "luc ep", "load", "chieu dai", "length", "do dai", "so luong", "quantity", "d1", "d2", "d3", "d4", "d5", "d6"]):
+        return normalize_numeric_like_text(s)
     return convert_excel_value(s)
 
 
@@ -5651,7 +6361,7 @@ def _v23_apply_rows_to_workbook(self, wb):
         raise ValueError("Bạn chưa chọn sheet.")
     table = self.table_editor.get_current_table()
     if not table:
-        raise ValueError("Chưa có dữ liệu Gemini.")
+        raise ValueError("Chưa có dữ liệu từ ảnh.")
 
     fixed_tables = postprocess_to_hop_coc_d1_d2([table])
     table = fixed_tables[0] if fixed_tables else table
@@ -5804,26 +6514,26 @@ def _v23_run_gemini(self):
         return
     api_key = self.api_key_var.get().strip()
     if not api_key:
-        messagebox.showwarning("Thiếu API key", "Bạn chưa nhập Gemini API key.")
+        messagebox.showwarning("Thiếu khóa API", "Bạn chưa nhập khóa API.")
         return
     try:
         tables, raw = call_gemini(self.image_path, api_key, self.model_var.get().strip())
         tables = postprocess_to_hop_coc_d1_d2(tables)
         out = app_dir() / "last_run_v12"
         out.mkdir(exist_ok=True)
-        (out / "gemini_raw_response.txt").write_text(raw, encoding="utf-8")
-        (out / "gemini_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
+        (out / "ai_raw_response.txt").write_text(raw, encoding="utf-8")
+        (out / "ai_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
         self.tables = tables
         self.table_editor.set_tables(tables)
         if self.excel_headers and tables:
             self.build_mapping()
-        self.status.config(text=f"Gemini đọc xong: {len(tables)} bảng. Kiểm tra từng ô trong preview trước khi xuất.")
+        self.status.config(text=f"Đọc xong: {len(tables)} bảng. Kiểm tra từng ô trong preview trước khi xuất.")
     except Exception:
         out = app_dir() / "last_run_v12"
         out.mkdir(exist_ok=True)
         (out / "last_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        messagebox.showerror("Lỗi Gemini API", "Có lỗi. Xem last_run_v12/last_error.txt")
-        self.status.config(text="Lỗi Gemini API.")
+        messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
+        self.status.config(text="Lỗi đọc ảnh.")
 
 
 # Override cuối cùng cho bản V23
@@ -5940,7 +6650,7 @@ def _v231_apply_rows_to_workbook(self, wb):
         raise ValueError("Bạn chưa chọn sheet.")
     table = self.table_editor.get_current_table()
     if not table:
-        raise ValueError("Chưa có dữ liệu Gemini.")
+        raise ValueError("Chưa có dữ liệu từ ảnh.")
 
     fixed_tables = postprocess_to_hop_coc_d1_d2([table])
     table = fixed_tables[0] if fixed_tables else table

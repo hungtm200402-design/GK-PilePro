@@ -1,9 +1,237 @@
 [
   {
-    "file": "C:/Users/ADMIN/Downloads/DAP - ĐÌNH VŨ-d500-s00300.xlsx",
-    "sheet": "VL500",
-    "max_row": 140,
-    "max_col": 20,
+    "file": "C:\\Users\\ADMIN\\Downloads\\Nha_may_SXVLXD_Viet_Hung_chen_lai_D300.xlsx",
+    "sheet": "Thi công cọc D400",
+    "max_row": 173,
+    "max_col": 18,
+    "header_row": 9,
+    "headers": [
+      {
+        "col": "A",
+        "index": 1,
+        "name": "STT"
+      },
+      {
+        "col": "B",
+        "index": 2,
+        "name": "Ngày\n thi công"
+      },
+      {
+        "col": "C",
+        "index": 3,
+        "name": "Tên máy"
+      },
+      {
+        "col": "D",
+        "index": 4,
+        "name": "Tên cọc"
+      },
+      {
+        "col": "E",
+        "index": 5,
+        "name": "Loại cọc"
+      },
+      {
+        "col": "F",
+        "index": 6,
+        "name": "Tổ hợp / 1st / (m)"
+      },
+      {
+        "col": "G",
+        "index": 7,
+        "name": "Tổ hợp / 2nd / (m)"
+      },
+      {
+        "col": "H",
+        "index": 8,
+        "name": "Tổ hợp / 3rd / (m)"
+      },
+      {
+        "col": "I",
+        "index": 9,
+        "name": "Tổ hợp / 4th / (m)"
+      },
+      {
+        "col": "J",
+        "index": 10,
+        "name": "Tổ hợp / 5th / (m)"
+      },
+      {
+        "col": "K",
+        "index": 11,
+        "name": "Tổng tổ hợp / M"
+      },
+      {
+        "col": "L",
+        "index": 12,
+        "name": "Độ sâu ép\n(m) / M"
+      },
+      {
+        "col": "M",
+        "index": 13,
+        "name": "Ép âm,\ndương / M"
+      },
+      {
+        "col": "N",
+        "index": 14,
+        "name": "Cắt cọc / Tim"
+      },
+      {
+        "col": "O",
+        "index": 15,
+        "name": "Lực ép\n(Tấn) / T"
+      },
+      {
+        "col": "P",
+        "index": 16,
+        "name": "Ghi chú"
+      }
+    ],
+    "total_row": 162,
+    "stt_col": "A",
+    "stt_col_index": 1,
+    "stt_chains": [
+      {
+        "from_row": 12,
+        "to_row": 161,
+        "from_stt": 1,
+        "to_stt": 150,
+        "length": 148
+      }
+    ],
+    "selected_chain": {
+      "from_row": 12,
+      "to_row": 161,
+      "from_stt": 1,
+      "to_stt": 150,
+      "length": 148
+    },
+    "sum_columns": [
+      "K",
+      "L",
+      "M",
+      "N"
+    ]
+  },
+  {
+    "file": "C:\\Users\\ADMIN\\Downloads\\Nha_may_SXVLXD_Viet_Hung_chen_lai_D300.xlsx",
+    "sheet": "Thi công cọc D300",
+    "max_row": 40,
+    "max_col": 18,
+    "header_row": 9,
+    "headers": [
+      {
+        "col": "A",
+        "index": 1,
+        "name": "STT"
+      },
+      {
+        "col": "B",
+        "index": 2,
+        "name": "Ngày\n thi công"
+      },
+      {
+        "col": "C",
+        "index": 3,
+        "name": "Tên máy"
+      },
+      {
+        "col": "D",
+        "index": 4,
+        "name": "Tên cọc"
+      },
+      {
+        "col": "E",
+        "index": 5,
+        "name": "Loại cọc"
+      },
+      {
+        "col": "F",
+        "index": 6,
+        "name": "Tổ hợp / 1st / (m)"
+      },
+      {
+        "col": "G",
+        "index": 7,
+        "name": "Tổ hợp / 2nd / (m)"
+      },
+      {
+        "col": "H",
+        "index": 8,
+        "name": "Tổ hợp / 3rd / (m)"
+      },
+      {
+        "col": "I",
+        "index": 9,
+        "name": "Tổ hợp / 4th / (m)"
+      },
+      {
+        "col": "J",
+        "index": 10,
+        "name": "Tổ hợp / 5th / (m)"
+      },
+      {
+        "col": "K",
+        "index": 11,
+        "name": "Tổng tổ hợp / M"
+      },
+      {
+        "col": "L",
+        "index": 12,
+        "name": "Độ sâu ép\n(m) / M"
+      },
+      {
+        "col": "M",
+        "index": 13,
+        "name": "Ép âm,\ndương / M"
+      },
+      {
+        "col": "N",
+        "index": 14,
+        "name": "Cắt cọc / Tim"
+      },
+      {
+        "col": "O",
+        "index": 15,
+        "name": "Lực ép\n(Tấn) / T"
+      },
+      {
+        "col": "P",
+        "index": 16,
+        "name": "Ghi chú"
+      }
+    ],
+    "total_row": 29,
+    "stt_col": "A",
+    "stt_col_index": 1,
+    "stt_chains": [
+      {
+        "from_row": 12,
+        "to_row": 28,
+        "from_stt": 1,
+        "to_stt": 17,
+        "length": 17
+      }
+    ],
+    "selected_chain": {
+      "from_row": 12,
+      "to_row": 28,
+      "from_stt": 1,
+      "to_stt": 17,
+      "length": 17
+    },
+    "sum_columns": [
+      "K",
+      "L",
+      "M",
+      "N"
+    ]
+  },
+  {
+    "file": "C:\\Users\\ADMIN\\Downloads\\Nha_may_SXVLXD_Viet_Hung_chen_lai_D300.xlsx",
+    "sheet": "Vật liệu D400",
+    "max_row": 136,
+    "max_col": 22,
     "header_row": 4,
     "headers": [
       {
@@ -19,118 +247,119 @@
       {
         "col": "C",
         "index": 3,
-        "name": "Số phiếu"
+        "name": "loại cọc"
       },
       {
         "col": "D",
         "index": 4,
-        "name": "Độ dài 5"
+        "name": "Cột D"
       },
       {
         "col": "E",
         "index": 5,
-        "name": "Độ dài 6"
+        "name": "Số phiếu"
       },
       {
         "col": "F",
         "index": 6,
-        "name": "Độ dài 7"
+        "name": "Chủng loại PHC-A / D400 - Độ dài"
       },
       {
         "col": "G",
         "index": 7,
-        "name": "Độ dài 8"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (1)"
       },
       {
         "col": "H",
         "index": 8,
-        "name": "Độ dài 9"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (2)"
       },
       {
         "col": "I",
         "index": 9,
-        "name": "Độ dài 10"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (3)"
       },
       {
         "col": "J",
         "index": 10,
-        "name": "Độ dài 11"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (4)"
       },
       {
         "col": "K",
         "index": 11,
-        "name": "Độ dài 12"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (5)"
       },
       {
         "col": "L",
         "index": 12,
-        "name": "Độ dài 13"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (6)"
       },
       {
         "col": "M",
         "index": 13,
-        "name": "Độ dài 14"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (7)"
       },
       {
         "col": "N",
         "index": 14,
-        "name": "Độ dài 15"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (8)"
       },
       {
         "col": "O",
         "index": 15,
-        "name": "Mũi D300"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (9)"
       },
       {
         "col": "P",
         "index": 16,
-        "name": "Xe vận chuyển"
+        "name": "Chủng loại PHC-A / D400 - Độ dài (10)"
       },
       {
         "col": "Q",
         "index": 17,
-        "name": "Tổng số m cọc D500"
+        "name": "Mũi D400"
       },
       {
         "col": "R",
         "index": 18,
-        "name": "Ghi chú"
+        "name": "Xe vận chuyển"
       },
       {
         "col": "S",
         "index": 19,
-        "name": "Hợp đồng"
+        "name": "Tổng số m cọc D400"
+      },
+      {
+        "col": "T",
+        "index": 20,
+        "name": "Ghi chú"
+      },
+      {
+        "col": "U",
+        "index": 21,
+        "name": "Cột U"
       }
     ],
-    "total_row": 59,
+    "total_row": 58,
     "stt_col": "A",
     "stt_col_index": 1,
     "stt_chains": [
       {
         "from_row": 7,
-        "to_row": 8,
+        "to_row": 57,
         "from_stt": 1,
-        "to_stt": 2,
-        "length": 2
-      },
-      {
-        "from_row": 49,
-        "to_row": 58,
-        "from_stt": 42,
         "to_stt": 51,
-        "length": 10
+        "length": 51
       }
     ],
     "selected_chain": {
-      "from_row": 49,
-      "to_row": 58,
-      "from_stt": 42,
+      "from_row": 7,
+      "to_row": 57,
+      "from_stt": 1,
       "to_stt": 51,
-      "length": 10
+      "length": 51
     },
     "sum_columns": [
-      "D",
-      "E",
       "F",
       "G",
       "H",
@@ -141,7 +370,197 @@
       "M",
       "N",
       "O",
-      "Q"
+      "P",
+      "Q",
+      "S"
     ]
+  },
+  {
+    "file": "C:\\Users\\ADMIN\\Downloads\\Nha_may_SXVLXD_Viet_Hung_chen_lai_D300.xlsx",
+    "sheet": "Vật liệu D300",
+    "max_row": 142,
+    "max_col": 21,
+    "header_row": 4,
+    "headers": [
+      {
+        "col": "A",
+        "index": 1,
+        "name": "STT"
+      },
+      {
+        "col": "B",
+        "index": 2,
+        "name": "Ngày xuất"
+      },
+      {
+        "col": "C",
+        "index": 3,
+        "name": "loại cọc"
+      },
+      {
+        "col": "D",
+        "index": 4,
+        "name": "Cột D"
+      },
+      {
+        "col": "E",
+        "index": 5,
+        "name": "Số phiếu"
+      },
+      {
+        "col": "F",
+        "index": 6,
+        "name": "Chủng loại PHC-A / D300 - Độ dài"
+      },
+      {
+        "col": "G",
+        "index": 7,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (1)"
+      },
+      {
+        "col": "H",
+        "index": 8,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (2)"
+      },
+      {
+        "col": "I",
+        "index": 9,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (3)"
+      },
+      {
+        "col": "J",
+        "index": 10,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (4)"
+      },
+      {
+        "col": "K",
+        "index": 11,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (5)"
+      },
+      {
+        "col": "L",
+        "index": 12,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (6)"
+      },
+      {
+        "col": "M",
+        "index": 13,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (7)"
+      },
+      {
+        "col": "N",
+        "index": 14,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (8)"
+      },
+      {
+        "col": "O",
+        "index": 15,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (9)"
+      },
+      {
+        "col": "P",
+        "index": 16,
+        "name": "Chủng loại PHC-A / D300 - Độ dài (10)"
+      },
+      {
+        "col": "Q",
+        "index": 17,
+        "name": "Mũi D300"
+      },
+      {
+        "col": "R",
+        "index": 18,
+        "name": "Xe vận chuyển"
+      },
+      {
+        "col": "S",
+        "index": 19,
+        "name": "Tổng số m cọc D300"
+      },
+      {
+        "col": "T",
+        "index": 20,
+        "name": "Ghi chú"
+      },
+      {
+        "col": "U",
+        "index": 21,
+        "name": "Cột U"
+      }
+    ],
+    "total_row": 58,
+    "stt_col": "A",
+    "stt_col_index": 1,
+    "stt_chains": [
+      {
+        "from_row": 27,
+        "to_row": 57,
+        "from_stt": 21,
+        "to_stt": 51,
+        "length": 31
+      }
+    ],
+    "selected_chain": {
+      "from_row": 27,
+      "to_row": 57,
+      "from_stt": 21,
+      "to_stt": 51,
+      "length": 31
+    },
+    "sum_columns": [
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O",
+      "P",
+      "Q",
+      "S"
+    ]
+  },
+  {
+    "file": "C:\\Users\\ADMIN\\Downloads\\Nha_may_SXVLXD_Viet_Hung_chen_lai_D300.xlsx",
+    "sheet": "BBNT.",
+    "max_row": 53,
+    "max_col": 8,
+    "header_row": 21,
+    "headers": [
+      {
+        "col": "A",
+        "index": 1,
+        "name": "III. Nội dung: / a. Căn cứ nghiệm thu: / - Căn cứ Hợp đồng xây dựng  Số: …................................. / - Căn cứ bảng tổng hợp khối lượng hoàn thành ngày .... tháng .... năm 20…. / b. Đánh giá chất lượng công việc nghiệm thu:"
+      },
+      {
+        "col": "B",
+        "index": 2,
+        "name": "- Căn cứ Hợp đồng xây dựng  Số: …................................. / - Căn cứ bảng tổng hợp khối lượng hoàn thành ngày .... tháng .... năm 20…. / b. Đánh giá chất lượng công việc nghiệm thu:"
+      },
+      {
+        "col": "C",
+        "index": 3,
+        "name": "- Căn cứ Hợp đồng xây dựng  Số: …................................. / - Căn cứ bảng tổng hợp khối lượng hoàn thành ngày .... tháng .... năm 20…. / b. Đánh giá chất lượng công việc nghiệm thu: (1)"
+      },
+      {
+        "col": "D",
+        "index": 4,
+        "name": "- Căn cứ Hợp đồng xây dựng  Số: …................................. / - Căn cứ bảng tổng hợp khối lượng hoàn thành ngày .... tháng .... năm 20…. / b. Đánh giá chất lượng công việc nghiệm thu: (2)"
+      },
+      {
+        "col": "E",
+        "index": 5,
+        "name": "- Căn cứ Hợp đồng xây dựng  Số: …................................. / - Căn cứ bảng tổng hợp khối lượng hoàn thành ngày .... tháng .... năm 20…. / b. Đánh giá chất lượng công việc nghiệm thu: (3)"
+      }
+    ],
+    "total_row": 24,
+    "stt_col": null,
+    "stt_col_index": null,
+    "stt_chains": [],
+    "selected_chain": null,
+    "sum_columns": []
   }
 ]
