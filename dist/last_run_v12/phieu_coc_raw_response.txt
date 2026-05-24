@@ -1,0 +1,15 @@
+MODEL_USED=gemini-3.1-flash-lite
+TRIED_MODELS=['gemini-3.1-flash-lite']
+LOAI=PHIEU_COC
+
+{
+  "tables": [
+    {
+      "title": "Dữ liệu phiếu cọc",
+      "columns": ["Ngày xuất", "Số phiếu", "Độ dài 5", "Độ dài 6", "Độ dài 7", "Độ dài 8", "Độ dài 9", "Độ dài 10", "Độ dài 11", "Độ dài 12", "Độ dài 13", "Độ dài 14", "Độ dài 15", "Mũi D300", "Xe vận chuyển", "Tổng số m cọc D500", "Ghi chú", "Hợp đồng"],
+      "rows": [
+        ["2026-05-23", "XC11312605230022", "", "7", "", "", "", "21", "3", "2", "2", "", "", "", "15H-24275", "335", "", "8102250098"]
+      ]
+    }
+  ]
+}

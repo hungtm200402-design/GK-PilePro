@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "app.py", line 10285, in refresh_excel_header_info
+  File "app.py", line 4477, in get_headers_smart
+  File "app.py", line 4421, in detect_header_rows_from_real_cells
+  File "app.py", line 4421, in <genexpr>
+  File "re\__init__.py", line 176, in search
+  File "re\__init__.py", line 294, in _compile
+  File "re\_compiler.py", line 745, in compile
+  File "re\_parser.py", line 989, in parse
+  File "re\_parser.py", line 464, in _parse_sub
+  File "re\_parser.py", line 621, in _parse
+re.error: bad character range €-á at position 8

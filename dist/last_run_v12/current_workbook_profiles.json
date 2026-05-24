@@ -1,0 +1,147 @@
+[
+  {
+    "file": "C:\\Users\\tranh\\Downloads\\DAP - ĐÌNH VŨ-d500-s00300.xlsx",
+    "sheet": "VL500",
+    "max_row": 157,
+    "max_col": 20,
+    "header_row": 4,
+    "headers": [
+      {
+        "col": "A",
+        "index": 1,
+        "name": "STT"
+      },
+      {
+        "col": "B",
+        "index": 2,
+        "name": "Ngày xuất"
+      },
+      {
+        "col": "C",
+        "index": 3,
+        "name": "Số phiếu"
+      },
+      {
+        "col": "D",
+        "index": 4,
+        "name": "Độ dài 5"
+      },
+      {
+        "col": "E",
+        "index": 5,
+        "name": "Độ dài 6"
+      },
+      {
+        "col": "F",
+        "index": 6,
+        "name": "Độ dài 7"
+      },
+      {
+        "col": "G",
+        "index": 7,
+        "name": "Độ dài 8"
+      },
+      {
+        "col": "H",
+        "index": 8,
+        "name": "Độ dài 9"
+      },
+      {
+        "col": "I",
+        "index": 9,
+        "name": "Độ dài 10"
+      },
+      {
+        "col": "J",
+        "index": 10,
+        "name": "Độ dài 11"
+      },
+      {
+        "col": "K",
+        "index": 11,
+        "name": "Độ dài 12"
+      },
+      {
+        "col": "L",
+        "index": 12,
+        "name": "Độ dài 13"
+      },
+      {
+        "col": "M",
+        "index": 13,
+        "name": "Độ dài 14"
+      },
+      {
+        "col": "N",
+        "index": 14,
+        "name": "Độ dài 15"
+      },
+      {
+        "col": "O",
+        "index": 15,
+        "name": "Mũi D300"
+      },
+      {
+        "col": "P",
+        "index": 16,
+        "name": "Xe vận chuyển"
+      },
+      {
+        "col": "Q",
+        "index": 17,
+        "name": "Tổng số m cọc D500"
+      },
+      {
+        "col": "R",
+        "index": 18,
+        "name": "Ghi chú"
+      },
+      {
+        "col": "S",
+        "index": 19,
+        "name": "Hợp đồng"
+      }
+    ],
+    "total_row": 76,
+    "stt_col": "A",
+    "stt_col_index": 1,
+    "stt_chains": [
+      {
+        "from_row": 7,
+        "to_row": 8,
+        "from_stt": 1,
+        "to_stt": 2,
+        "length": 2
+      },
+      {
+        "from_row": 49,
+        "to_row": 75,
+        "from_stt": 42,
+        "to_stt": 68,
+        "length": 27
+      }
+    ],
+    "selected_chain": {
+      "from_row": 49,
+      "to_row": 75,
+      "from_stt": 42,
+      "to_stt": 68,
+      "length": 27
+    },
+    "sum_columns": [
+      "D",
+      "E",
+      "F",
+      "G",
+      "H",
+      "I",
+      "J",
+      "K",
+      "L",
+      "M",
+      "N",
+      "O",
+      "Q"
+    ]
+  }
+]

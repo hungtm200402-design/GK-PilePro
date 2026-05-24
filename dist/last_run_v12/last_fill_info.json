@@ -1,0 +1,13 @@
+{
+  "sheet": "VL500",
+  "header_row": 4,
+  "last_stt_before": 68,
+  "start_fill_row": 76,
+  "next_stt_start": 69,
+  "rows_added": 1,
+  "total_row_after": 77,
+  "sum_first_row": 7,
+  "sum_last_row": 76,
+  "sum_columns_count": 13,
+  "logic_file": "C:\\Users\\tranh\\Downloads\\GK-PilePro\\GK-PilePro-main\\dist\\last_run_v12\\v23_1_sum_het_truoc_dong_tong_logic.json"
+}

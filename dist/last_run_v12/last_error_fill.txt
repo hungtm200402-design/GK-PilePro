@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "app.py", line 12086, in fill_excel
+  File "app.py", line 14447, in _v231_apply_rows_to_workbook
+ValueError: Chưa có dữ liệu từ ảnh.
