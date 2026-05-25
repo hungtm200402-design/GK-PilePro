@@ -1,14 +1,16 @@
 # GK PilePro
 
-## Chay ngay
+Ung dung phuc hoi, doc OCR va quan ly du lieu coc.
 
-Mo file:
+## Chay ban da build
+
+Ban User:
 
 ```bat
 dist\Tool_KL_UI8.exe
 ```
 
-Neu can ban Admin:
+Ban Admin:
 
 ```bat
 dist\GK PilePro Admin.exe
@@ -30,6 +32,20 @@ Nhung lan sau:
 run.bat
 ```
 
+## Build exe
+
+Build ban User:
+
+```bat
+.\.venv\Scripts\pyinstaller.exe Tool_KL.spec
+```
+
+Build ban Admin:
+
+```bat
+.\.venv\Scripts\pyinstaller.exe GK_PilePro_Admin.spec
+```
+
 ## Cau hinh API
 
 Tao file `.env` tu `.env.example`, roi dien API key/model neu can.
@@ -39,3 +55,18 @@ copy .env.example .env
 ```
 
 File `.env` khong duoc dua len Git.
+
+## Cau truc thu muc
+
+```text
+app.py                 Source chinh cua ung dung
+assets/                Logo, icon va tai nguyen giao dien
+dist/                  File exe da build de giao cho khach
+docs/                  Tai lieu va ghi chu phien ban
+logs/                  Log va ket qua debug
+tools/                 Script ho tro sua loi/kiem tra noi bo
+backups/               File backup cu, khong dung de chay app
+specs/legacy/          Spec build cu de tham khao
+pyi_hooks/             Hook PyInstaller
+runtime_data/          Du lieu tam/legacy da tach khoi root
+```

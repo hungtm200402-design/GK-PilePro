@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "C:\Users\ADMIN\Downloads\tool_KL\app.py", line 6103, in main
+    root = tk.Tk()
+           ^^^^^^^
+  File "C:\Users\ADMIN\AppData\Local\Programs\Python\Python312\Lib\tkinter\__init__.py", line 2346, in __init__
+    self.tk = _tkinter.create(screenName, baseName, className, interactive, wantobjects, useTk, sync, use)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_tkinter.TclError: Can't find a usable init.tcl in the following directories: 
+    {C:\Users\ADMIN\AppData\Local\Programs\Python\Python312\tcl\tcl8.6} C:/Users/ADMIN/AppData/Local/Programs/Python/Python312/lib/tcl8.6 C:/Users/ADMIN/AppData/Local/Programs/Python/lib/tcl8.6 C:/Users/ADMIN/AppData/Local/Programs/lib/tcl8.6 C:/Users/ADMIN/AppData/Local/Programs/Python/library C:/Users/ADMIN/AppData/Local/Programs/library C:/Users/ADMIN/AppData/Local/Programs/tcl8.6.15/library C:/Users/ADMIN/AppData/Local/tcl8.6.15/library
+
+
+
+This probably means that Tcl wasn't installed properly.
+

@@ -4,8 +4,9 @@ __pycache__/
 *.pyc
 
 build/
+build_history/
 last_run_v12/
-gk_pilepro_error.log
+runtime_data/
 
 dist/*
 !dist/*.exe

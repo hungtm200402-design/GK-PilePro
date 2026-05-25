@@ -300,7 +300,13 @@ class RoundedButton(tk.Canvas):
 
         self.bg_color, self.fg_color, self.hover_color, self.border_color = self.colors.get(variant, self.colors["default"])
 
-        self.pixel_width = max(94, int(width * 9.2))
+        if width <= 0:
+
+            self.pixel_width = max(78, min(124, int(len(str(text)) * 7.0) + 28))
+
+        else:
+
+            self.pixel_width = max(98, int(width * 9.6))
 
         super().__init__(
 
@@ -308,7 +314,7 @@ class RoundedButton(tk.Canvas):
 
             width=self.pixel_width,
 
-            height=42,
+            height=40,
 
             bg=parent.cget("bg") if hasattr(parent, "cget") else UI_SURFACE,
 
@@ -336,15 +342,15 @@ class RoundedButton(tk.Canvas):
 
         try:
 
-            self.create_round_rect(1, 1, self.pixel_width - 1, 41, radius=9, fill=fill, outline=self.border_color)
+            self.create_round_rect(1, 1, self.pixel_width - 1, 39, radius=8, fill=fill, outline=self.border_color)
 
         except Exception:
 
-            self.create_rectangle(1, 1, self.pixel_width - 1, 41, fill=fill, outline=self.border_color)
+            self.create_rectangle(1, 1, self.pixel_width - 1, 39, fill=fill, outline=self.border_color)
 
         font = ("Segoe UI", 9, "bold" if self.variant in {"primary", "success"} else "normal")
 
-        self.create_text(self.pixel_width // 2, 21, text=self.text, fill=self.fg_color, font=font)
+        self.create_text(self.pixel_width // 2, 20, text=self.text, fill=self.fg_color, font=font)
 
 
 
@@ -856,6 +862,65 @@ def app_dir():
 
 
 
+def _safe_path_part(value, fallback="default"):
+
+    text = str(value or "").strip()
+
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+
+    text = text.strip("._-")
+
+    return text or fallback
+
+
+
+def app_data_root():
+
+    base = os.environ.get("LOCALAPPDATA")
+
+    if base:
+
+        return Path(base) / APP_TITLE
+
+    return Path.home() / "AppData" / "Local" / APP_TITLE
+
+
+
+def app_data_dir():
+
+    # Keep user data outside the install folder so every machine has its own
+    # recent files, history, approvals, settings and OCR logs.
+
+    machine_part = _safe_path_part(get_machine_code(), "unknown_machine")
+
+    path = app_data_root() / machine_part
+
+    path.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
+
+def app_data_path(*parts):
+
+    path = app_data_dir().joinpath(*parts)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
+
+def last_run_dir():
+
+    path = app_data_path("last_run_v12")
+
+    path.mkdir(parents=True, exist_ok=True)
+
+    return path
+
+
+
 def resource_dir():
 
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -1014,25 +1079,25 @@ def is_admin_build():
 
 def approval_path():
 
-    return app_dir() / "gk_pilepro_approval.json"
+    return app_data_path("gk_pilepro_approval.json")
 
 
 
 def admin_approved_machines_path():
 
-    return app_dir() / "gk_pilepro_approved_machines.json"
+    return app_data_path("gk_pilepro_approved_machines.json")
 
 
 
 def code_versions_path():
 
-    return app_dir() / "gk_pilepro_code_versions.json"
+    return app_data_path("gk_pilepro_code_versions.json")
 
 
 
 def legacy_revoked_machines_path():
 
-    return app_dir() / "gk_pilepro_revoked_machines.json"
+    return app_data_path("gk_pilepro_revoked_machines.json")
 
 
 
@@ -1190,16 +1255,6 @@ def is_machine_approved():
 
     current_version = machine_approval_version(machine_code)
 
-    approved_list_path = admin_approved_machines_path()
-
-    if approved_list_path.exists():
-
-        approved_items = load_admin_approved_machines()
-
-        if not any(item.get("machine_code") == machine_code for item in approved_items):
-
-            return False
-
     try:
 
         data = json.loads(approval_path().read_text(encoding="utf-8"))
@@ -1210,9 +1265,9 @@ def is_machine_approved():
 
             data.get("machine_code") == machine_code
 
-            and saved_version == current_version
+            and saved_version >= current_version
 
-            and data.get("approval_code") == make_approval_code(machine_code, current_version)
+            and data.get("approval_code") == make_approval_code(machine_code, saved_version)
 
         )
 
@@ -1228,7 +1283,19 @@ def save_machine_approval(approval_code):
 
     current_version = machine_approval_version(machine_code)
 
-    if str(approval_code or "").strip().upper() != make_approval_code(machine_code, current_version):
+    approval_code = str(approval_code or "").strip().upper()
+
+    matched_version = None
+
+    for version in [current_version] + [v for v in range(1, 51) if v != current_version]:
+
+        if approval_code == make_approval_code(machine_code, version):
+
+            matched_version = version
+
+            break
+
+    if matched_version is None:
 
         return False
 
@@ -1242,9 +1309,9 @@ def save_machine_approval(approval_code):
 
                 "machine_code": machine_code,
 
-                "approval_code": make_approval_code(machine_code, current_version),
+                "approval_code": make_approval_code(machine_code, matched_version),
 
-                "approval_version": current_version,
+                "approval_version": matched_version,
 
                 "user_name": assigned_name,
 
@@ -1424,7 +1491,7 @@ def import_local_approval_to_admin_list():
 
 def env_path():
 
-    external = app_dir() / ".env"
+    external = app_data_path(".env")
 
     if external.exists():
 
@@ -1442,19 +1509,24 @@ def env_path():
 
 def user_settings_path():
 
-    return app_dir() / "tool_kl_settings.json"
+    return app_data_path("tool_kl_settings.json")
 
 
 
 def selected_excel_files_path():
 
-    return app_dir() / "tool_kl_selected_excels.json"
+    return app_data_path("tool_kl_selected_excels.json")
 
 
 
 def history_entries_path():
 
-    return app_dir() / "tool_kl_history.json"
+    return app_data_path("tool_kl_history.json")
+
+
+def mapping_templates_path():
+
+    return app_data_path("tool_kl_mapping_templates.json")
 
 
 def load_history_entries():
@@ -1489,6 +1561,40 @@ def save_history_entries(entries):
         history_entries_path().write_text(
 
             json.dumps(entries or [], ensure_ascii=False, indent=2),
+
+            encoding="utf-8",
+
+        )
+
+    except Exception:
+
+        pass
+
+
+def load_mapping_templates():
+
+    try:
+
+        data = json.loads(mapping_templates_path().read_text(encoding="utf-8"))
+
+        if isinstance(data, list):
+
+            return [item for item in data if isinstance(item, dict)]
+
+    except Exception:
+
+        pass
+
+    return []
+
+
+def save_mapping_templates(templates):
+
+    try:
+
+        mapping_templates_path().write_text(
+
+            json.dumps(templates or [], ensure_ascii=False, indent=2),
 
             encoding="utf-8",
 
@@ -6529,9 +6635,9 @@ class TableEditor(tk.Frame):
 
         top.pack(fill="x", pady=(0, 8))
 
+        top.grid_columnconfigure(1, weight=1)
 
-
-        tk.Label(top, text="Bảng:", bg=UI_SURFACE, fg=UI_TEXT).pack(side="left")
+        tk.Label(top, text="Bảng:", bg=UI_SURFACE, fg=UI_TEXT).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
 
         self.combo = RoundedMappingDropdown(
 
@@ -6545,7 +6651,7 @@ class TableEditor(tk.Frame):
 
             border_color="#bcd2ee",
 
-            width=250,
+            width=240,
 
             height=34,
 
@@ -6553,19 +6659,23 @@ class TableEditor(tk.Frame):
 
         )
 
-        self.combo.pack(side="left", padx=6)
+        self.combo.grid(row=0, column=1, sticky="ew", padx=(0, 12), pady=2)
 
         self.combo.bind("<<ComboboxSelected>>", lambda e: self.switch_table())
 
 
 
-        ui_button(top, "Thêm dòng", self.add_row, width=11, variant="soft").pack(side="left", padx=3)
+        buttons = tk.Frame(top, bg=UI_SURFACE)
 
-        ui_button(top, "Xóa dòng", self.delete_row, width=10).pack(side="left", padx=3)
+        buttons.grid(row=0, column=2, sticky="e", pady=0)
 
-        ui_button(top, "Sửa ô", self.edit_selected_cell, width=10).pack(side="left", padx=3)
+        ui_button(buttons, "Thêm dòng", self.add_row, width=11, variant="soft").pack(side="left", padx=(0, 8))
 
-        ui_button(top, "Xóa ô", self.clear_selected_cell, width=9).pack(side="left", padx=3)
+        ui_button(buttons, "Xóa dòng", self.delete_row, width=10).pack(side="left", padx=(0, 8))
+
+        ui_button(buttons, "Sửa ô", self.edit_selected_cell, width=10).pack(side="left", padx=(0, 8))
+
+        ui_button(buttons, "Xóa ô", self.clear_selected_cell, width=9).pack(side="left")
 
 
 
@@ -7129,6 +7239,10 @@ class App:
 
         self.history_page = None
 
+        self.mapping_page = None
+
+        self.mapping_templates_inner = None
+
         self.current_page = "home"
 
         self.excel_recent_selected_key = None
@@ -7142,6 +7256,8 @@ class App:
         self.current_doc_kind = None
 
         self.history_selected_entry = None
+
+        self.mapping_templates = load_mapping_templates()
 
         self.nav_widgets = {}
 
@@ -8148,7 +8264,7 @@ class App:
             return tables_data
 
         if action in {"read_excel", "scan_workbook", "workbook_loaded"}:
-            last_run = app_dir() / "last_run_v12"
+            last_run = last_run_dir()
             profile_file = last_run / "current_workbook_profiles.json"
             if profile_file.exists():
                 try:
@@ -8199,7 +8315,7 @@ class App:
                 return fallback
 
         ocr_type = str(extra.get("ocr_type") or "").strip().lower()
-        last_run = app_dir() / "last_run_v12"
+        last_run = last_run_dir()
         candidate_files = []
         if ocr_type == "phieu_coc":
             candidate_files.extend([last_run / "phieu_coc_tables.json", last_run / "phieu_coc_raw_response.txt"])
@@ -9234,7 +9350,7 @@ class App:
 
     def show_page(self, page_name):
 
-        page_name = page_name if page_name in {"home", "excel", "history"} else "home"
+        page_name = page_name if page_name in {"home", "excel", "history", "mapping"} else "home"
 
         self.current_page = page_name
 
@@ -9274,6 +9390,18 @@ class App:
 
                     self.history_page.pack_forget()
 
+            if self.mapping_page is not None:
+
+                if page_name == "mapping":
+
+                    self.mapping_page.pack(fill="both", expand=True)
+
+                    self._render_mapping_templates()
+
+                else:
+
+                    self.mapping_page.pack_forget()
+
         except Exception:
 
             pass
@@ -9299,6 +9427,482 @@ class App:
 
         return self.show_page("history")
 
+
+    def show_mapping_page(self, event=None):
+
+        return self.show_page("mapping")
+
+
+    def _mapping_template_kind_label(self):
+
+        kind = str(getattr(self, "current_doc_kind", "") or "").strip().lower()
+
+        if "phieu" in kind or "coc" in kind:
+
+            return "Phiếu cọc"
+
+        table = None
+
+        try:
+
+            table = self.table_editor.get_current_table()
+
+        except Exception:
+
+            table = None
+
+        table_name = str((table or {}).get("name") or "").lower()
+
+        if "phiếu" in table_name or "phieu" in table_name or "cọc" in table_name or "coc" in table_name:
+
+            return "Phiếu cọc"
+
+        return "Khối lượng"
+
+
+    def ask_mapping_template_name(self, default_name):
+
+        result = {"value": None}
+
+        win = tk.Toplevel(self.root)
+
+        win.title("Lưu mẫu mapping")
+
+        win.configure(bg=UI_SURFACE)
+
+        win.resizable(False, False)
+
+        try:
+
+            win.transient(self.root)
+
+        except Exception:
+
+            pass
+
+        win.grab_set()
+
+        body = tk.Frame(win, bg=UI_SURFACE, padx=22, pady=18)
+
+        body.pack(fill="both", expand=True)
+
+        tk.Label(body, text="Lưu mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+
+        tk.Label(body, text="Đặt tên để dễ nhận biết khi dùng lại trong mục Mẫu mapping.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 14))
+
+        tk.Label(body, text="Tên mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 6))
+
+        name_var = tk.StringVar(value=default_name)
+
+        entry_wrap = tk.Frame(body, bg="#f8fbff", highlightthickness=1, highlightbackground="#bcd2ee")
+
+        entry_wrap.pack(fill="x")
+
+        name_entry = tk.Entry(
+
+            entry_wrap,
+
+            textvariable=name_var,
+
+            relief="flat",
+
+            bd=0,
+
+            bg="#f8fbff",
+
+            fg=UI_TEXT,
+
+            insertbackground=UI_TEXT,
+
+            font=("Segoe UI", 10),
+
+        )
+
+        name_entry.pack(fill="x", padx=10, pady=8)
+
+        error_var = tk.StringVar(value="")
+
+        tk.Label(body, textvariable=error_var, bg=UI_SURFACE, fg="#b91c1c", font=("Segoe UI", 8)).pack(anchor="w", pady=(6, 0))
+
+        bottom = tk.Frame(win, bg="#f8fafc", padx=18, pady=14, highlightthickness=1, highlightbackground="#e2e8f0")
+
+        bottom.pack(fill="x")
+
+        actions = tk.Frame(bottom, bg="#f8fafc")
+
+        actions.pack(anchor="e")
+
+        def submit(_event=None):
+
+            value = name_var.get().strip()
+
+            if not value:
+
+                error_var.set("Vui lòng nhập tên mẫu mapping.")
+
+                return "break"
+
+            result["value"] = value
+
+            win.destroy()
+
+            return "break"
+
+        def cancel(_event=None):
+
+            win.destroy()
+
+            return "break"
+
+        ui_button(actions, "Hủy", cancel, width=9, variant="soft").pack(side="right", padx=(8, 0))
+
+        ui_button(actions, "Lưu mẫu", submit, width=11, variant="primary").pack(side="right")
+
+        win.bind("<Return>", submit)
+
+        win.bind("<Escape>", cancel)
+
+        self._center_dialog_on_screen(win)
+
+        try:
+
+            win.lift()
+
+            win.focus_force()
+
+            name_entry.focus_force()
+
+            name_entry.select_range(0, "end")
+
+        except Exception:
+
+            pass
+
+        self.root.wait_window(win)
+
+        return result["value"]
+
+
+    def save_current_mapping_template(self):
+
+        editor = getattr(self, "mapping_editor", None)
+
+        if editor is None:
+
+            return
+
+        mapping = editor.get_mapping()
+
+        source_cols = list(getattr(editor, "table_cols", []) or [])
+
+        excel_headers = list(getattr(editor, "excel_headers", []) or [])
+
+        if not source_cols or not excel_headers or not mapping:
+
+            messagebox.showwarning("Chưa có mapping", "Bạn cần auto map hoặc chọn mapping cột trước khi lưu mẫu.")
+
+            return
+
+        header_by_col = {}
+
+        for col_idx, name in excel_headers:
+
+            try:
+
+                header_by_col[int(col_idx)] = str(name or "")
+
+            except Exception:
+
+                pass
+
+        pairs = []
+
+        for idx, source_name in enumerate(source_cols):
+
+            target_col = mapping[idx] if idx < len(mapping) else None
+
+            if target_col is None:
+
+                continue
+
+            try:
+
+                target_col = int(target_col)
+
+            except Exception:
+
+                continue
+
+            pairs.append(
+
+                {
+
+                    "source": str(source_name or ""),
+
+                    "target_col": target_col,
+
+                    "target_letter": get_column_letter(target_col),
+
+                    "target": header_by_col.get(target_col, ""),
+
+                }
+
+            )
+
+        if not pairs:
+
+            messagebox.showwarning("Chưa có mapping", "Chưa có cặp cột nào được chọn để lưu mẫu.")
+
+            return
+
+        kind_label = self._mapping_template_kind_label()
+
+        default_name = f"{kind_label} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+        name = self.ask_mapping_template_name(default_name)
+
+        if not name:
+
+            return
+
+        name = name.strip()
+
+        if not name:
+
+            return
+
+        templates = list(getattr(self, "mapping_templates", []) or load_mapping_templates())
+
+        existing_idx = next((i for i, item in enumerate(templates) if str(item.get("name") or "").strip().lower() == name.lower()), None)
+
+        if existing_idx is not None:
+
+            if not messagebox.askyesno("Trùng tên mẫu", "Tên mẫu này đã tồn tại. Bạn có muốn ghi đè không?"):
+
+                return
+
+            template_id = templates[existing_idx].get("id") or uuid.uuid4().hex[:12].upper()
+
+            created_at = templates[existing_idx].get("created_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        else:
+
+            template_id = uuid.uuid4().hex[:12].upper()
+
+            created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        template = {
+
+            "id": template_id,
+
+            "name": name,
+
+            "kind": kind_label,
+
+            "created_at": created_at,
+
+            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+            "source_columns": source_cols,
+
+            "excel_headers": [{"col": int(col), "name": str(label or "")} for col, label in excel_headers],
+
+            "mapping": pairs,
+
+        }
+
+        if existing_idx is not None:
+
+            templates[existing_idx] = template
+
+        else:
+
+            templates.insert(0, template)
+
+        self.mapping_templates = templates[:200]
+
+        save_mapping_templates(self.mapping_templates)
+
+        self._render_mapping_templates()
+
+        try:
+
+            self.status.config(text=f"Đã lưu mẫu mapping: {name}")
+
+        except Exception:
+
+            pass
+
+        messagebox.showinfo("Đã lưu", "Mẫu mapping đã được lưu vào mục Mẫu mapping.")
+
+
+    def apply_mapping_template(self, template):
+
+        editor = getattr(self, "mapping_editor", None)
+
+        if editor is None:
+
+            return
+
+        try:
+
+            table = self.table_editor.get_current_table()
+
+        except Exception:
+
+            table = None
+
+        source_cols = list((table or {}).get("columns") or getattr(editor, "table_cols", []) or [])
+
+        excel_headers = list(getattr(self, "excel_headers", []) or getattr(editor, "excel_headers", []) or [])
+
+        if not source_cols or not excel_headers:
+
+            messagebox.showwarning("Thiếu dữ liệu", "Cần có bảng OCR và Excel trước khi áp dụng mẫu mapping.")
+
+            return
+
+        target_idx_by_col = {}
+
+        for idx, (col_idx, _name) in enumerate(excel_headers):
+
+            try:
+
+                target_idx_by_col[int(col_idx)] = idx
+
+            except Exception:
+
+                pass
+
+        pair_by_source = {}
+
+        for pair in template.get("mapping") or []:
+
+            try:
+
+                pair_by_source[norm(pair.get("source"))] = int(pair.get("target_col"))
+
+            except Exception:
+
+                continue
+
+        auto_idx = []
+
+        for source_name in source_cols:
+
+            target_col = pair_by_source.get(norm(source_name))
+
+            auto_idx.append(target_idx_by_col.get(target_col))
+
+        editor.set_mapping(source_cols, excel_headers, auto_idx)
+
+        self.show_home_page()
+
+        try:
+
+            self.status.config(text=f"Đã áp dụng mẫu mapping: {template.get('name') or ''}")
+
+        except Exception:
+
+            pass
+
+
+    def delete_mapping_template(self, template_id):
+
+        if not messagebox.askyesno("Xóa mẫu", "Bạn có chắc muốn xóa mẫu mapping này không?"):
+
+            return
+
+        self.mapping_templates = [
+
+            item for item in (getattr(self, "mapping_templates", []) or []) if item.get("id") != template_id
+
+        ]
+
+        save_mapping_templates(self.mapping_templates)
+
+        self._render_mapping_templates()
+
+
+    def _render_mapping_templates(self):
+
+        host = getattr(self, "mapping_templates_inner", None)
+
+        if host is None:
+
+            return
+
+        for child in host.winfo_children():
+
+            child.destroy()
+
+        self.mapping_templates = load_mapping_templates()
+
+        if not self.mapping_templates:
+
+            empty = tk.Frame(host, bg=UI_SURFACE, padx=20, pady=30)
+
+            empty.pack(fill="x")
+
+            tk.Label(empty, text="Chưa có mẫu mapping nào.", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(anchor="center")
+
+            tk.Label(empty, text="Sau khi xác nhận mapping cột, bấm Lưu mẫu để lưu lại tại đây.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center", pady=(6, 0))
+
+            return
+
+        for template in self.mapping_templates:
+
+            item = tk.Frame(host, bg="#fbfdff", padx=12, pady=10, highlightthickness=1, highlightbackground=UI_BORDER)
+
+            item.pack(fill="x", pady=(0, 10))
+
+            top = tk.Frame(item, bg="#fbfdff")
+
+            top.pack(fill="x")
+
+            title_box = tk.Frame(top, bg="#fbfdff")
+
+            title_box.pack(side="left", fill="x", expand=True)
+
+            tk.Label(
+
+                title_box,
+
+                text=str(template.get("name") or "Mẫu mapping"),
+
+                bg="#fbfdff",
+
+                fg=UI_TEXT,
+
+                font=("Segoe UI", 10, "bold"),
+
+            ).pack(anchor="w")
+
+            meta = f"{template.get('kind') or 'Mapping'} • {template.get('updated_at') or template.get('created_at') or ''}"
+
+            tk.Label(title_box, text=meta, bg="#fbfdff", fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+
+            ui_button(top, "Áp dụng", lambda tpl=template: self.apply_mapping_template(tpl), width=9, variant="primary").pack(side="right", padx=(8, 0))
+
+            ui_button(top, "Xóa", lambda tid=template.get("id"): self.delete_mapping_template(tid), width=7, variant="warn").pack(side="right")
+
+            rows = tk.Frame(item, bg="#fbfdff")
+
+            rows.pack(fill="x", pady=(8, 0))
+
+            for pair in (template.get("mapping") or [])[:14]:
+
+                target = f"{pair.get('target_letter') or ''}: {pair.get('target') or ''}".strip()
+
+                line = f"{pair.get('source') or ''}  →  {target}"
+
+                tk.Label(rows, text=line, bg="#fbfdff", fg=UI_TEXT, font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=1)
+
+            total = len(template.get("mapping") or [])
+
+            if total > 14:
+
+                tk.Label(rows, text=f"... còn {total - 14} cặp mapping", bg="#fbfdff", fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
 
 
     def _refresh_nav_state(self):
@@ -9431,7 +10035,7 @@ class App:
 
 
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -9655,6 +10259,12 @@ class App:
 
             if save_machine_approval(code_var.get()):
 
+                if not is_admin_build():
+
+                    self.user_role = resolve_member_display_name(machine_code)
+
+                    self.user_role_var.set(self.user_role)
+
                 win.destroy()
 
                 self.member_locked = False
@@ -9666,6 +10276,8 @@ class App:
                     self.root.lift()
 
                     self.status.config(text="Máy đã được duyệt.")
+
+                    self.root.update_idletasks()
 
                 except Exception:
 
@@ -9904,9 +10516,19 @@ class App:
 
 
 
+        screen_w = getattr(self, "screen_w", self.root.winfo_screenwidth())
+
+        screen_h = getattr(self, "screen_h", self.root.winfo_screenheight())
+
+        shell_w = min(max(760, int(screen_w * 0.78)), 1120, max(720, screen_w - 64))
+
+        shell_h = min(max(600, int(screen_h * 0.82)), 760, max(560, screen_h - 64))
+
+        form_w = min(620, shell_w - 56)
+
         shell = tk.Frame(panel, bg=UI_SURFACE, highlightthickness=1, highlightbackground="#dbe5f0")
 
-        shell.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.94, relheight=0.92)
+        shell.place(relx=0.5, rely=0.5, anchor="center", width=shell_w, height=shell_h)
 
         body = tk.Frame(shell, bg=UI_SURFACE, padx=22, pady=18)
 
@@ -9932,39 +10554,47 @@ class App:
 
 
 
-        tk.Label(body, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        form_area = tk.Frame(body, bg=UI_SURFACE, width=form_w)
+
+        form_area.pack(anchor="w")
+
+
+
+        tk.Label(form_area, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
 
         machine_var = tk.StringVar()
 
-        machine_entry = tk.Entry(body, textvariable=machine_var, width=42, relief="solid", bd=1, font=("Segoe UI", 10))
+        machine_entry = tk.Entry(form_area, textvariable=machine_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
 
-        machine_entry.pack(fill="x", pady=(4, 10))
+        machine_entry.pack(anchor="w", pady=(4, 10))
 
 
 
-        tk.Label(body, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(form_area, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
 
         name_var = tk.StringVar()
 
-        name_entry = tk.Entry(body, textvariable=name_var, width=42, relief="solid", bd=1, font=("Segoe UI", 10))
+        name_entry = tk.Entry(form_area, textvariable=name_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
 
-        name_entry.pack(fill="x", pady=(4, 10))
+        name_entry.pack(anchor="w", pady=(4, 10))
 
 
 
-        tk.Label(body, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(form_area, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
 
         approval_var = tk.StringVar()
 
-        approval_entry = tk.Entry(body, textvariable=approval_var, width=42, relief="solid", bd=1, font=("Segoe UI", 10))
+        approval_entry = tk.Entry(form_area, textvariable=approval_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
 
-        approval_entry.pack(fill="x", pady=(4, 12))
+        approval_entry.pack(anchor="w", pady=(4, 12))
 
         approval_entry.configure(state="readonly")
 
+        last_generated_code = {"value": ""}
 
 
-        actions = tk.Frame(body, bg=UI_SURFACE)
+
+        actions = tk.Frame(form_area, bg=UI_SURFACE)
 
         actions.pack(fill="x")
 
@@ -10080,7 +10710,7 @@ class App:
 
 
 
-        def refresh_list():
+        def refresh_list(select_machine=None, fill_selection=True):
 
             import_local_approval_to_admin_list()
 
@@ -10116,17 +10746,27 @@ class App:
 
                 )
 
+            target = str(select_machine or "").strip().upper()
+
             children = approved_tree.get_children()
 
-            if children:
+            selected_id = target if target and approved_tree.exists(target) else (children[0] if children else "")
 
-                approved_tree.selection_set(children[0])
+            if selected_id:
 
-                approved_tree.focus(children[0])
+                approved_tree.focus(selected_id)
 
-                approved_tree.see(children[0])
+                approved_tree.see(selected_id)
 
-                fill_from_selected()
+                if fill_selection:
+
+                    approved_tree.selection_set(selected_id)
+
+                    fill_from_selected()
+
+                else:
+
+                    approved_tree.selection_remove(approved_tree.selection())
 
             self.status.config(text=f"Đã tải {len(rows)} dòng.")
 
@@ -10174,6 +10814,24 @@ class App:
 
 
 
+        def clear_approval_form():
+
+            approved_tree.selection_remove(approved_tree.selection())
+
+            machine_var.set("")
+
+            name_var.set("")
+
+            approval_entry.configure(state="normal")
+
+            approval_var.set("")
+
+            approval_entry.configure(state="readonly")
+
+            machine_entry.focus_set()
+
+
+
         approved_tree.bind("<<TreeviewSelect>>", fill_from_selected)
 
         search_entry.bind("<Return>", lambda _e: search_rows())
@@ -10184,7 +10842,9 @@ class App:
 
             machine = str(machine_var.get() or "").strip().upper()
 
-            code = remember_admin_approved_machine(machine_var.get(), name_var.get())
+            user_name = str(name_var.get() or "").strip()
+
+            code = remember_admin_approved_machine(machine, user_name)
 
             if not code:
 
@@ -10192,29 +10852,47 @@ class App:
 
                 return
 
+            self.root.clipboard_clear()
+
+            self.root.clipboard_append(code)
+
+            last_generated_code["value"] = code
+
             approval_entry.configure(state="normal")
 
-            approval_var.set(code)
+            approval_var.set("")
 
             approval_entry.configure(state="readonly")
 
-            refresh_list()
+            refresh_list(select_machine=machine, fill_selection=False)
+
+            machine_var.set("")
+
+            name_var.set("")
+
+            machine_entry.focus_set()
+
+            self.status.config(text="Đã tạo và copy mã duyệt. Nhập máy tiếp theo.")
 
 
 
         def copy_code():
 
-            if not approval_var.get():
+            code_to_copy = approval_var.get() or last_generated_code["value"]
+
+            if not code_to_copy:
 
                 generate()
 
-            if not approval_var.get():
+                code_to_copy = approval_var.get() or last_generated_code["value"]
+
+            if not code_to_copy:
 
                 return
 
             self.root.clipboard_clear()
 
-            self.root.clipboard_append(approval_var.get())
+            self.root.clipboard_append(code_to_copy)
 
             self.status.config(text="Đã copy mã duyệt.")
 
@@ -10244,7 +10922,9 @@ class App:
 
             delete_admin_approved_machine(machine)
 
-            refresh_list()
+            refresh_list(fill_selection=False)
+
+            clear_approval_form()
 
             self.status.config(text="Đã xóa máy và làm hết hiệu lực mã duyệt cũ.")
 
@@ -10292,9 +10972,19 @@ class App:
 
         ui_button(list_actions, "Tải lại danh sách", clear_search, width=14, variant="soft").pack(side="left", padx=(8, 0))
 
-        machine_entry.focus_set()
+        refresh_list(fill_selection=False)
 
-        refresh_list()
+        machine_var.set("")
+
+        name_var.set("")
+
+        approval_entry.configure(state="normal")
+
+        approval_var.set("")
+
+        approval_entry.configure(state="readonly")
+
+        machine_entry.focus_set()
 
 
 
@@ -10318,19 +11008,25 @@ class App:
 
         self.compact_ui = sw < 1700 or sh < 950
 
-        self.tiny_ui = sw < 1366 or sh < 760
+        self.tiny_ui = sw <= 1366 or sh <= 820
+
+        self.short_ui = sh <= 820
 
 
 
-        win_w = min(1500, max(1080, int(sw * 0.96)))
+        min_win_w = min(1080, max(900, sw - 80))
 
-        win_h = min(900, max(700, int(sh * 0.92)))
+        min_win_h = min(700, max(600, sh - 80))
+
+        win_w = min(1500, max(min_win_w, int(sw * 0.96)))
+
+        win_h = min(900, max(min_win_h, int(sh * 0.92)))
 
         try:
 
             self.root.geometry(f"{win_w}x{win_h}")
 
-            self.root.minsize(1024 if self.tiny_ui else 1120, 680 if self.tiny_ui else 720)
+            self.root.minsize(min_win_w, min_win_h)
 
         except Exception:
 
@@ -10340,21 +11036,21 @@ class App:
 
         if self.tiny_ui:
 
-            self.sidebar_w = 132
+            self.sidebar_w = 118
 
-            self.main_padx = 10
+            self.main_padx = 8
 
-            self.main_pady = 10
+            self.main_pady = 8
 
-            self.card_padx = 10
+            self.card_padx = 8
 
-            self.card_pady = 8
+            self.card_pady = 7
 
-            self.workspace_mins = (170, 520, 255)
+            self.workspace_mins = (145, 420, 215)
 
-            self.mapping_canvas_h = 220
+            self.mapping_canvas_h = 185
 
-            self.logo_max = (114, 106)
+            self.logo_max = (96, 88)
 
         elif self.compact_ui:
 
@@ -10810,9 +11506,9 @@ class App:
 
             bg="#f8fbff",
 
-            padx=8 if self.compact_ui else 10,
+            padx=6 if self.tiny_ui else (8 if self.compact_ui else 10),
 
-            pady=10 if self.compact_ui else 14,
+            pady=8 if self.tiny_ui else (10 if self.compact_ui else 14),
 
             highlightthickness=1,
 
@@ -10828,7 +11524,7 @@ class App:
 
         brand = tk.Frame(sidebar, bg="#f8fbff")
 
-        brand.pack(fill="x", pady=(0, 24))
+        brand.pack(fill="x", pady=(0, 14 if self.tiny_ui else 24))
 
         logo_file = resource_path(*APP_LOGO_PNG.parts)
 
@@ -10882,23 +11578,23 @@ class App:
 
             row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=UI_PRIMARY if active else "#e7edf6")
 
-            row.pack(fill="x", pady=3)
+            row.pack(fill="x", pady=2 if self.tiny_ui else 3)
 
-            inner = tk.Frame(row, bg=bg, padx=10, pady=9)
+            inner = tk.Frame(row, bg=bg, padx=6 if self.tiny_ui else 10, pady=7 if self.tiny_ui else 9)
 
             inner.pack(fill="both", expand=True)
 
             accent = tk.Frame(inner, bg=UI_PRIMARY if active else bg, width=4, height=24)
 
-            accent.pack(side="left", padx=(0, 8), fill="y")
+            accent.pack(side="left", padx=(0, 5 if self.tiny_ui else 8), fill="y")
 
             icon_label = tk.Label(inner, text=icon, width=2, bg=bg, fg=fg, font=("Segoe UI", 11))
 
             icon_label.pack(side="left")
 
-            text_label = tk.Label(inner, text=text, bg=bg, fg=fg, font=("Segoe UI", 9, "bold" if active else "normal"))
+            text_label = tk.Label(inner, text=text, bg=bg, fg=fg, font=("Segoe UI", 8 if self.tiny_ui else 9, "bold" if active else "normal"))
 
-            text_label.pack(side="left", padx=(6, 0))
+            text_label.pack(side="left", padx=(4 if self.tiny_ui else 6, 0))
 
             self.nav_widgets[page_id] = {"row": row, "inner": inner, "accent": accent, "icon": icon_label, "label": text_label}
 
@@ -10919,6 +11615,12 @@ class App:
                 for widget in (row, inner, accent, icon_label, text_label):
 
                     widget.bind("<Button-1>", self.show_history_page)
+
+            elif page_id == "mapping":
+
+                for widget in (row, inner, accent, icon_label, text_label):
+
+                    widget.bind("<Button-1>", self.show_mapping_page)
 
             elif page_id == "settings":
 
@@ -10950,13 +11652,17 @@ class App:
 
         user_box.pack(fill="x", pady=(8, 0))
 
-        tk.Label(user_box, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+        user_inner = tk.Frame(user_box, bg=UI_SURFACE)
 
-        tk.Label(user_box, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
+        user_inner.pack(anchor="center", fill="x")
+
+        tk.Label(user_inner, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+
+        tk.Label(user_inner, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
 
         self.status = tk.Label(
 
-            user_box,
+            user_inner,
 
             text="● Sẵn sàng",
 
@@ -10974,11 +11680,15 @@ class App:
 
         )
 
-        self.status.pack(fill="x", pady=(10, 0))
+        self.status.pack(anchor="center", pady=(10, 0))
 
         if is_admin_build():
 
-            ui_button(user_box, "Duyệt máy", self.open_admin_approval_panel, width=12, variant="warn").pack(fill="x", pady=(10, 0))
+            admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
+
+            admin_btn_row.pack(anchor="center", pady=(10, 0))
+
+            ui_button(admin_btn_row, "Duyệt máy", self.open_admin_approval_panel, width=12, variant="warn").pack(anchor="center")
 
 
 
@@ -11032,59 +11742,122 @@ class App:
 
 
 
-        toolbar = card(self.home_page, padx=12, pady=10)
-        toolbar.pack(fill="x", pady=(12, 10))
-        
-        def make_group(parent, title, btns, bg_color):
+        toolbar = card(self.home_page, padx=8 if self.tiny_ui else 12, pady=7 if self.tiny_ui else 10)
+        toolbar.pack(fill="x", pady=(8 if self.tiny_ui else 12, 8 if self.tiny_ui else 10))
+
+        toolbar_inner = tk.Frame(toolbar, bg=UI_SURFACE)
+
+        toolbar_inner.pack(fill="x")
+
+        toolbar_inner.grid_columnconfigure(0, weight=5, uniform="toolbar")
+
+        toolbar_inner.grid_columnconfigure(1, weight=0)
+
+        toolbar_inner.grid_columnconfigure(2, weight=3, uniform="toolbar")
+
+        toolbar_inner.grid_columnconfigure(3, weight=0)
+
+        toolbar_inner.grid_columnconfigure(4, weight=2, uniform="toolbar")
+
+        toolbar_gap = 3 if self.compact_ui else 5
+
+        toolbar_group_pad = 4 if self.compact_ui else 8
+
+        toolbar_sep_pad = 8 if self.compact_ui else 12
+
+
+
+        def make_group(parent, column, title, btns, bg_color):
+
             group = tk.Frame(parent, bg=bg_color)
-            group.pack(side="left", padx=(0, 16))
+
+            group.grid(row=0, column=column, sticky="nsew", padx=(toolbar_group_pad, toolbar_group_pad))
+
             if title:
-                tk.Label(group, text=title, font=("Segoe UI", 8, "bold"), fg=UI_MUTED, bg=bg_color).pack(side="top", anchor="w", pady=(0, 4))
-            btn_row = tk.Frame(group, bg=bg_color)
-            btn_row.pack(side="top", fill="x")
-            for text, command, variant in btns:
-                ui_button(btn_row, text, command, width=0, variant=variant).pack(side="left", padx=(0, 4))
+
+                tk.Label(group, text=title, font=("Segoe UI", 7 if self.tiny_ui else 8, "bold"), fg=UI_MUTED, bg=bg_color).pack(side="top", anchor="center", pady=(0, 4 if self.tiny_ui else 6))
+
+            rows = [btns]
+
+            for row_btns in rows:
+
+                btn_row = tk.Frame(group, bg=bg_color)
+
+                btn_row.pack(side="top", anchor="center", pady=(1, 3 if self.tiny_ui else 0))
+
+                for text, command, variant in row_btns:
+
+                    ui_button(btn_row, text, command, width=0, variant=variant).pack(side="left", padx=(toolbar_gap, toolbar_gap))
+
             return group
 
         source_btns = [
+
             ("Chọn Excel", self.choose_excel, "primary"),
-            ("Đọc workbook", self.scan_current_workbook, "default"),
-            ("Đọc từng sheet", self.read_each_sheet_content, "default"),
-            ("Đọc công thức", self.read_current_excel_formulas, "default"),
-            ("Đọc lại Excel", self.refresh_excel_header_info, "soft"),
+
+            ("Workbook" if self.compact_ui else "Đọc workbook", self.scan_current_workbook, "default"),
+
+            ("Từng sheet" if self.compact_ui else "Đọc từng sheet", self.read_each_sheet_content, "default"),
+
+            ("Công thức" if self.compact_ui else "Đọc công thức", self.read_current_excel_formulas, "default"),
+
+            ("Đọc lại" if self.compact_ui else "Đọc lại Excel", self.refresh_excel_header_info, "soft"),
+
+            ("Đặt lại", self.reset_current_session, "warn"),
+
         ]
-        make_group(toolbar, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE)
+
+        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE)
         
-        separator1 = tk.Frame(toolbar, bg="#e2e8f0", width=1)
-        separator1.pack(side="left", fill="y", padx=(0, 16), pady=4)
+        separator1 = tk.Frame(toolbar_inner, bg="#e2e8f0", width=1)
+
+        separator1.grid(row=0, column=1, sticky="ns", padx=(toolbar_sep_pad, toolbar_sep_pad), pady=4)
 
         process_btns = [
+
             ("Đọc bảng", self.run_gemini, "soft"),
-            ("Đọc phiếu cọc", self.run_gemini_phieu_coc, "soft"),
+
+            ("Phiếu cọc" if self.compact_ui else "Đọc phiếu cọc", self.run_gemini_phieu_coc, "soft"),
+
             ("Auto map", self.build_mapping, "warn"),
+
         ]
-        make_group(toolbar, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE)
+
+        make_group(toolbar_inner, 2, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE)
         
-        separator2 = tk.Frame(toolbar, bg="#e2e8f0", width=1)
-        separator2.pack(side="left", fill="y", padx=(0, 16), pady=4)
+        separator2 = tk.Frame(toolbar_inner, bg="#e2e8f0", width=1)
+
+        separator2.grid(row=0, column=3, sticky="ns", padx=(toolbar_sep_pad, toolbar_sep_pad), pady=4)
 
         export_btns = [
-            ("Xem trước", self.preview_excel, "soft"),
-            ("Xuất ra Excel", self.fill_excel, "success"),
-        ]
-        make_group(toolbar, "XEM & XUẤT", export_btns, UI_SURFACE)
 
-        filters = card(self.home_page, padx=14, pady=9)
+            ("Xem trước", self.preview_excel, "soft"),
+
+            ("Xuất Excel" if self.compact_ui else "Xuất ra Excel", self.fill_excel, "success"),
+
+        ]
+
+        make_group(toolbar_inner, 4, "XEM & XUẤT", export_btns, UI_SURFACE)
+
+        filters = card(self.home_page, padx=10 if self.tiny_ui else 14, pady=8 if self.tiny_ui else 9)
 
         self.filters_card = filters
 
         filters.pack(fill="x", pady=(0, 12))
 
-        tk.Label(filters, text="Sheet:", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
+        filter_top = tk.Frame(filters, bg=UI_SURFACE)
+
+        filter_top.pack(fill="x")
+
+        filter_bottom = filter_top
+
+
+
+        tk.Label(filter_top, text="Sheet:", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
 
         self.sheet_combo = RoundedMappingDropdown(
 
-            filters,
+            filter_top,
 
             values=[],
 
@@ -11094,7 +11867,7 @@ class App:
 
             border_color="#bcd2ee",
 
-            width=180 if self.compact_ui else 220,
+            width=150 if self.tiny_ui else (180 if self.compact_ui else 220),
 
             height=34,
 
@@ -11106,11 +11879,11 @@ class App:
 
         self.sheet_combo.bind("<<ComboboxSelected>>", lambda e: self.refresh_excel_header_info())
 
-        tk.Label(filters, text="Chế độ đọc bảng:", bg=UI_SURFACE, fg=UI_MUTED).pack(side="left", padx=(4, 8))
+        tk.Label(filter_bottom, text="Chế độ đọc bảng:", bg=UI_SURFACE, fg=UI_MUTED).pack(side="left", padx=(4, 8))
 
         self.template_combo = RoundedMappingDropdown(
 
-            filters,
+            filter_bottom,
 
             values=["Bảng bất kỳ - tự nhận cột"],
 
@@ -11120,7 +11893,7 @@ class App:
 
             border_color="#bcd2ee",
 
-            width=260 if self.compact_ui else 330,
+            width=220 if self.tiny_ui else (260 if self.compact_ui else 330),
 
             height=34,
 
@@ -11206,7 +11979,7 @@ class App:
 
             info,
 
-            height=9,
+            height=5 if self.short_ui else 9,
 
             wrap="word",
 
@@ -11248,47 +12021,55 @@ class App:
 
         section_title(right_col, "XÁC NHẬN ÁNH XẠ CỘT", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn")
 
+        mapping_action_row = tk.Frame(right_col, bg=UI_SURFACE)
+
+        mapping_action_row.pack(fill="x", pady=(8, 0))
+
+        ui_button(mapping_action_row, "Lưu mẫu", self.save_current_mapping_template, width=10, variant="soft").pack(anchor="e")
+
         self.mapping_editor = MappingEditor(right_col)
 
 
 
-        workflow = card(self.home_page, padx=12 if self.compact_ui else 18, pady=8 if self.compact_ui else 14)
+        if not self.short_ui:
 
-        workflow.pack(fill="x", pady=(8 if self.compact_ui else 12, 0))
+            workflow = card(self.home_page, padx=12 if self.compact_ui else 18, pady=8 if self.compact_ui else 14)
 
-        tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            workflow.pack(fill="x", pady=(8 if self.compact_ui else 12, 0))
 
-        steps = tk.Frame(workflow, bg=UI_SURFACE)
+            tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
 
-        steps.pack(fill="x", pady=(12, 0))
+            steps = tk.Frame(workflow, bg=UI_SURFACE)
 
-        for i, (title, sub, color) in enumerate([
+            steps.pack(fill="x", pady=(12, 0))
 
-            ("Chọn file / ảnh OCR", "Tải lên ảnh hoặc chọn file Excel", UI_PRIMARY),
+            for i, (title, sub, color) in enumerate([
 
-            ("Đọc & Trích xuất", "Hệ thống đọc và trích xuất dữ liệu", "#38bdf8"),
+                ("Chọn file / ảnh OCR", "Tải lên ảnh hoặc chọn file Excel", UI_PRIMARY),
 
-            ("Kiểm tra & Sửa dữ liệu", "Xem trước và chỉnh sửa dữ liệu", "#14b8a6"),
+                ("Đọc & Trích xuất", "Hệ thống đọc và trích xuất dữ liệu", "#38bdf8"),
 
-            ("Ánh xạ & Xác nhận", "Map cột và xác nhận dữ liệu", UI_SUCCESS),
+                ("Kiểm tra & Sửa dữ liệu", "Xem trước và chỉnh sửa dữ liệu", "#14b8a6"),
 
-            ("Xuất ra Excel", "Xuất dữ liệu đã xử lý ra Excel", UI_PRIMARY),
+                ("Ánh xạ & Xác nhận", "Map cột và xác nhận dữ liệu", UI_SUCCESS),
 
-        ]):
+                ("Xuất ra Excel", "Xuất dữ liệu đã xử lý ra Excel", UI_PRIMARY),
 
-            item = tk.Frame(steps, bg=UI_SURFACE)
+            ]):
 
-            item.pack(side="left", fill="x", expand=True)
+                item = tk.Frame(steps, bg=UI_SURFACE)
 
-            tk.Label(item, text=str(i + 1), bg="#eef4ff", fg=color, width=3, height=2, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 10))
+                item.pack(side="left", fill="x", expand=True)
 
-            text_box = tk.Frame(item, bg=UI_SURFACE)
+                tk.Label(item, text=str(i + 1), bg="#eef4ff", fg=color, width=3, height=2, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 10))
 
-            text_box.pack(side="left", fill="x")
+                text_box = tk.Frame(item, bg=UI_SURFACE)
 
-            tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+                text_box.pack(side="left", fill="x")
 
-            tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 7)).pack(anchor="w", pady=(2, 0))
+                tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+
+                tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 7)).pack(anchor="w", pady=(2, 0))
 
 
 
@@ -11411,6 +12192,73 @@ class App:
 
         self.history_detail_host = tk.Frame(detail_panel, bg=UI_SURFACE)
         self.history_detail_host.pack(fill="both", expand=True)
+
+
+        self.mapping_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+
+        mapping_shell = card(self.mapping_page, padx=16 if self.compact_ui else 18, pady=14)
+
+        mapping_shell.pack(fill="both", expand=True)
+
+        mapping_top = tk.Frame(mapping_shell, bg=UI_SURFACE)
+
+        mapping_top.pack(fill="x", pady=(0, 12))
+
+        mapping_title = tk.Frame(mapping_top, bg=UI_SURFACE)
+
+        mapping_title.pack(side="left", fill="x", expand=True)
+
+        tk.Label(mapping_title, text="MẪU MAPPING", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+
+        tk.Label(
+
+            mapping_title,
+
+            text="Các ánh xạ đã lưu từ phần xác nhận mapping cột.",
+
+            bg=UI_SURFACE,
+
+            fg=UI_MUTED,
+
+            font=("Segoe UI", 8),
+
+        ).pack(anchor="w", pady=(2, 0))
+
+        ui_button(mapping_top, "Làm mới", self._render_mapping_templates, width=10, variant="soft").pack(side="right")
+
+        mapping_body = tk.Frame(mapping_shell, bg=UI_SURFACE)
+
+        mapping_body.pack(fill="both", expand=True)
+
+        self.mapping_templates_canvas = tk.Canvas(mapping_body, bg=UI_SURFACE, highlightthickness=0, bd=0)
+
+        mapping_scroll = ttk.Scrollbar(mapping_body, orient="vertical", command=self.mapping_templates_canvas.yview)
+
+        self.mapping_templates_canvas.configure(yscrollcommand=mapping_scroll.set)
+
+        mapping_scroll.pack(side="right", fill="y")
+
+        self.mapping_templates_canvas.pack(side="left", fill="both", expand=True)
+
+        self.mapping_templates_inner = tk.Frame(self.mapping_templates_canvas, bg=UI_SURFACE)
+
+        self.mapping_templates_window = self.mapping_templates_canvas.create_window((0, 0), window=self.mapping_templates_inner, anchor="nw")
+
+        self.mapping_templates_inner.bind(
+
+            "<Configure>",
+
+            lambda _e: self.mapping_templates_canvas.configure(scrollregion=self.mapping_templates_canvas.bbox("all")),
+
+        )
+
+        self.mapping_templates_canvas.bind(
+
+            "<Configure>",
+
+            lambda e: self.mapping_templates_canvas.itemconfigure(self.mapping_templates_window, width=e.width),
+
+        )
 
 
         self.excel_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
@@ -11637,7 +12485,7 @@ class App:
 
 
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -11801,7 +12649,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -11827,7 +12675,7 @@ class App:
 
             analysis = analyze_workbook_sheets(self.excel_path)
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -11897,7 +12745,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -11921,7 +12769,7 @@ class App:
 
             logic = read_formula_logic_for_workbook(self.excel_path)
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -11991,7 +12839,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12201,7 +13049,7 @@ class App:
 
             profiles = self._profile_workbook(self.excel_path)
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12221,7 +13069,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12277,7 +13125,7 @@ class App:
 
 
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -12309,7 +13157,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12443,7 +13291,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12530,12 +13378,83 @@ class App:
         except Exception:
             pass
 
+    def reset_current_session(self):
+        if not messagebox.askyesno("Đặt lại", "Đặt lại Excel, ảnh OCR, preview bảng và mapping hiện tại?"):
+            return
+
+        self.image_path = None
+        self.excel_path = None
+        self.tk_img = None
+        self.workbook = None
+        self.excel_folder = None
+        self.header_row = None
+        self.excel_headers = []
+        self.tables = []
+        self.current_workflow_id = None
+        self.current_workflow_date = None
+        self.current_workflow_label = None
+        self.current_doc_kind = None
+        self.excel_recent_selected_key = None
+        self.history_selected_entry = None
+
+        try:
+            self.sheet_var.set("")
+            if hasattr(self, "sheet_combo") and self.sheet_combo is not None:
+                self.sheet_combo["values"] = []
+                try:
+                    self.sheet_combo.set("")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            self._original_image = None
+            if hasattr(self, "img_label") and self.img_label is not None:
+                self.img_label.config(
+                    image="",
+                    text="Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg",
+                )
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "table_editor") and self.table_editor is not None:
+                self.table_editor.set_tables([])
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "mapping_editor") and self.mapping_editor is not None:
+                self.mapping_editor.clear()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "excel_info") and self.excel_info is not None:
+                self.excel_info.delete("1.0", "end")
+                self.excel_info.insert("1.0", "Đã đặt lại. Chọn Excel và ảnh OCR để bắt đầu lại.\n")
+        except Exception:
+            pass
+
+        try:
+            self._render_history_detail(None)
+        except Exception:
+            pass
+
+        try:
+            self._sync_excel_recent_sidebar()
+        except Exception:
+            pass
+
+        self.status.config(text="Đã đặt lại Excel, ảnh OCR, preview và mapping.")
+
     def _save_history_image_snapshot(self, source_path, workflow_id=None):
         try:
             source = Path(str(source_path))
             if not source.exists():
                 return str(source_path)
-            out = app_dir() / "last_run_v12" / "history_images"
+            out = last_run_dir() / "history_images"
             out.mkdir(parents=True, exist_ok=True)
             wf = str(workflow_id or self.current_workflow_id or new_workflow_id()).strip() or new_workflow_id()
             suffix = source.suffix.lower() if source.suffix else ".png"
@@ -12690,7 +13609,7 @@ class App:
 
         try:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12723,7 +13642,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12767,7 +13686,7 @@ class App:
 
             tables = postprocess_to_hop_coc_d1_d2(tables)
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -12836,7 +13755,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -13198,7 +14117,7 @@ class App:
 
 
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -13312,7 +14231,7 @@ class App:
 
 
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -13358,7 +14277,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -13405,7 +14324,7 @@ class App:
 
 
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -13491,7 +14410,7 @@ class App:
 
         except Exception:
 
-            out = app_dir() / "last_run_v12"
+            out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
@@ -13857,7 +14776,7 @@ def _apply_rows_insert_before_total_chot(self, wb):
 
 
 
-    out = app_dir() / "last_run_v12"
+    out = last_run_dir()
 
     out.mkdir(exist_ok=True)
 
@@ -14831,7 +15750,7 @@ def _v229_apply_rows_to_workbook(self, wb):
 
 
 
-    out = app_dir() / "last_run_v12"
+    out = last_run_dir()
 
     out.mkdir(exist_ok=True)
 
@@ -14943,7 +15862,7 @@ def _v229_preview_excel(self):
 
 
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -14991,7 +15910,7 @@ def _v229_preview_excel(self):
 
     except Exception:
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -15403,7 +16322,7 @@ def _v23_apply_rows_to_workbook(self, wb):
 
 
 
-    out = app_dir() / "last_run_v12"
+    out = last_run_dir()
 
     out.mkdir(exist_ok=True)
 
@@ -15515,13 +16434,27 @@ def _v23_run_gemini(self):
 
         return
 
+    self.save_key()
+
+    try:
+
+        self.status.config(text="Đang đọc bảng...")
+
+        self.root.update_idletasks()
+
+        self.root.update()
+
+    except Exception:
+
+        pass
+
     try:
 
         tables, raw = call_gemini(self.image_path, api_key, self.model_var.get().strip())
 
         tables = postprocess_to_hop_coc_d1_d2(tables)
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -15542,7 +16475,7 @@ def _v23_run_gemini(self):
 
     except Exception:
 
-        out = app_dir() / "last_run_v12"
+        out = last_run_dir()
 
         out.mkdir(exist_ok=True)
 
@@ -15984,7 +16917,7 @@ def _v231_apply_rows_to_workbook(self, wb):
 
     validation = _v23_validate_written_cells(ws, target_rows, rows, source_cols, mapping, no_col)
 
-    out = app_dir() / "last_run_v12"
+    out = last_run_dir()
 
     out.mkdir(exist_ok=True)
 
@@ -16116,7 +17049,7 @@ def main():
 
             import traceback
 
-            (app_dir() / "gk_pilepro_error.log").write_text(
+            app_data_path("gk_pilepro_error.log").write_text(
 
                 traceback.format_exc(),
 
@@ -16141,5 +17074,6 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
 
