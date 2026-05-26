@@ -6198,9 +6198,15 @@ class MappingEditor(tk.Frame):
 
         self.table_cols = []
 
+        self.auto_map_idx = []
+
         self.display_to_col = {}
 
         self.col_to_display = {}
+
+        self._layout_width = 0
+
+        self._relayout_job = None
 
 
 
@@ -6296,6 +6302,24 @@ class MappingEditor(tk.Frame):
 
             pass
 
+        try:
+            width = int(event.width or 0)
+        except Exception:
+            width = 0
+
+        if width <= 0:
+            return
+
+        if self.table_cols and self.excel_headers and abs(width - self._layout_width) >= 24:
+            self._layout_width = width
+            if self._relayout_job is not None:
+                try:
+                    self.after_cancel(self._relayout_job)
+                except Exception:
+                    pass
+            selected_values = [var.get() for var in self.mapping_vars]
+            self._relayout_job = self.after_idle(lambda: self._rebuild_for_width(width, selected_values))
+
 
 
     def _on_mousewheel(self, event):
@@ -6331,6 +6355,82 @@ class MappingEditor(tk.Frame):
         except Exception:
 
             pass
+
+
+
+    def _layout_width_hint(self):
+
+        candidates = []
+
+        for widget in (self.box, self.canvas, self.winfo_toplevel()):
+
+            try:
+
+                width = int(widget.winfo_width() or 0)
+
+                if width > 0:
+
+                    candidates.append(width)
+
+            except Exception:
+
+                pass
+
+        if candidates:
+
+            return max(candidates)
+
+        try:
+
+            return int(self.winfo_toplevel().winfo_screenwidth() or 1366)
+
+        except Exception:
+
+            return 1366
+
+
+
+    def _compute_layout_sizes(self, available_width):
+
+        usable = max(260, available_width - 18)
+
+        stacked = usable < 420
+
+        src_width = int(usable * (0.30 if stacked else 0.18))
+
+        src_width = max(64, min(132 if stacked else 128, src_width))
+
+        target_width = usable - src_width - 32
+
+        if stacked:
+
+            target_width = max(180, usable - 18)
+
+        elif target_width < 140:
+
+            src_width = max(80, min(src_width, usable - 172))
+
+            target_width = usable - src_width - 32
+
+        target_width = max(140 if not stacked else 180, min(360 if stacked else 320, target_width))
+
+        src_max_len = max(5, min(14, int((src_width - 18) / 6)))
+
+        row_pady = 2 if usable < 500 else 3
+
+        return src_width, target_width, src_max_len, row_pady, stacked
+
+
+
+    def _rebuild_for_width(self, width, selected_values=None):
+
+        try:
+
+            self.set_mapping(self.table_cols, self.excel_headers, self.auto_map_idx, selected_values=selected_values)
+
+        finally:
+
+            self._relayout_job = None
 
 
 
@@ -6418,7 +6518,7 @@ class MappingEditor(tk.Frame):
 
 
 
-    def set_mapping(self, table_cols, excel_headers, auto_map_idx):
+    def set_mapping(self, table_cols, excel_headers, auto_map_idx, selected_values=None):
 
         self.clear()
 
@@ -6426,26 +6526,15 @@ class MappingEditor(tk.Frame):
 
         self.excel_headers = excel_headers
 
-        try:
-            top = self.winfo_toplevel()
-            screen_w = int(top.winfo_width() or top.winfo_screenwidth() or 1366)
-        except Exception:
-            screen_w = 1366
-        if screen_w <= 1366:
-            src_width = 64
-            target_width = 180
-            src_max_len = 9
-            row_pady = 2
-        elif screen_w <= 1600:
-            src_width = 74
-            target_width = 200
-            src_max_len = 11
-            row_pady = 3
-        else:
-            src_width = 88
-            target_width = 220
-            src_max_len = 13
-            row_pady = 3
+        self.auto_map_idx = list(auto_map_idx or [])
+
+        if selected_values is None:
+
+            selected_values = []
+
+        available_width = self._layout_width_hint()
+        self._layout_width = available_width
+        src_width, target_width, src_max_len, row_pady, stacked = self._compute_layout_sizes(available_width)
 
 
 
@@ -6475,7 +6564,11 @@ class MappingEditor(tk.Frame):
 
 
 
-            if i >= len(auto_map_idx) or auto_map_idx[i] is None:
+            if i < len(selected_values) and selected_values[i] in excel_choices:
+
+                var.set(selected_values[i])
+
+            elif i >= len(auto_map_idx) or auto_map_idx[i] is None:
 
                 var.set("(bỏ qua)")
 
@@ -6493,69 +6586,76 @@ class MappingEditor(tk.Frame):
 
 
 
-            row.grid_columnconfigure(0, weight=0, minsize=src_width)
+            if stacked:
+                row.grid_columnconfigure(0, weight=1)
+                src_box = RoundedMappingLabel(
+                    row,
+                    text=src_show,
+                    bg_color=self.source_bg,
+                    border_color="#d8d2c8",
+                    width=src_width,
+                    height=28,
+                )
+                src_box.grid(row=0, column=0, sticky="ew", padx=(1, 6), pady=(0, 4))
 
-            row.grid_columnconfigure(1, weight=0, minsize=14)
+                mapping_line = tk.Frame(row, bg=UI_SURFACE)
+                mapping_line.grid(row=1, column=0, sticky="ew", padx=(1, 6))
+                mapping_line.grid_columnconfigure(0, weight=0)
+                mapping_line.grid_columnconfigure(1, weight=1)
 
-            row.grid_columnconfigure(2, weight=1)
+                tk.Label(
+                    mapping_line,
+                    text="→",
+                    width=1,
+                    anchor="center",
+                    bg=UI_SURFACE,
+                    fg=UI_MUTED,
+                ).grid(row=0, column=0, sticky="w", padx=(0, 6))
 
+                cb = RoundedMappingDropdown(
+                    mapping_line,
+                    values=excel_choices,
+                    variable=var,
+                    bg_color=self.target_bg,
+                    border_color=self.mapping_border,
+                    width=target_width,
+                    height=30,
+                )
+                cb.grid(row=0, column=1, sticky="ew")
+            else:
+                row.grid_columnconfigure(0, weight=0, minsize=src_width)
+                row.grid_columnconfigure(1, weight=0, minsize=14)
+                row.grid_columnconfigure(2, weight=1)
 
+                src_box = RoundedMappingLabel(
+                    row,
+                    text=src_show,
+                    bg_color=self.source_bg,
+                    border_color="#d8d2c8",
+                    width=src_width,
+                    height=28,
+                )
+                src_box.grid(row=0, column=0, sticky="w", padx=(1, 2))
 
-            src_box = RoundedMappingLabel(
+                tk.Label(
+                    row,
+                    text="→",
+                    width=1,
+                    anchor="center",
+                    bg=UI_SURFACE,
+                    fg=UI_MUTED,
+                ).grid(row=0, column=1, sticky="w", padx=(0, 1))
 
-                row,
-
-                text=src_show,
-
-                bg_color=self.source_bg,
-
-                border_color="#d8d2c8",
-
-                width=src_width,
-
-                height=28,
-
-            )
-
-            src_box.grid(row=0, column=0, sticky="w", padx=(1, 2))
-
-            tk.Label(
-
-                row,
-
-                text="→",
-
-                width=1,
-
-                anchor="center",
-
-                bg=UI_SURFACE,
-
-                fg=UI_MUTED,
-
-            ).grid(row=0, column=1, sticky="w", padx=(0, 1))
-
-
-
-            cb = RoundedMappingDropdown(
-
-                row,
-
-                values=excel_choices,
-
-                variable=var,
-
-                bg_color=self.target_bg,
-
-                border_color=self.mapping_border,
-
-                width=target_width,
-
-                height=30,
-
-            )
-
-            cb.grid(row=0, column=2, sticky="ew", padx=(0, 6))
+                cb = RoundedMappingDropdown(
+                    row,
+                    values=excel_choices,
+                    variable=var,
+                    bg_color=self.target_bg,
+                    border_color=self.mapping_border,
+                    width=target_width,
+                    height=30,
+                )
+                cb.grid(row=0, column=2, sticky="ew", padx=(0, 6))
 
 
 
@@ -11656,7 +11756,8 @@ class App:
             self.main_pady = scale_px(6)
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(6)
-            self.workspace_mins = (scale_px(130), scale_px(430), scale_px(190))
+            self.workspace_mins = (scale_px(100), scale_px(410), scale_px(235))
+            self.image_drop_h = scale_px(128)
             self.mapping_canvas_h = scale_px(170)
             self.logo_max = (scale_px(90), scale_px(82))
         elif self.tiny_ui:
@@ -11665,7 +11766,8 @@ class App:
             self.main_pady = scale_px(8)
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(7)
-            self.workspace_mins = (scale_px(145), scale_px(420), scale_px(215))
+            self.workspace_mins = (scale_px(110), scale_px(400), scale_px(255))
+            self.image_drop_h = scale_px(140)
             self.mapping_canvas_h = scale_px(185)
             self.logo_max = (scale_px(96), scale_px(88))
         elif self.dense_ui:
@@ -11674,7 +11776,8 @@ class App:
             self.main_pady = scale_px(9)
             self.card_padx = scale_px(10)
             self.card_pady = scale_px(8)
-            self.workspace_mins = (scale_px(160), scale_px(500), scale_px(230))
+            self.workspace_mins = (scale_px(125), scale_px(470), scale_px(285))
+            self.image_drop_h = scale_px(155)
             self.mapping_canvas_h = scale_px(210)
             self.logo_max = (scale_px(118), scale_px(108))
         elif self.compact_ui:
@@ -11683,7 +11786,8 @@ class App:
             self.main_pady = scale_px(12)
             self.card_padx = scale_px(11)
             self.card_pady = scale_px(9)
-            self.workspace_mins = (scale_px(185), scale_px(540), scale_px(255))
+            self.workspace_mins = (scale_px(140), scale_px(500), scale_px(320))
+            self.image_drop_h = scale_px(170)
             self.mapping_canvas_h = scale_px(240)
             self.logo_max = (scale_px(130), scale_px(120))
         else:
@@ -11692,7 +11796,8 @@ class App:
             self.main_pady = scale_px(18)
             self.card_padx = scale_px(14)
             self.card_pady = scale_px(12)
-            self.workspace_mins = (scale_px(230), scale_px(690), scale_px(315))
+            self.workspace_mins = (scale_px(165), scale_px(640), scale_px(390))
+            self.image_drop_h = scale_px(185)
             self.mapping_canvas_h = scale_px(260)
             self.logo_max = (scale_px(156), scale_px(144))
 
@@ -12602,9 +12707,9 @@ class App:
 
         workspace.grid_columnconfigure(0, weight=1, minsize=left_min)
 
-        workspace.grid_columnconfigure(1, weight=5, minsize=center_min)
+        workspace.grid_columnconfigure(1, weight=3, minsize=center_min)
 
-        workspace.grid_columnconfigure(2, weight=1, minsize=right_min)
+        workspace.grid_columnconfigure(2, weight=4, minsize=right_min)
 
         workspace.grid_rowconfigure(0, weight=1)
 
@@ -12612,7 +12717,7 @@ class App:
 
         left_col = tk.Frame(workspace, bg=UI_BG)
 
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         image_card = card(left_col)
 
@@ -12620,8 +12725,16 @@ class App:
 
         section_title(image_card, "ẢNH OCR")
 
-        upload_box = tk.Frame(image_card, bg="#fbfdff", highlightthickness=1, highlightbackground="#d7e3f2", padx=12, pady=12)
-        upload_box.pack(fill="both", expand=True, pady=(12, 0))
+        upload_box = tk.Frame(
+            image_card,
+            bg="#fbfdff",
+            highlightthickness=1,
+            highlightbackground="#d7e3f2",
+            padx=8,
+            pady=8,
+            height=self.image_drop_h,
+        )
+        upload_box.pack(fill="x", expand=False, pady=(8, 0))
         upload_box.pack_propagate(False)
 
         self.img_label = tk.Label(
@@ -12652,13 +12765,13 @@ class App:
             
         self.img_label.bind("<Configure>", on_img_label_resize)
 
-        ui_button(upload_box, "Chọn ảnh / Tải lên", self.choose_image, width=18, variant="primary").pack(pady=(10, 0))
+        ui_button(upload_box, "Chọn ảnh / Tải lên", self.choose_image, width=18, variant="primary").pack(pady=(8, 0))
 
 
 
         info = card(left_col)
 
-        info.pack(fill="x", pady=(12, 0))
+        info.pack(fill="x", pady=(10, 0))
 
         section_title(info, "THÔNG TIN EXCEL")
 
