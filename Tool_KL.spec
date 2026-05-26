@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
@@ -23,10 +24,27 @@ if env_file.exists():
     datas.append((str(env_file), '.'))
 
 tcl_root = Path(sys.base_prefix) / 'tcl'
-for folder, target in (('tcl8.6', '_tcl_data'), ('tk8.6', '_tk_data')):
-    src = tcl_root / folder
-    if src.exists():
-        datas.append((str(src), target))
+
+
+def add_tree(src_root, target_root):
+    if not src_root.exists():
+        return
+    for dirpath, _dirnames, filenames in os.walk(src_root):
+        dirpath = Path(dirpath)
+        rel_dir = dirpath.relative_to(src_root)
+        for filename in filenames:
+            src_file = dirpath / filename
+            target_dir = Path(target_root) / rel_dir
+            datas.append((str(src_file), str(target_dir)))
+
+
+for folder, target in (
+    ('tcl8.6', '_tcl_data'),
+    ('tcl8.6', 'tcl_data'),
+    ('tk8.6', '_tk_data'),
+    ('tk8.6', 'tk_data'),
+):
+    add_tree(tcl_root / folder, target)
 
 python_dlls = Path(sys.base_prefix) / 'DLLs'
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
@@ -69,4 +87,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    contents_directory='.',
 )

@@ -4,6 +4,8 @@ import os
 
 import sys
 
+import math
+
 import hashlib
 
 import shutil
@@ -15,6 +17,8 @@ from datetime import datetime
 import unicodedata
 
 import copy, re, json, traceback, copy, difflib, glob
+
+import ctypes
 
 from pathlib import Path
 
@@ -37,6 +41,11 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import coordinate_to_tuple
 
 from openpyxl.formula.translate import Translator
+
+try:
+    from ctypes import wintypes
+except Exception:
+    wintypes = None
 
 
 
@@ -105,6 +114,65 @@ def sharp_icon_image(image, size):
         pass
 
     return img
+
+
+def get_windows_work_area():
+    try:
+        if not hasattr(ctypes, "windll") or wintypes is None:
+            return None
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+        class POINT(ctypes.Structure):
+            _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", wintypes.DWORD)]
+
+        pt = POINT()
+        try:
+            user32.GetCursorPos(ctypes.byref(pt))
+        except Exception:
+            pt.x = 0
+            pt.y = 0
+
+        MONITOR_DEFAULTTONEAREST = 2
+        hmon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            return None
+        mi = MONITORINFO()
+        mi.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            return None
+        return {
+            "left": int(mi.rcWork.left),
+            "top": int(mi.rcWork.top),
+            "width": int(mi.rcWork.right - mi.rcWork.left),
+            "height": int(mi.rcWork.bottom - mi.rcWork.top),
+        }
+    except Exception:
+        return None
+
+
+def get_windows_dpi(hwnd=None):
+    try:
+        if not hasattr(ctypes, "windll"):
+            return 96
+        user32 = ctypes.windll.user32
+        if hwnd and hasattr(user32, "GetDpiForWindow"):
+            dpi = int(user32.GetDpiForWindow(hwnd))
+            if dpi > 0:
+                return dpi
+        if hasattr(user32, "GetDpiForSystem"):
+            dpi = int(user32.GetDpiForSystem())
+            if dpi > 0:
+                return dpi
+    except Exception:
+        pass
+    return 96
 
 
 
@@ -272,6 +340,32 @@ UI_SUCCESS_ACTIVE = "#126931"
 
 UI_WARN = "#b7791f"
 
+UI_SCALE = 1.0
+
+
+def scale_px(value, minimum=1):
+
+    try:
+
+        return max(minimum, int(math.ceil(float(value) * float(UI_SCALE))))
+
+    except Exception:
+
+        return max(minimum, int(value))
+
+
+def ui_font(size=None, bold=False):
+
+    try:
+
+        base = max(12, scale_px(size if size is not None else 12))
+
+    except Exception:
+
+        base = 12 if size is None else int(size)
+
+    return ("Segoe UI", base, "bold" if bold else "normal")
+
 
 
 class RoundedButton(tk.Canvas):
@@ -302,11 +396,13 @@ class RoundedButton(tk.Canvas):
 
         if width <= 0:
 
-            self.pixel_width = max(78, min(124, int(len(str(text)) * 7.0) + 28))
+            self.pixel_width = max(scale_px(78), min(scale_px(124), int(len(str(text)) * 7.0 * UI_SCALE) + scale_px(28)))
 
         else:
 
-            self.pixel_width = max(98, int(width * 9.6))
+            self.pixel_width = max(scale_px(98), scale_px(width * 9.6))
+
+        self.pixel_height = scale_px(40)
 
         super().__init__(
 
@@ -314,7 +410,7 @@ class RoundedButton(tk.Canvas):
 
             width=self.pixel_width,
 
-            height=40,
+            height=self.pixel_height,
 
             bg=parent.cget("bg") if hasattr(parent, "cget") else UI_SURFACE,
 
@@ -342,15 +438,15 @@ class RoundedButton(tk.Canvas):
 
         try:
 
-            self.create_round_rect(1, 1, self.pixel_width - 1, 39, radius=8, fill=fill, outline=self.border_color)
+            self.create_round_rect(1, 1, self.pixel_width - 1, self.pixel_height - 1, radius=max(5, scale_px(8)), fill=fill, outline=self.border_color)
 
         except Exception:
 
-            self.create_rectangle(1, 1, self.pixel_width - 1, 39, fill=fill, outline=self.border_color)
+            self.create_rectangle(1, 1, self.pixel_width - 1, self.pixel_height - 1, fill=fill, outline=self.border_color)
 
-        font = ("Segoe UI", 9, "bold" if self.variant in {"primary", "success"} else "normal")
+        font = ui_font(10, bold=self.variant in {"primary", "success"})
 
-        self.create_text(self.pixel_width // 2, 20, text=self.text, fill=self.fg_color, font=font)
+        self.create_text(self.pixel_width // 2, self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font)
 
 
 
@@ -408,13 +504,16 @@ class RoundedMappingLabel(tk.Canvas):
 
     ):
 
+        self.width_px = scale_px(width)
+        self.height_px = scale_px(height)
+
         super().__init__(
 
             parent,
 
-            width=width,
+            width=self.width_px,
 
-            height=height,
+            height=self.height_px,
 
             bg=parent.cget("bg") if hasattr(parent, "cget") else UI_SURFACE,
 
@@ -431,8 +530,6 @@ class RoundedMappingLabel(tk.Canvas):
         self.border_color = border_color
 
         self.text_color = text_color
-
-        self.height_px = height
 
         self.radius = radius
 
@@ -476,7 +573,7 @@ class RoundedMappingLabel(tk.Canvas):
 
             fill=self.text_color,
 
-            font=("Segoe UI", 8),
+            font=ui_font(10),
 
             anchor="w",
 
@@ -510,13 +607,16 @@ class RoundedMappingDropdown(tk.Canvas):
 
     ):
 
+        self.width_px = scale_px(width)
+        self.height_px = scale_px(height)
+
         super().__init__(
 
             parent,
 
-            width=width,
+            width=self.width_px,
 
-            height=height,
+            height=self.height_px,
 
             bg=parent.cget("bg") if hasattr(parent, "cget") else UI_SURFACE,
 
@@ -535,8 +635,6 @@ class RoundedMappingDropdown(tk.Canvas):
         self.bg_color = bg_color
 
         self.border_color = border_color
-
-        self.height_px = height
 
         self.radius = radius
 
@@ -704,7 +802,7 @@ class RoundedMappingDropdown(tk.Canvas):
 
             return ""
 
-        font = ("Segoe UI", 8)
+        font = ui_font(10)
 
         item = self.create_text(0, -100, text=text, font=font, anchor="w")
 
@@ -774,7 +872,7 @@ class RoundedMappingDropdown(tk.Canvas):
 
         text = self._fit_text(self.variable.get(), max(10, w - 34))
 
-        self.create_text(10, self.height_px // 2, text=text, fill=UI_TEXT, font=("Segoe UI", 8), anchor="w")
+        self.create_text(10, self.height_px // 2, text=text, fill=UI_TEXT, font=ui_font(10), anchor="w")
 
 
 
@@ -1639,6 +1737,8 @@ def load_env_values():
 
         "GEMINI_MODEL": os.getenv("GEMINI_MODEL", DEFAULT_MODEL),
 
+        "SCREEN_PROFILE": os.getenv("SCREEN_PROFILE", "auto") or "auto",
+
     }
 
     try:
@@ -1653,6 +1753,10 @@ def load_env_values():
 
             values["GEMINI_MODEL"] = settings["GEMINI_MODEL"]
 
+        if settings.get("SCREEN_PROFILE"):
+
+            values["SCREEN_PROFILE"] = str(settings["SCREEN_PROFILE"])
+
     except Exception:
 
         pass
@@ -1661,41 +1765,45 @@ def load_env_values():
 
 
 
-def save_env(api_key, model):
+def save_env(api_key, model, screen_profile="auto"):
+
+    payload = {
+
+        "GEMINI_API_KEY": api_key.strip(),
+
+        "GEMINI_MODEL": (model.strip() or DEFAULT_MODEL),
+
+        "SCREEN_PROFILE": str(screen_profile or "auto").strip() or "auto",
+
+    }
 
     if getattr(sys, "frozen", False):
 
         user_settings_path().write_text(
 
-            json.dumps(
-
-                {
-
-                    "GEMINI_API_KEY": api_key.strip(),
-
-                    "GEMINI_MODEL": (model.strip() or DEFAULT_MODEL),
-
-                },
-
-                ensure_ascii=False,
-
-                indent=2,
-
-            ),
+            json.dumps(payload, ensure_ascii=False, indent=2),
 
             encoding="utf-8"
 
         )
 
-        return
+    else:
 
-    env_path().write_text(
+        env_path().write_text(
 
-        f"GEMINI_API_KEY={api_key.strip()}\nGEMINI_MODEL={(model.strip() or DEFAULT_MODEL)}\n",
+            f"GEMINI_API_KEY={api_key.strip()}\nGEMINI_MODEL={(model.strip() or DEFAULT_MODEL)}\nSCREEN_PROFILE={str(screen_profile or 'auto').strip() or 'auto'}\n",
 
-        encoding="utf-8"
+            encoding="utf-8"
 
-    )
+        )
+
+    try:
+
+        user_settings_path().write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    except Exception:
+
+        pass
 
 
 
@@ -6639,6 +6747,12 @@ class TableEditor(tk.Frame):
 
         tk.Label(top, text="Bảng:", bg=UI_SURFACE, fg=UI_TEXT).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
 
+        try:
+            screen_w = int(parent.winfo_toplevel().winfo_screenwidth() or 1366)
+        except Exception:
+            screen_w = 1366
+        combo_width = 320 if screen_w >= 1600 else 290 if screen_w >= 1400 else 260
+
         self.combo = RoundedMappingDropdown(
 
             top,
@@ -6651,7 +6765,7 @@ class TableEditor(tk.Frame):
 
             border_color="#bcd2ee",
 
-            width=240,
+            width=combo_width,
 
             height=34,
 
@@ -7191,17 +7305,17 @@ class App:
 
         root.title(APP_TITLE)
 
-        self._setup_responsive_metrics()
-
-        self.app_logo_img = None
-
-
-
         env = load_env_values()
 
         self.api_key_var = tk.StringVar(value=env["GEMINI_API_KEY"])
 
         self.model_var = tk.StringVar(value=env["GEMINI_MODEL"] or DEFAULT_MODEL)
+
+        self.screen_profile_var = tk.StringVar(value=env.get("SCREEN_PROFILE") or "auto")
+
+        self._setup_responsive_metrics()
+
+        self.app_logo_img = None
 
 
 
@@ -7486,17 +7600,11 @@ class App:
                 empty.pack(fill="x")
 
                 if getattr(self, "excel_recent_mode", "recent") == "pinned":
-
-                    tk.Label(empty, text="Chưa có file nào được ghim.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center")
-
-                    tk.Label(empty, text="Chọn một file ở tab Gần đây, rồi ghim nếu cần trong bản tiếp theo.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
-
+                    tk.Label(empty, text="Chưa có file nào được ghim.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="center")
+                    tk.Label(empty, text="Chọn một file ở tab Gần đây, rồi ghim nếu cần trong bản tiếp theo.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="center", pady=(4, 0))
                 else:
-
-                    tk.Label(empty, text="Chưa có file Excel nào được chọn.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center")
-
-                    tk.Label(empty, text="Bấm Chọn Excel để thêm file vào danh sách gần đây.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
-
+                    tk.Label(empty, text="Chưa có file Excel nào được chọn.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="center")
+                    tk.Label(empty, text="Bấm Chọn Excel để thêm file vào danh sách gần đây.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="center", pady=(4, 0))
                 return
 
 
@@ -7525,7 +7633,7 @@ class App:
 
                 icon_box.pack_propagate(False)
 
-                tk.Label(icon_box, text="X", bg="#1f8b4c", fg="#ffffff", font=("Segoe UI", 10, "bold"), width=2, height=1).pack(fill="both", expand=True)
+                tk.Label(icon_box, text="X", bg="#1f8b4c", fg="#ffffff", font=ui_font(11, bold=True), width=2, height=1).pack(fill="both", expand=True)
 
 
 
@@ -7533,9 +7641,9 @@ class App:
 
                 mid.pack(side="left", fill="both", expand=True)
 
-                tk.Label(mid, text=p.stem, bg=row_bg, fg=UI_TEXT, font=("Segoe UI", 9, "bold"), anchor="w").pack(anchor="w")
+                tk.Label(mid, text=p.stem, bg=row_bg, fg=UI_TEXT, font=ui_font(11, bold=True), anchor="w").pack(anchor="w")
 
-                tk.Label(mid, text=self._excel_recent_path_label(path), bg=row_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(2, 0))
+                tk.Label(mid, text=self._excel_recent_path_label(path), bg=row_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(anchor="w", pady=(2, 0))
 
 
 
@@ -7543,7 +7651,7 @@ class App:
 
                 right.pack(side="right", padx=(10, 0))
 
-                tk.Label(right, text=self._excel_recent_modified_label(path), bg=row_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="e").pack(anchor="e")
+                tk.Label(right, text=self._excel_recent_modified_label(path), bg=row_bg, fg=UI_MUTED, font=ui_font(10), anchor="e").pack(anchor="e")
 
 
 
@@ -8055,13 +8163,13 @@ class App:
             display_columns = [self._history_pretty_column_label(k) for k in row_maps[0].keys()]
 
         if not display_columns:
-            tk.Label(host, text="Không có cột dữ liệu để hiển thị.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+            tk.Label(host, text="Không có cột dữ liệu để hiển thị.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w")
             return
 
         top = tk.Frame(host, bg=UI_SURFACE)
         top.pack(fill="x", pady=(0, 8))
 
-        tk.Label(top, text=self._history_pretty_column_label(table.get("title") or "Bảng OCR"), bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(top, text=self._history_pretty_column_label(table.get("title") or "Bảng OCR"), bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True), anchor="w").pack(anchor="w")
 
         table_shell = tk.Frame(host, bg=UI_SURFACE)
         table_shell.pack(fill="both", expand=True)
@@ -8370,7 +8478,7 @@ class App:
                     fg=UI_MUTED,
                     justify="left",
                     anchor="nw",
-                    font=("Segoe UI", 9),
+                    font=ui_font(11),
                     wraplength=360,
                 ).pack(fill="both", expand=True, anchor="nw")
             else:
@@ -8421,7 +8529,7 @@ class App:
             summary_box = tk.Frame(host, bg="#f8fbff", highlightthickness=1, highlightbackground="#d7e3f2", padx=10, pady=8)
             summary_box.pack(fill="x", pady=(0, 8))
             for line in header_rows:
-                tk.Label(summary_box, text=line, bg="#f8fbff", fg=UI_TEXT, font=("Segoe UI", 8), anchor="w", justify="left").pack(anchor="w")
+                tk.Label(summary_box, text=line, bg="#f8fbff", fg=UI_TEXT, font=ui_font(10), anchor="w", justify="left").pack(anchor="w")
         else:
             self._history_set_detail_text("\n".join(header_rows))
 
@@ -8448,7 +8556,7 @@ class App:
             else:
                 fallback_lines.append("Không có dữ liệu OCR chi tiết trong record này.")
             if host is not None:
-                tk.Label(host, text="\n".join(fallback_lines), bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8), justify="left", anchor="nw", wraplength=360).pack(fill="x", anchor="nw")
+                tk.Label(host, text="\n".join(fallback_lines), bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10), justify="left", anchor="nw", wraplength=360).pack(fill="x", anchor="nw")
             else:
                 self._history_set_detail_text("\n".join(fallback_lines))
 
@@ -8537,12 +8645,9 @@ class App:
 
             empty.pack(fill="x")
 
-            tk.Label(empty, text="Chưa có lịch sử.", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="center")
-
-            tk.Label(empty, text="Sau khi đọc Excel và xuất dữ liệu, các mục sẽ xuất hiện ở đây theo ngày.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
-
+            tk.Label(empty, text="Chưa có lịch sử.", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="center")
+            tk.Label(empty, text="Sau khi đọc Excel và xuất dữ liệu, các mục sẽ xuất hiện ở đây theo ngày.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="center", pady=(4, 0))
             self.history_summary_var.set("0 mục")
-
             return
 
         grouped_items = sorted(grouped.values(), key=lambda g: g.get("latest_ts") or "", reverse=True)
@@ -8585,7 +8690,7 @@ class App:
 
                     fg=UI_PRIMARY,
 
-                    font=("Segoe UI", 8, "bold"),
+                    font=ui_font(10, bold=True),
 
                     padx=10,
 
@@ -8641,9 +8746,9 @@ class App:
                     self.history_image_refs.append(tk_img)
                     tk.Label(thumb_box, image=tk_img, bg=status_bg).pack(fill="both", expand=True)
                 except Exception:
-                    tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(fill="both", expand=True)
+                    tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(fill="both", expand=True)
             else:
-                tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(fill="both", expand=True)
+                tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(fill="both", expand=True)
 
             body = tk.Frame(row, bg=status_bg)
 
@@ -8653,25 +8758,21 @@ class App:
 
             head.pack(fill="x")
 
-            tk.Label(head, text=group["file_name"], bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
+            tk.Label(head, text=group["file_name"], bg=status_bg, fg=UI_TEXT, font=ui_font(11, bold=True), anchor="w").pack(side="left")
 
             badges = tk.Frame(head, bg=status_bg)
-
             badges.pack(side="right")
 
             if group["has_read"]:
-
-                tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
 
             if group["has_export"]:
-
-                tk.Label(badges, text="Đã xuất", bg="#dcfce7", fg="#15803d", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Đã xuất", bg="#dcfce7", fg="#15803d", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
 
             if group["has_error"]:
+                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left")
 
-                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left")
-
-            tk.Label(body, text=group["file_path"] or "Không rõ đường dẫn", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(3, 0))
+            tk.Label(body, text=group["file_path"] or "Không rõ đường dẫn", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(anchor="w", pady=(3, 0))
 
             summary_parts = []
 
@@ -8732,12 +8833,10 @@ class App:
             details.pack(fill="x", pady=(8, 0))
 
             for idx, text in enumerate(summary_parts[:4]):
-
-                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 8), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=ui_font(10), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
 
             if len(summary_parts) > 4:
-
-                tk.Label(details, text=f"• ... và {len(summary_parts) - 4} mục khác", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• ... và {len(summary_parts) - 4} mục khác", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(anchor="w", pady=(0, 2))
 
             def open_history_file(_e=None, target_path=group["file_path"]):
 
@@ -8862,12 +8961,9 @@ class App:
 
             empty.pack(fill="x")
 
-            tk.Label(empty, text="Chưa có lịch sử quy trình.", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="center")
-
-            tk.Label(empty, text="Mỗi workflow sẽ lưu các bước như chọn ảnh, OCR, xem trước và xuất Excel.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
-
+            tk.Label(empty, text="Chưa có lịch sử quy trình.", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="center")
+            tk.Label(empty, text="Mỗi workflow sẽ lưu các bước như chọn ảnh, OCR, xem trước và xuất Excel.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="center", pady=(4, 0))
             self.history_summary_var.set("0 OCR")
-
             return
 
         grouped_items = sorted(grouped.values(), key=lambda g: g.get("latest_ts") or "", reverse=True)
@@ -8894,27 +8990,21 @@ class App:
 
                 tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
 
-                tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} workflow", bg="#eef4ff", fg=UI_PRIMARY, font=("Segoe UI", 8, "bold"), padx=10, pady=5).pack(side="right")
+                tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} workflow", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
-            status_bg, status_border, accent = self._history_status_style(
+                status_bg, status_border, accent = self._history_status_style(
+                    {"status": "error" if group["has_error"] else "success", "action": "export_excel" if group["has_export"] else ("ocr_done" if group["has_ocr"] else "")}
+                )
 
-                {"status": "error" if group["has_error"] else "success", "action": "export_excel" if group["has_export"] else ("ocr_done" if group["has_ocr"] else "")}
+                row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
+                row.pack(fill="x", pady=(0, 8))
 
-            )
+                accent_bar = tk.Frame(row, bg=accent, width=6)
+                accent_bar.pack(side="left", fill="y", padx=(0, 12))
+                accent_bar.pack_propagate(False)
 
-            row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
-
-            row.pack(fill="x", pady=(0, 8))
-
-            accent_bar = tk.Frame(row, bg=accent, width=6)
-
-            accent_bar.pack(side="left", fill="y", padx=(0, 12))
-
-            accent_bar.pack_propagate(False)
-
-            body = tk.Frame(row, bg=status_bg)
-
-            body.pack(side="left", fill="both", expand=True)
+                body = tk.Frame(row, bg=status_bg)
+                body.pack(side="left", fill="both", expand=True)
 
             head = tk.Frame(body, bg=status_bg)
 
@@ -8930,33 +9020,26 @@ class App:
             elif group["has_ocr"]:
                 title_text = f"OCR: {title_text}"
 
-            tk.Label(head, text=title_text, bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
+            tk.Label(head, text=title_text, bg=status_bg, fg=UI_TEXT, font=ui_font(11, bold=True), anchor="w").pack(side="left")
 
             badges = tk.Frame(head, bg=status_bg)
-
             badges.pack(side="right")
 
             if group["has_image"]:
-
-                tk.Label(badges, text="Có ảnh", bg="#ede9fe", fg="#6d28d9", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Có ảnh", bg="#ede9fe", fg="#6d28d9", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
 
             if group["has_ocr"]:
-
-                tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
 
             if group["has_export"]:
-
-                tk.Label(badges, text="Đã xuất", bg="#dcfce7", fg="#15803d", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Đã xuất", bg="#dcfce7", fg="#15803d", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
 
             if group["has_error"]:
-
-                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left")
+                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left")
 
             info_line = tk.Frame(body, bg=status_bg)
-
             info_line.pack(fill="x", pady=(3, 0))
-
-            tk.Label(info_line, text=f"ID: {group['workflow_id']}", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(side="left")
+            tk.Label(info_line, text=f"ID: {group['workflow_id']}", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(side="left")
 
             summary_parts = []
 
@@ -9009,12 +9092,10 @@ class App:
             details.pack(fill="x", pady=(8, 0))
 
             for text in summary_parts[:5]:
-
-                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 8), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=ui_font(10), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
 
             if len(summary_parts) > 5:
-
-                tk.Label(details, text=f"• ... và {len(summary_parts) - 5} bước khác", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• ... và {len(summary_parts) - 5} bước khác", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(anchor="w", pady=(0, 2))
 
             def open_history_item(_e=None, target_entry=group["entries"][0] if group["entries"] else None):
 
@@ -9145,8 +9226,8 @@ class App:
                 summary_text = "0 phiếu cọc"
             empty = tk.Frame(inner, bg=UI_SURFACE, padx=18, pady=26, highlightthickness=1, highlightbackground="#e7edf6")
             empty.pack(fill="x")
-            tk.Label(empty, text=empty_title, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="center")
-            tk.Label(empty, text=empty_sub, bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="center", pady=(4, 0))
+            tk.Label(empty, text=empty_title, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="center")
+            tk.Label(empty, text=empty_sub, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="center", pady=(4, 0))
             self.history_summary_var.set(summary_text)
             self.history_selected_entry = None
             self._render_history_detail(None)
@@ -9177,16 +9258,16 @@ class App:
                 day_head = tk.Frame(current_day_box, bg=UI_SURFACE)
                 day_head.pack(fill="x", pady=(0, 8))
                 tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
-                tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} OCR", bg="#eef4ff", fg=UI_PRIMARY, font=("Segoe UI", 8, "bold"), padx=10, pady=5).pack(side="right")
+                tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} OCR", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
-            status_bg, status_border, accent = self._history_status_style({"status": "error" if group["has_error"] else "success", "action": "ocr_done"})
+                status_bg, status_border, accent = self._history_status_style({"status": "error" if group["has_error"] else "success", "action": "ocr_done"})
 
-            row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
-            row.pack(fill="x", pady=(0, 8))
+                row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
+                row.pack(fill="x", pady=(0, 8))
 
-            accent_bar = tk.Frame(row, bg=accent, width=6)
-            accent_bar.pack(side="left", fill="y", padx=(0, 12))
-            accent_bar.pack_propagate(False)
+                accent_bar = tk.Frame(row, bg=accent, width=6)
+                accent_bar.pack(side="left", fill="y", padx=(0, 12))
+                accent_bar.pack_propagate(False)
 
             thumb_box = tk.Frame(row, bg=status_bg, width=96, height=120)
             thumb_box.pack(side="left", padx=(0, 12))
@@ -9226,7 +9307,7 @@ class App:
             if primary_action == "export_excel" and not thumb_source:
                 export_extra = primary_entry.get("extra") if isinstance(primary_entry.get("extra"), dict) else {}
                 export_name = str(export_extra.get("output_name") or export_extra.get("source_excel_name") or "EXCEL").strip()
-                tk.Label(thumb_box, text=f"EXCEL\n{export_name}", bg="#e5e7eb", fg=UI_TEXT, font=("Segoe UI", 9, "bold"), justify="center", wraplength=82).pack(fill="both", expand=True)
+                tk.Label(thumb_box, text=f"EXCEL\n{export_name}", bg="#e5e7eb", fg=UI_TEXT, font=ui_font(11, bold=True), justify="center", wraplength=82).pack(fill="both", expand=True)
             elif thumb_source and Path(thumb_source).exists():
                 try:
                     img = Image.open(thumb_source).convert("RGBA")
@@ -9235,9 +9316,9 @@ class App:
                     self.history_image_refs.append(tk_img)
                     tk.Label(thumb_box, image=tk_img, bg=status_bg).pack(fill="both", expand=True)
                 except Exception:
-                    tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(fill="both", expand=True)
+                    tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(fill="both", expand=True)
             else:
-                tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(fill="both", expand=True)
+                tk.Label(thumb_box, text="OCR", bg="#e5e7eb", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(fill="both", expand=True)
 
             body = tk.Frame(row, bg=status_bg)
             body.pack(side="left", fill="both", expand=True)
@@ -9252,22 +9333,22 @@ class App:
                 title_text = f"Phiếu cọc: {group['workflow_label']}"
             else:
                 title_text = f"OCR: {group['workflow_label']}"
-            tk.Label(head, text=title_text, bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
+            tk.Label(head, text=title_text, bg=status_bg, fg=UI_TEXT, font=ui_font(11, bold=True), anchor="w").pack(side="left")
 
             badges = tk.Frame(head, bg=status_bg)
             badges.pack(side="right")
             kind = str(group.get("kind") or "").strip().lower()
             if kind == "bang_khoi_luong":
-                tk.Label(badges, text="Khối lượng", bg="#e0f2fe", fg="#0369a1", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Khối lượng", bg="#e0f2fe", fg="#0369a1", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
             elif kind == "phieu_coc":
-                tk.Label(badges, text="Phiếu cọc", bg="#ede9fe", fg="#6d28d9", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
-            tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left", padx=(0, 6))
+                tk.Label(badges, text="Phiếu cọc", bg="#ede9fe", fg="#6d28d9", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
+            tk.Label(badges, text="Đã đọc", bg="#dbeafe", fg="#1d4ed8", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left", padx=(0, 6))
             if group["has_error"]:
-                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=("Segoe UI", 8, "bold"), padx=8, pady=4).pack(side="left")
+                tk.Label(badges, text="Lỗi", bg="#fee2e2", fg="#b91c1c", font=ui_font(10, bold=True), padx=8, pady=4).pack(side="left")
 
             info_line = tk.Frame(body, bg=status_bg)
             info_line.pack(fill="x", pady=(3, 0))
-            tk.Label(info_line, text=f"ID: {group['workflow_id']}", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(side="left")
+            tk.Label(info_line, text=f"ID: {group['workflow_id']}", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(side="left")
 
             summary_parts = []
             label_map = {
@@ -9306,10 +9387,10 @@ class App:
             details.pack(fill="x", pady=(8, 0))
 
             for text in summary_parts[:5]:
-                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=("Segoe UI", 8), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• {text}", bg=status_bg, fg=UI_TEXT, font=ui_font(10), anchor="w", justify="left", wraplength=900).pack(anchor="w", pady=(0, 2))
 
             if len(summary_parts) > 5:
-                tk.Label(details, text=f"• ... và {len(summary_parts) - 5} bước khác", bg=status_bg, fg=UI_MUTED, font=("Segoe UI", 8), anchor="w").pack(anchor="w", pady=(0, 2))
+                tk.Label(details, text=f"• ... và {len(summary_parts) - 5} bước khác", bg=status_bg, fg=UI_MUTED, font=ui_font(10), anchor="w").pack(anchor="w", pady=(0, 2))
 
             def open_history_item(_e=None, target_entry=primary_entry):
                 try:
@@ -9408,6 +9489,11 @@ class App:
 
         self._refresh_nav_state()
 
+        try:
+            self._scroll_main_content_to_top()
+        except Exception:
+            pass
+
         return "break"
 
 
@@ -9431,6 +9517,40 @@ class App:
     def show_mapping_page(self, event=None):
 
         return self.show_page("mapping")
+
+
+    def _scroll_main_content_to_top(self):
+        canvas = getattr(self, "home_body_canvas", None) or getattr(self, "content_canvas", None)
+        if canvas is not None:
+            canvas.yview_moveto(0)
+
+
+    def _on_main_content_mousewheel(self, event):
+        canvas = getattr(self, "home_body_canvas", None) or getattr(self, "content_canvas", None)
+        if canvas is None:
+            return
+        try:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        except Exception:
+            pass
+
+
+    def _bind_main_content_mousewheel(self, event=None):
+        try:
+            canvas = getattr(self, "home_body_canvas", None) or getattr(self, "content_canvas", None)
+            if canvas is not None:
+                canvas.bind_all("<MouseWheel>", self._on_main_content_mousewheel)
+        except Exception:
+            pass
+
+
+    def _unbind_main_content_mousewheel(self, event=None):
+        try:
+            canvas = getattr(self, "home_body_canvas", None) or getattr(self, "content_canvas", None)
+            if canvas is not None:
+                canvas.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
 
 
     def _mapping_template_kind_label(self):
@@ -9486,11 +9606,11 @@ class App:
 
         body.pack(fill="both", expand=True)
 
-        tk.Label(body, text="Lưu mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(body, text="Lưu mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
 
-        tk.Label(body, text="Đặt tên để dễ nhận biết khi dùng lại trong mục Mẫu mapping.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 14))
+        tk.Label(body, text="Đặt tên để dễ nhận biết khi dùng lại trong mục Mẫu mapping.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(4, 14))
 
-        tk.Label(body, text="Tên mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 6))
+        tk.Label(body, text="Tên mẫu mapping", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
 
         name_var = tk.StringVar(value=default_name)
 
@@ -9514,7 +9634,7 @@ class App:
 
             insertbackground=UI_TEXT,
 
-            font=("Segoe UI", 10),
+            font=ui_font(11),
 
         )
 
@@ -9522,7 +9642,7 @@ class App:
 
         error_var = tk.StringVar(value="")
 
-        tk.Label(body, textvariable=error_var, bg=UI_SURFACE, fg="#b91c1c", font=("Segoe UI", 8)).pack(anchor="w", pady=(6, 0))
+        tk.Label(body, textvariable=error_var, bg=UI_SURFACE, fg="#b91c1c", font=ui_font(10)).pack(anchor="w", pady=(6, 0))
 
         bottom = tk.Frame(win, bg="#f8fafc", padx=18, pady=14, highlightthickness=1, highlightbackground="#e2e8f0")
 
@@ -9844,9 +9964,9 @@ class App:
 
             empty.pack(fill="x")
 
-            tk.Label(empty, text="Chưa có mẫu mapping nào.", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(anchor="center")
+            tk.Label(empty, text="Chưa có mẫu mapping nào.", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="center")
 
-            tk.Label(empty, text="Sau khi xác nhận mapping cột, bấm Lưu mẫu để lưu lại tại đây.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="center", pady=(6, 0))
+            tk.Label(empty, text="Sau khi xác nhận mapping cột, bấm Lưu mẫu để lưu lại tại đây.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="center", pady=(6, 0))
 
             return
 
@@ -9874,13 +9994,13 @@ class App:
 
                 fg=UI_TEXT,
 
-                font=("Segoe UI", 10, "bold"),
+                font=ui_font(11, bold=True),
 
             ).pack(anchor="w")
 
             meta = f"{template.get('kind') or 'Mapping'} • {template.get('updated_at') or template.get('created_at') or ''}"
 
-            tk.Label(title_box, text=meta, bg="#fbfdff", fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+            tk.Label(title_box, text=meta, bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
 
             ui_button(top, "Áp dụng", lambda tpl=template: self.apply_mapping_template(tpl), width=9, variant="primary").pack(side="right", padx=(8, 0))
 
@@ -9896,13 +10016,13 @@ class App:
 
                 line = f"{pair.get('source') or ''}  →  {target}"
 
-                tk.Label(rows, text=line, bg="#fbfdff", fg=UI_TEXT, font=("Segoe UI", 8), anchor="w").pack(fill="x", pady=1)
+                tk.Label(rows, text=line, bg="#fbfdff", fg=UI_TEXT, font=ui_font(10), anchor="w").pack(fill="x", pady=1)
 
             total = len(template.get("mapping") or [])
 
             if total > 14:
 
-                tk.Label(rows, text=f"... còn {total - 14} cặp mapping", bg="#fbfdff", fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 0))
+                tk.Label(rows, text=f"... còn {total - 14} cặp mapping", bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
 
 
     def _refresh_nav_state(self):
@@ -9947,7 +10067,7 @@ class App:
 
                 icon.config(bg=bg, fg=fg)
 
-                label.config(bg=bg, fg=fg, font=("Segoe UI", 9, "bold" if is_active else "normal"))
+                label.config(bg=bg, fg=fg, font=ui_font(11, bold=is_active))
 
             except Exception:
 
@@ -9967,11 +10087,11 @@ class App:
 
             if hasattr(self, "excel_tab_recent"):
 
-                self.excel_tab_recent.config(fg=UI_TEXT if mode == "recent" else UI_MUTED, font=("Segoe UI", 10, "bold" if mode == "recent" else "normal"))
+                self.excel_tab_recent.config(fg=UI_TEXT if mode == "recent" else UI_MUTED, font=ui_font(11, bold=(mode == "recent")))
 
             if hasattr(self, "excel_tab_pinned"):
 
-                self.excel_tab_pinned.config(fg=UI_TEXT if mode == "pinned" else UI_MUTED, font=("Segoe UI", 10, "bold" if mode == "pinned" else "normal"))
+                self.excel_tab_pinned.config(fg=UI_TEXT if mode == "pinned" else UI_MUTED, font=ui_font(11, bold=(mode == "pinned")))
 
         except Exception:
 
@@ -10149,6 +10269,24 @@ class App:
 
             pass
 
+    def _fit_dialog_to_screen(self, win, preferred_w, preferred_h, min_w=720, min_h=520, max_ratio=0.8, lock_size=False):
+        try:
+            screen_w = int(getattr(self, "screen_w", 0) or win.winfo_screenwidth() or 1366)
+            screen_h = int(getattr(self, "screen_h", 0) or win.winfo_screenheight() or 768)
+            max_w = max(640, int(screen_w * max_ratio))
+            max_h = max(480, int(screen_h * max_ratio))
+            width = max(min_w, min(int(preferred_w), max_w))
+            height = max(min_h, min(int(preferred_h), max_h))
+            win.geometry(f"{width}x{height}")
+            win.minsize(min(width, max_w), min(height, max_h))
+            if lock_size:
+                win.maxsize(width, height)
+        except Exception:
+            try:
+                win.geometry(f"{preferred_w}x{preferred_h}")
+            except Exception:
+                pass
+
 
 
     def show_member_approval_dialog(self):
@@ -10203,17 +10341,17 @@ class App:
 
         body.pack(fill="both", expand=True)
 
-        tk.Label(body, text="Máy này chưa được duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(body, text="Máy này chưa được duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
 
-        tk.Label(body, text="Gửi mã máy bên dưới cho Admin để nhận mã duyệt.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
+        tk.Label(body, text="Gửi mã máy bên dưới cho Admin để nhận mã duyệt.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(4, 12))
 
 
 
-        tk.Label(body, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(body, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         machine_var = tk.StringVar(value=machine_code)
 
-        machine_entry = tk.Entry(body, textvariable=machine_var, width=34, relief="solid", bd=1, font=("Segoe UI", 10))
+        machine_entry = tk.Entry(body, textvariable=machine_var, width=34, relief="solid", bd=1, font=ui_font(11))
 
         machine_entry.pack(fill="x", pady=(4, 10))
 
@@ -10221,11 +10359,11 @@ class App:
 
 
 
-        tk.Label(body, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(body, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         code_var = tk.StringVar()
 
-        code_entry = tk.Entry(body, textvariable=code_var, width=34, relief="solid", bd=1, font=("Segoe UI", 10))
+        code_entry = tk.Entry(body, textvariable=code_var, width=34, relief="solid", bd=1, font=ui_font(11))
 
         code_entry.pack(fill="x", pady=(4, 12))
 
@@ -10321,125 +10459,471 @@ class App:
 
     def show_settings_dialog(self, event=None):
         win = tk.Toplevel(self.root)
-        win.title("Cài đặt API")
-        win.configure(bg="#ffffff")
-        win.resizable(False, False)
+        win.title("Hiển thị")
+        win.configure(bg="#1f2128")
+        win.resizable(True, True)
         try:
             win.transient(self.root)
         except Exception:
             pass
         win.grab_set()
 
-        # Header
-        header = tk.Frame(win, bg=UI_PRIMARY, height=50)
-        header.pack(fill="x")
-        header.pack_propagate(False)
-        tk.Label(header, text="⚙ CẤU HÌNH API", bg=UI_PRIMARY, fg="#ffffff", font=("Segoe UI", 12, "bold")).pack(side="left", padx=20, pady=12)
+        screen_w = int(getattr(self, "screen_w", 0) or win.winfo_screenwidth() or 1366)
+        screen_h = int(getattr(self, "screen_h", 0) or win.winfo_screenheight() or 768)
+        if screen_w <= 1366 or screen_h <= 768:
+            dialog_w, dialog_h = 860, 640
+        elif screen_w <= 1600 or screen_h <= 900:
+            dialog_w, dialog_h = 980, 690
+        elif screen_w <= 1920 or screen_h <= 1080:
+            dialog_w, dialog_h = 1080, 740
+        else:
+            dialog_w, dialog_h = 1120, 780
+        self._fit_dialog_to_screen(win, dialog_w, dialog_h, min_w=dialog_w, min_h=dialog_h, max_ratio=0.90, lock_size=True)
 
-        body = tk.Frame(win, bg="#ffffff", padx=25, pady=20)
-        body.pack(fill="both", expand=True)
+        dark_bg = "#1f2128"
+        panel_bg = "#272a33"
+        card_bg = "#2f323d"
+        card_border = "#444857"
+        card_soft = "#383c49"
+        accent = "#6f6bff"
+        accent_soft = "#8f8aff"
+        text_main = "#f4f6fb"
+        text_sub = "#b4bccf"
+        text_dim = "#8790a5"
 
-        tk.Label(body, text="Thiết lập khóa API và mô hình để kích hoạt trợ lý AI.", bg="#ffffff", fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 16))
+        root = tk.Frame(win, bg=dark_bg, padx=18, pady=18)
+        root.grid(row=0, column=0, sticky="nsew")
+        win.grid_rowconfigure(0, weight=1)
+        win.grid_columnconfigure(0, weight=1)
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(2, weight=1)
 
-        from PIL import Image, ImageDraw, ImageTk
-        if not hasattr(self.root, "dialog_bg_images"):
-            self.root.dialog_bg_images = []
-            
-        def create_rounded_bg(w, h, r, bg, border):
-            img = Image.new("RGBA", (w, h), (255, 255, 255, 0))
-            draw = ImageDraw.Draw(img)
-            draw.rounded_rectangle((0, 0, w-1, h-1), radius=r, fill=bg, outline=border, width=1)
-            img_tk = ImageTk.PhotoImage(img)
-            self.root.dialog_bg_images.append(img_tk)
-            return img_tk
+        title_row = tk.Frame(root, bg=dark_bg)
+        title_row.grid(row=0, column=0, sticky="ew")
+        tk.Label(title_row, text="Hiển thị", bg=dark_bg, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(
+            title_row,
+            text="Chọn độ phân giải và cấu hình khởi động của ứng dụng.",
+            bg=dark_bg,
+            fg=text_sub,
+            font=ui_font(10),
+        ).pack(anchor="w", pady=(6, 0))
 
-        # API Key Field
-        key_container = tk.Frame(body, bg="#ffffff")
-        key_container.pack(fill="x", pady=(0, 18))
-        tk.Label(key_container, text="Khóa API (GEMINI_API_KEY):", bg="#ffffff", fg="#475569", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 6))
-        
-        key_wrap = tk.Frame(key_container, bg="#ffffff", width=420, height=36)
-        key_wrap.pack(anchor="w")
-        key_wrap.pack_propagate(False)
-        
-        bg_normal = create_rounded_bg(420, 36, 4, "#f8fafc", "#cbd5e1")
-        bg_focus = create_rounded_bg(420, 36, 4, "#ffffff", UI_PRIMARY)
-        
-        key_bg = tk.Label(key_wrap, image=bg_normal, bg="#ffffff", bd=0, highlightthickness=0)
-        key_bg.place(x=0, y=0)
-        
-        api_entry = tk.Entry(key_wrap, textvariable=self.api_key_var, bd=0, highlightthickness=0, bg="#f8fafc", font=("Segoe UI", 10), fg="#1e293b", insertbackground="#1e293b")
-        api_entry.place(x=12, y=8, width=396, height=20)
-        
-        def on_focus_api(e):
-            key_bg.config(image=bg_focus)
-            api_entry.config(bg="#ffffff")
-        def on_blur_api(e):
-            key_bg.config(image=bg_normal)
-            api_entry.config(bg="#f8fafc")
-            
-        api_entry.bind("<FocusIn>", on_focus_api)
-        api_entry.bind("<FocusOut>", on_blur_api)
+        nav_row = tk.Frame(root, bg=dark_bg)
+        nav_row.grid(row=1, column=0, sticky="ew", pady=(14, 8))
 
-        # Model Field
-        model_container = tk.Frame(body, bg="#ffffff")
-        model_container.pack(fill="x", pady=(0, 24))
-        tk.Label(model_container, text="Mô hình ngôn ngữ (GEMINI_MODEL):", bg="#ffffff", fg="#475569", font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 6))
-        
-        model_wrap = tk.Frame(model_container, bg="#ffffff", width=420, height=36)
-        model_wrap.pack(anchor="w")
-        model_wrap.pack_propagate(False)
-        
-        bg_model_normal = create_rounded_bg(420, 36, 4, "#ffffff", "#b6c6d3")
-        bg_model_hover = create_rounded_bg(420, 36, 4, "#ffffff", "#94a3b8")
-        
-        model_bg = tk.Label(model_wrap, image=bg_model_normal, bg="#ffffff", cursor="hand2", bd=0, highlightthickness=0)
-        model_bg.place(x=0, y=0)
-        
-        model_val = tk.Label(model_wrap, textvariable=self.model_var, bg="#ffffff", fg="#1e293b", font=("Segoe UI", 10), cursor="hand2", anchor="w", bd=0, highlightthickness=0)
-        model_val.place(x=12, y=8, width=360, height=20)
-        
-        sep = tk.Frame(model_wrap, bg="#cbd5e1", width=1, height=20)
-        sep.place(x=380, y=8)
-        
-        arrow = tk.Label(model_wrap, text="▼", bg="#ffffff", fg="#64748b", font=("Segoe UI", 8), cursor="hand2", bd=0, highlightthickness=0)
-        arrow.place(x=394, y=10)
-        
-        model_menu = tk.Menu(model_wrap, tearoff=0, font=("Segoe UI", 10), bg="#ffffff", fg="#1e293b", activebackground=UI_PRIMARY, activeforeground="#ffffff", bd=1)
-        for val in ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]:
-            model_menu.add_command(label=val, command=lambda v=val: self.model_var.set(v))
-            
-        def popup_model(e):
-            model_menu.post(model_wrap.winfo_rootx(), model_wrap.winfo_rooty() + 38)
-            
-        def hover_in(e):
-            model_bg.config(image=bg_model_hover)
-        def hover_out(e):
-            model_bg.config(image=bg_model_normal)
-            
-        for w in (model_bg, model_val, arrow):
-            w.bind("<Button-1>", popup_model)
-            w.bind("<Enter>", hover_in)
-            w.bind("<Leave>", hover_out)
+        page_host = tk.Frame(root, bg=dark_bg)
+        page_host.grid(row=2, column=0, sticky="nsew")
+        root.grid_rowconfigure(2, weight=1)
+        root.grid_columnconfigure(0, weight=1)
 
-        bottom = tk.Frame(win, bg="#f8fafc", padx=20, pady=14, highlightthickness=1, highlightbackground="#e2e8f0")
-        bottom.pack(fill="x", side="bottom")
+        footer = tk.Frame(root, bg=dark_bg)
+        footer.grid(row=3, column=0, sticky="ew", pady=(10, 0))
 
-        actions = tk.Frame(bottom, bg="#f8fafc")
-        actions.pack(fill="x")
+        def dark_button(parent, text, command, width=12, active=False, accent_button=False):
+            bg = accent if accent_button else (card_soft if active else panel_bg)
+            fg = "#ffffff"
+            border = accent if accent_button or active else card_border
+            return tk.Button(
+                parent,
+                text=text,
+                command=command,
+                bg=bg,
+                fg=fg,
+                activebackground=accent_soft if accent_button else "#3f4351",
+                activeforeground="#ffffff",
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=border,
+                highlightcolor=border,
+                font=ui_font(12, bold=(active or accent_button)),
+                padx=16,
+                pady=10,
+                width=width,
+            )
+
+        def entry_shell(parent, width=24):
+            shell = tk.Frame(parent, bg=panel_bg, highlightthickness=1, highlightbackground=card_border)
+            shell.pack_propagate(False)
+            shell.config(width=width * 12, height=34)
+            return shell
+
+        top_tabs = {}
+        display_page = tk.Frame(page_host, bg=dark_bg)
+        api_page = tk.Frame(page_host, bg=dark_bg)
+
+        def show_page(name):
+            for child in page_host.winfo_children():
+                child.pack_forget()
+            (display_page if name == "display" else api_page).pack(fill="both", expand=True)
+            for key, btn in top_tabs.items():
+                active = key == name
+                btn.config(
+                    bg=accent if active else panel_bg,
+                    fg="#ffffff" if active else text_main,
+                    highlightbackground=accent if active else card_border,
+                    highlightcolor=accent if active else card_border,
+                    font=ui_font(11, bold=active),
+                )
+
+        for key, label in (("display", "Hiển thị"), ("api", "API")):
+            btn = dark_button(nav_row, label, lambda k=key: show_page(k), width=13, active=(key == "display"))
+            btn.pack(side="left", padx=(0, 10))
+            top_tabs[key] = btn
+
+        display_card = tk.Frame(display_page, bg=panel_bg, highlightthickness=1, highlightbackground=card_border)
+        display_card.pack(fill="both", expand=True)
+
+        left_panel = tk.Frame(display_card, bg=panel_bg, width=168, padx=14, pady=14)
+        left_panel.pack(side="left", fill="y")
+        left_panel.pack_propagate(False)
+        tk.Label(left_panel, text="Độ phân giải", bg=panel_bg, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(
+            left_panel,
+            text="Chọn preset phù hợp với màn hình để app hiển thị đầy đủ.",
+            bg=panel_bg,
+            fg=text_sub,
+            font=ui_font(10),
+            justify="left",
+            wraplength=118,
+        ).pack(anchor="w", pady=(8, 0))
+
+        right_panel = tk.Frame(display_card, bg=panel_bg, padx=16, pady=14)
+        right_panel.pack(side="left", fill="both", expand=True)
+
+        mode_bar = tk.Frame(right_panel, bg=panel_bg)
+        mode_bar.pack(fill="x")
+        selected_summary_var = tk.StringVar(value="")
+        selected_summary = tk.Label(
+            right_panel,
+            textvariable=selected_summary_var,
+            bg=panel_bg,
+            fg=text_sub,
+            font=ui_font(10),
+            anchor="w",
+            justify="left",
+            wraplength=540,
+        )
+        selected_summary.pack(fill="x", pady=(6, 0))
+        mode_host = tk.Frame(right_panel, bg=panel_bg)
+        mode_host.pack(fill="both", expand=True, pady=(10, 0))
+
+        profile_catalog = {
+            "Tự động": [],
+            "Ngang": [
+                ("1920 x 1080 (DPI 280)", "display_1920x1080"),
+                ("1600 x 900 (DPI 240)", "display_1600x900"),
+                ("1366 x 768 (DPI 240)", "display_1366x768"),
+                ("1280 x 720 (DPI 240)", "display_1280x720"),
+                ("960 x 540 (DPI 160)", "display_960x540"),
+            ],
+            "Dọc": [
+                ("1080 x 1920 (DPI 280)", "display_1080x1920"),
+                ("900 x 1600 (DPI 240)", "display_900x1600"),
+                ("768 x 1366 (DPI 240)", "display_768x1366"),
+                ("720 x 1280 (DPI 240)", "display_720x1280"),
+                ("540 x 960 (DPI 160)", "display_540x960"),
+            ],
+            "Siêu rộng": [
+                ("2560 x 1080 (DPI 240)", "display_2560x1080"),
+                ("3440 x 1440 (DPI 280)", "display_3440x1440"),
+                ("1920 x 800 (DPI 220)", "display_1920x800"),
+            ],
+        }
+
+        profile_lookup = {}
+        for mode_name, items in profile_catalog.items():
+            for label, key in items:
+                profile_lookup[key] = (mode_name, label)
+
+        current_profile = str(getattr(self, "screen_profile_var", tk.StringVar(value="auto")).get() or "auto").strip().lower()
+        custom_match = re.match(r"^custom:(\d+)x(\d+)(?:@(\d+))?$", current_profile)
+
+        initial_mode = "Tự động"
+        initial_choice = "auto"
+        custom_width = str(self.screen_w)
+        custom_height = str(self.screen_h)
+        custom_dpi = "240"
+
+        if current_profile == "auto":
+            initial_mode = "Tự động"
+        elif custom_match:
+            initial_mode = "Tùy chỉnh"
+            custom_width = custom_match.group(1)
+            custom_height = custom_match.group(2)
+            custom_dpi = custom_match.group(3) or "240"
+        elif current_profile in profile_lookup:
+            initial_mode = profile_lookup[current_profile][0]
+            initial_choice = current_profile
+        elif current_profile == "laptop_156":
+            initial_mode = "Ngang"
+            initial_choice = "display_1366x768"
+        elif current_profile == "laptop_16":
+            initial_mode = "Ngang"
+            initial_choice = "display_1600x900"
+
+        mode_var = tk.StringVar(value=initial_mode)
+        choice_var = tk.StringVar(value=initial_choice)
+        custom_width_var = tk.StringVar(value=custom_width)
+        custom_height_var = tk.StringVar(value=custom_height)
+        custom_dpi_var = tk.StringVar(value=custom_dpi)
+
+        mode_buttons = {}
+        mode_frames = {}
+        option_refreshers = []
+
+        def describe_selected():
+            mode_name = mode_var.get()
+            if mode_name == "Tự động":
+                width = int(getattr(self, "screen_w", 0) or 0)
+                height = int(getattr(self, "screen_h", 0) or 0)
+                dpi = int(getattr(self, "screen_dpi", 96) or 96)
+                return f"Đang chọn: Tự động theo màn hình thật {width} x {height} (DPI {dpi})"
+            if mode_name == "Tùy chỉnh":
+                width = str(custom_width_var.get()).strip() or "?"
+                height = str(custom_height_var.get()).strip() or "?"
+                dpi = str(custom_dpi_var.get()).strip() or "240"
+                return f"Đang chọn: Tùy chỉnh {width} x {height} (DPI {dpi})"
+            label = None
+            for _mode_name, items in profile_catalog.items():
+                for item_label, item_key in items:
+                    if item_key == choice_var.get():
+                        label = item_label
+                        break
+                if label:
+                    break
+            return f"Đang chọn: {label or 'Chưa chọn'}"
+
+        def refresh_selected_summary(*_args):
+            selected_summary_var.set(describe_selected())
+
+        def set_mode(mode_name):
+            mode_var.set(mode_name)
+            for child in mode_host.winfo_children():
+                child.pack_forget()
+            for key, btn in mode_buttons.items():
+                active = key == mode_name
+                btn.config(
+                    bg=accent if active else card_soft,
+                    fg="#ffffff" if active else text_main,
+                    highlightbackground=accent if active else card_border,
+                    highlightcolor=accent if active else card_border,
+                    font=ui_font(11, bold=active),
+                )
+            mode_frames[mode_name].pack(fill="both", expand=True)
+            refresh_selected_summary()
+
+        for mode_name in ("Tự động", "Ngang", "Dọc", "Siêu rộng", "Tùy chỉnh"):
+            btn = dark_button(mode_bar, mode_name, lambda m=mode_name: set_mode(m), width=12, active=(mode_name == initial_mode))
+            btn.pack(side="left", padx=(0, 8))
+            mode_buttons[mode_name] = btn
+
+        auto_panel = tk.Frame(mode_host, bg=panel_bg)
+        mode_frames["Tự động"] = auto_panel
+        auto_card = tk.Frame(auto_panel, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=16, pady=16)
+        auto_card.pack(fill="x")
+        tk.Label(auto_card, text="Tự động theo màn hình thật", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(auto_card, text="Đây là chế độ mặc định khi chạy thật. App tự lấy vùng làm việc của màn hình hiện tại và tự scale giao diện.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=520, justify="left").pack(anchor="w", pady=(4, 10))
+        tk.Label(auto_card, text=f"Hiện tại: {self.screen_w} x {self.screen_h} (DPI {getattr(self, 'screen_dpi', 96)})", bg=card_soft, fg=text_main, font=ui_font(10, bold=True)).pack(anchor="w")
+
+        def make_option_frame(parent, label, value, extra_text=None):
+            row = tk.Frame(parent, bg=card_soft, highlightthickness=1, highlightbackground=card_border, cursor="hand2")
+            row.pack(fill="x", pady=(0, 8))
+            radio = tk.Radiobutton(
+                row,
+                text=label,
+                variable=choice_var,
+                value=value,
+                bg=card_soft,
+                fg=text_main,
+                activebackground=card_soft,
+                activeforeground=text_main,
+                selectcolor=accent,
+                indicatoron=True,
+                bd=0,
+                highlightthickness=0,
+                font=ui_font(11),
+                padx=12,
+                pady=7,
+                anchor="w",
+            )
+            radio.pack(fill="x")
+            if extra_text:
+                tk.Label(row, text=extra_text, bg=card_soft, fg=text_sub, font=ui_font(10), anchor="w").pack(fill="x", padx=38, pady=(0, 6))
+
+            def select_row(_event=None, selected_value=value):
+                choice_var.set(selected_value)
+                refresh_selected_summary()
+                return "break"
+
+            for widget in (row, radio):
+                widget.bind("<Button-1>", select_row)
+                widget.bind("<Enter>", lambda _e, w=row: w.config(highlightbackground=accent))
+                widget.bind("<Leave>", lambda _e, w=row: w.config(highlightbackground=accent if choice_var.get() == value else card_border))
+
+            def update_row_state(*_args):
+                row.config(highlightbackground=accent if choice_var.get() == value else card_border)
+                radio.config(fg=text_main)
+
+            choice_var.trace_add("write", update_row_state)
+            option_refreshers.append(update_row_state)
+
+        for mode_name, items in profile_catalog.items():
+            panel = tk.Frame(mode_host, bg=panel_bg)
+            mode_frames[mode_name] = panel
+            option_box = tk.Frame(panel, bg=panel_bg)
+            option_box.pack(fill="both", expand=True)
+            for label, key in items:
+                make_option_frame(option_box, label, key)
+
+        custom_panel = tk.Frame(mode_host, bg=panel_bg)
+        mode_frames["Tùy chỉnh"] = custom_panel
+        custom_card = tk.Frame(custom_panel, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=14)
+        custom_card.pack(fill="x")
+        tk.Label(custom_card, text="Thiết lập thủ công", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(custom_card, text="Nhập đúng kích thước màn hình để app ép bố cục theo giá trị này.", bg=card_soft, fg=text_sub, font=ui_font(10)).pack(anchor="w", pady=(3, 10))
+
+        custom_grid = tk.Frame(custom_card, bg=card_soft)
+        custom_grid.pack(fill="x")
+
+        def make_field(parent, title, var, width=10):
+            box = tk.Frame(parent, bg=card_soft)
+            tk.Label(box, text=title, bg=card_soft, fg=text_sub, font=ui_font(10)).pack(anchor="w")
+            shell = tk.Frame(box, bg=panel_bg, highlightthickness=1, highlightbackground=card_border)
+            shell.pack(anchor="w", pady=(4, 0))
+            entry = tk.Entry(
+                shell,
+                textvariable=var,
+                bg=panel_bg,
+                fg=text_main,
+                insertbackground=text_main,
+                relief="flat",
+                bd=0,
+                highlightthickness=0,
+                font=ui_font(11),
+                width=width,
+            )
+            entry.pack(padx=10, pady=7)
+            return box
+
+        make_field(custom_grid, "Rộng", custom_width_var, width=10).grid(row=0, column=0, sticky="w", padx=(0, 14))
+        make_field(custom_grid, "Cao", custom_height_var, width=10).grid(row=0, column=1, sticky="w", padx=(0, 14))
+        make_field(custom_grid, "DPI", custom_dpi_var, width=10).grid(row=0, column=2, sticky="w")
+        tk.Label(custom_card, text="Ví dụ: 1600 x 900 để test màn 16 inch, 1366 x 768 để test màn 15.6 inch.", bg=card_soft, fg=text_dim, font=ui_font(10), wraplength=420, justify="left").pack(anchor="w", pady=(10, 0))
+
+        custom_width_var.trace_add("write", refresh_selected_summary)
+        custom_height_var.trace_add("write", refresh_selected_summary)
+        custom_dpi_var.trace_add("write", refresh_selected_summary)
+        choice_var.trace_add("write", refresh_selected_summary)
+        for refresh_row in option_refreshers:
+            refresh_row()
+        refresh_selected_summary()
+
+        set_mode(initial_mode)
+
+        api_card = tk.Frame(api_page, bg=panel_bg, highlightthickness=1, highlightbackground=card_border, padx=16, pady=16)
+        api_card.pack(fill="both", expand=True)
+        tk.Label(api_card, text="Cấu hình API", bg=panel_bg, fg=text_main, font=ui_font(12, bold=True)).pack(anchor="w")
+        tk.Label(api_card, text="Thiết lập khóa Gemini và model dùng cho OCR / đọc bảng.", bg=panel_bg, fg=text_sub, font=ui_font(11)).pack(anchor="w", pady=(6, 14))
+
+        key_box = tk.Frame(api_card, bg=panel_bg)
+        key_box.pack(fill="x", pady=(0, 16))
+        tk.Label(key_box, text="Khóa API", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+        key_shell = tk.Frame(key_box, bg=card_soft, highlightthickness=1, highlightbackground=card_border)
+        key_shell.pack(fill="x")
+        api_entry = tk.Entry(
+            key_shell,
+            textvariable=self.api_key_var,
+            bg=card_soft,
+            fg=text_main,
+            insertbackground=text_main,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=ui_font(11),
+        )
+        api_entry.pack(fill="x", padx=12, pady=9)
+
+        model_box = tk.Frame(api_card, bg=panel_bg)
+        model_box.pack(fill="x", pady=(0, 16))
+        tk.Label(model_box, text="Mô hình", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+        model_menu = tk.Menu(win, tearoff=0, bg="#ffffff", fg="#111827", activebackground=UI_PRIMARY, activeforeground="#ffffff", font=ui_font(11))
+        model_values = [
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+        ]
+        model_button = tk.Button(
+            model_box,
+            text=self.model_var.get() or DEFAULT_MODEL,
+            command=lambda: model_menu.tk_popup(model_button.winfo_rootx(), model_button.winfo_rooty() + model_button.winfo_height()),
+            bg=card_soft,
+            fg=text_main,
+            activebackground="#3f4351",
+            activeforeground=text_main,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=card_border,
+            font=ui_font(11),
+            anchor="w",
+            padx=12,
+            pady=8,
+        )
+        model_button.pack(fill="x")
+        for value in model_values:
+            model_menu.add_command(label=value, command=lambda v=value: (self.model_var.set(v), model_button.config(text=v)))
+
+        note = tk.Frame(api_card, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
+        note.pack(fill="x")
+        tk.Label(note, text="Lưu ý", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(note, text="Lưu để áp dụng cả cấu hình hiển thị lẫn API, sau đó ứng dụng sẽ khởi động lại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
+
+        def resolve_selected_profile():
+            mode_name = mode_var.get()
+            if mode_name == "Tự động":
+                return "auto"
+            if mode_name == "Tùy chỉnh":
+                try:
+                    width = max(320, int(str(custom_width_var.get()).strip()))
+                    height = max(240, int(str(custom_height_var.get()).strip()))
+                    dpi = max(72, int(str(custom_dpi_var.get()).strip() or "240"))
+                except Exception:
+                    messagebox.showerror("Dữ liệu không hợp lệ", "Nhập đúng số cho rộng, cao và DPI.")
+                    return None
+                return f"custom:{width}x{height}@{dpi}"
+            selected = str(choice_var.get() or "").strip()
+            if selected:
+                return selected
+            return "auto"
 
         def save():
-            self.save_key()
+            profile_key = resolve_selected_profile()
+            if not profile_key:
+                return
+            self.screen_profile_var.set(profile_key)
+            save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
+            try:
+                self.status.config(text="Đã lưu cấu hình hiển thị.")
+            except Exception:
+                pass
             win.destroy()
+            self.refresh_ui()
 
-        ui_button(actions, "Hủy bỏ", win.destroy, width=10, variant="soft").pack(side="right", padx=(10, 0))
-        ui_button(actions, "Lưu cấu hình", save, width=14, variant="primary").pack(side="right")
+        cancel_btn = dark_button(footer, "Hủy", win.destroy, width=12)
+        cancel_btn.pack(side="right")
+        save_btn = dark_button(footer, "Lưu & khởi động lại", save, width=21, accent_button=True)
+        save_btn.pack(side="right", padx=(0, 10))
 
-        self._center_dialog_on_screen(win)
+        show_page("display")
         try:
+            self._center_dialog_on_screen(win)
             win.lift()
             win.focus_force()
-            api_entry.focus_force()
+            mode_buttons.get(initial_mode, win).focus_set()
         except Exception:
             pass
         self.root.wait_window(win)
@@ -10548,9 +11032,9 @@ class App:
 
 
 
-        tk.Label(body, text="Duyệt máy thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 13, "bold")).pack(anchor="w")
+        tk.Label(body, text="Duyệt máy thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
 
-        tk.Label(body, text="Nhập mã máy thành viên gửi, sau đó gửi lại mã duyệt cho họ.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(4, 12))
+        tk.Label(body, text="Nhập mã máy thành viên gửi, sau đó gửi lại mã duyệt cho họ.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(4, 12))
 
 
 
@@ -10560,31 +11044,31 @@ class App:
 
 
 
-        tk.Label(form_area, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(form_area, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         machine_var = tk.StringVar()
 
-        machine_entry = tk.Entry(form_area, textvariable=machine_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
+        machine_entry = tk.Entry(form_area, textvariable=machine_var, width=58, relief="solid", bd=1, font=ui_font(11))
 
         machine_entry.pack(anchor="w", pady=(4, 10))
 
 
 
-        tk.Label(form_area, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(form_area, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         name_var = tk.StringVar()
 
-        name_entry = tk.Entry(form_area, textvariable=name_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
+        name_entry = tk.Entry(form_area, textvariable=name_var, width=58, relief="solid", bd=1, font=ui_font(11))
 
         name_entry.pack(anchor="w", pady=(4, 10))
 
 
 
-        tk.Label(form_area, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(anchor="w")
+        tk.Label(form_area, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         approval_var = tk.StringVar()
 
-        approval_entry = tk.Entry(form_area, textvariable=approval_var, width=58, relief="solid", bd=1, font=("Segoe UI", 10))
+        approval_entry = tk.Entry(form_area, textvariable=approval_var, width=58, relief="solid", bd=1, font=ui_font(11))
 
         approval_entry.pack(anchor="w", pady=(4, 12))
 
@@ -10604,7 +11088,7 @@ class App:
 
         list_header.pack(fill="x", pady=(18, 6))
 
-        tk.Label(list_header, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Label(list_header, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(side="left")
 
 
 
@@ -10614,7 +11098,7 @@ class App:
 
         search_var = tk.StringVar()
 
-        search_entry = tk.Entry(search_bar, textvariable=search_var, width=34, relief="solid", bd=1, font=("Segoe UI", 10))
+        search_entry = tk.Entry(search_bar, textvariable=search_var, width=34, relief="solid", bd=1, font=ui_font(11))
 
         search_entry.pack(side="left", fill="x", expand=True)
 
@@ -10989,104 +11473,166 @@ class App:
 
 
     def _setup_responsive_metrics(self):
-
+        profile_key = "auto"
         try:
-
-            sw = self.root.winfo_screenwidth()
-
-            sh = self.root.winfo_screenheight()
-
+            profile_var = getattr(self, "screen_profile_var", None)
+            if profile_var is not None:
+                profile_key = str(profile_var.get()).strip().lower() or "auto"
         except Exception:
+            profile_key = "auto"
 
+        work_area = get_windows_work_area() or {}
+        try:
+            sw = int(work_area.get("width") or self.root.winfo_screenwidth() or 1500)
+            sh = int(work_area.get("height") or self.root.winfo_screenheight() or 900)
+        except Exception:
             sw, sh = 1500, 900
 
+        actual_hwnd = None
+        try:
+            self.root.update_idletasks()
+            actual_hwnd = self.root.winfo_id()
+        except Exception:
+            actual_hwnd = None
 
+        actual_dpi = get_windows_dpi(actual_hwnd)
+        simulated_dpi = None
+        forced_size = None
+        custom_match = re.match(r"^custom:(\d+)x(\d+)(?:@(\d+))?$", profile_key)
+        if profile_key != "auto":
+            profile_sizes = {
+                "laptop_156": (1366, 768, 240),
+                "laptop_16": (1600, 900, 240),
+                "display_1920x1080": (1920, 1080, 280),
+                "display_1600x900": (1600, 900, 240),
+                "display_1366x768": (1366, 768, 240),
+                "display_1280x720": (1280, 720, 240),
+                "display_960x540": (960, 540, 160),
+                "display_1080x1920": (1080, 1920, 280),
+                "display_900x1600": (900, 1600, 240),
+                "display_768x1366": (768, 1366, 240),
+                "display_720x1280": (720, 1280, 240),
+                "display_540x960": (540, 960, 160),
+                "display_2560x1080": (2560, 1080, 240),
+                "display_3440x1440": (3440, 1440, 280),
+                "display_1920x800": (1920, 800, 220),
+            }
+            forced = profile_sizes.get(profile_key)
+            if forced:
+                forced_size = (forced[0], forced[1])
+                simulated_dpi = int(forced[2])
+            elif custom_match:
+                forced_size = (int(custom_match.group(1)), int(custom_match.group(2)))
+                simulated_dpi = int(custom_match.group(3) or 240)
+
+        if forced_size:
+            sw, sh = forced_size
+        dpi_for_scale = simulated_dpi if simulated_dpi is not None else actual_dpi
 
         self.screen_w = sw
-
         self.screen_h = sh
+        self.screen_dpi = dpi_for_scale
+        self.screen_profile_mode = "test" if profile_key != "auto" else "auto"
 
         self.compact_ui = sw < 1700 or sh < 950
-
         self.tiny_ui = sw <= 1366 or sh <= 820
-
         self.short_ui = sh <= 820
-
-
-
-        min_win_w = min(1080, max(900, sw - 80))
-
-        min_win_h = min(700, max(600, sh - 80))
-
-        win_w = min(1500, max(min_win_w, int(sw * 0.96)))
-
-        win_h = min(900, max(min_win_h, int(sh * 0.92)))
+        self.dense_ui = sw <= 1600 or sh <= 900
+        self.micro_ui = sw <= 1366 or sh <= 768
+        # Keep the root layout fixed; only inner content regions may scroll.
+        self.main_content_scroll = False
 
         try:
-
-            self.root.geometry(f"{win_w}x{win_h}")
-
-            self.root.minsize(min_win_w, min_win_h)
-
+            global UI_SCALE
+            if self.screen_profile_mode == "auto":
+                if sw <= 1366 or sh <= 768:
+                    UI_SCALE = max(0.92, min(1.08, round(actual_dpi / 120.0, 2)))
+                elif sw <= 1600 or sh <= 900:
+                    UI_SCALE = max(0.96, min(1.15, round(actual_dpi / 108.0, 2)))
+                else:
+                    UI_SCALE = max(1.0, min(1.20, round(actual_dpi / 96.0, 2)))
+            else:
+                UI_SCALE = max(0.90, min(1.20, round(dpi_for_scale / 240.0, 2)))
         except Exception:
+            UI_SCALE = 1.0
 
+        try:
+            self.root.tk.call("tk", "scaling", UI_SCALE)
+        except Exception:
             pass
 
-
-
-        if self.tiny_ui:
-
-            self.sidebar_w = 118
-
-            self.main_padx = 8
-
-            self.main_pady = 8
-
-            self.card_padx = 8
-
-            self.card_pady = 7
-
-            self.workspace_mins = (145, 420, 215)
-
-            self.mapping_canvas_h = 185
-
-            self.logo_max = (96, 88)
-
-        elif self.compact_ui:
-
-            self.sidebar_w = 150
-
-            self.main_padx = 14
-
-            self.main_pady = 12
-
-            self.card_padx = 11
-
-            self.card_pady = 9
-
-            self.workspace_mins = (185, 540, 255)
-
-            self.mapping_canvas_h = 240
-
-            self.logo_max = (130, 120)
-
+        if self.micro_ui:
+            min_win_w = min(980, max(860, sw - 110))
+            min_win_h = min(620, max(560, sh - 110))
+        elif self.dense_ui:
+            min_win_w = min(1040, max(880, sw - 90))
+            min_win_h = min(650, max(580, sh - 100))
         else:
+            min_win_w = min(1080, max(900, sw - 80))
+            min_win_h = min(700, max(600, sh - 80))
 
-            self.sidebar_w = 180
+        if self.screen_profile_mode == "auto":
+            win_w = sw
+            win_h = sh
+        else:
+            win_w = min(sw, max(min_win_w, int(sw * 0.98)))
+            win_h = min(sh, max(min_win_h, int(sh * 0.985)))
+        try:
+            self.root.geometry(f"{win_w}x{win_h}")
+            self.root.minsize(min_win_w, min_win_h)
+            if self.screen_profile_mode == "auto":
+                try:
+                    self.root.state("zoomed")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-            self.main_padx = 22
-
-            self.main_pady = 18
-
-            self.card_padx = 14
-
-            self.card_pady = 12
-
-            self.workspace_mins = (230, 690, 315)
-
-            self.mapping_canvas_h = 260
-
-            self.logo_max = (156, 144)
+        if self.micro_ui:
+            self.sidebar_w = scale_px(150)
+            self.main_padx = scale_px(7)
+            self.main_pady = scale_px(6)
+            self.card_padx = scale_px(8)
+            self.card_pady = scale_px(6)
+            self.workspace_mins = (scale_px(130), scale_px(430), scale_px(190))
+            self.mapping_canvas_h = scale_px(170)
+            self.logo_max = (scale_px(90), scale_px(82))
+        elif self.tiny_ui:
+            self.sidebar_w = scale_px(170)
+            self.main_padx = scale_px(8)
+            self.main_pady = scale_px(8)
+            self.card_padx = scale_px(8)
+            self.card_pady = scale_px(7)
+            self.workspace_mins = (scale_px(145), scale_px(420), scale_px(215))
+            self.mapping_canvas_h = scale_px(185)
+            self.logo_max = (scale_px(96), scale_px(88))
+        elif self.dense_ui:
+            self.sidebar_w = scale_px(180)
+            self.main_padx = scale_px(11)
+            self.main_pady = scale_px(9)
+            self.card_padx = scale_px(10)
+            self.card_pady = scale_px(8)
+            self.workspace_mins = (scale_px(160), scale_px(500), scale_px(230))
+            self.mapping_canvas_h = scale_px(210)
+            self.logo_max = (scale_px(118), scale_px(108))
+        elif self.compact_ui:
+            self.sidebar_w = scale_px(190)
+            self.main_padx = scale_px(14)
+            self.main_pady = scale_px(12)
+            self.card_padx = scale_px(11)
+            self.card_pady = scale_px(9)
+            self.workspace_mins = (scale_px(185), scale_px(540), scale_px(255))
+            self.mapping_canvas_h = scale_px(240)
+            self.logo_max = (scale_px(130), scale_px(120))
+        else:
+            self.sidebar_w = scale_px(190)
+            self.main_padx = scale_px(22)
+            self.main_pady = scale_px(18)
+            self.card_padx = scale_px(14)
+            self.card_pady = scale_px(12)
+            self.workspace_mins = (scale_px(230), scale_px(690), scale_px(315))
+            self.mapping_canvas_h = scale_px(260)
+            self.logo_max = (scale_px(156), scale_px(144))
 
 
 
@@ -11158,11 +11704,15 @@ class App:
 
         try:
 
+            row_height = scale_px(22) if getattr(self, "micro_ui", False) else (scale_px(24) if getattr(self, "dense_ui", False) else scale_px(28))
+
+            heading_pad = (scale_px(6), scale_px(5)) if getattr(self, "micro_ui", False) else ((scale_px(7), scale_px(6)) if getattr(self, "dense_ui", False) else (scale_px(8), scale_px(7)))
+
             style = ttk.Style(self.root)
 
             style.theme_use("clam")
 
-            style.configure(".", font=("Segoe UI", 9), background=UI_BG, foreground=UI_TEXT)
+            style.configure(".", font=("Segoe UI", 11), background=UI_BG, foreground=UI_TEXT)
 
             style.configure(
 
@@ -11184,7 +11734,7 @@ class App:
 
                 relief="flat",
 
-                padding=(10, 7),
+                padding=(scale_px(10), scale_px(7)),
 
                 arrowsize=14,
 
@@ -11278,7 +11828,7 @@ class App:
 
                 foreground=UI_TEXT,
 
-                rowheight=28,
+                rowheight=row_height,
 
                 bordercolor=UI_BORDER,
 
@@ -11296,11 +11846,11 @@ class App:
 
                 foreground=UI_TEXT,
 
-                font=("Segoe UI", 9, "bold"),
+                font=ui_font(11, bold=True),
 
                 relief="flat",
 
-                padding=(8, 7),
+                padding=heading_pad,
 
             )
 
@@ -11316,7 +11866,7 @@ class App:
 
                 foreground="#1f2933",
 
-                rowheight=28,
+                rowheight=row_height,
 
                 bordercolor="#cfd7dd",
 
@@ -11334,11 +11884,11 @@ class App:
 
                 foreground="#ffffff",
 
-                font=("Segoe UI", 9, "bold"),
+                font=ui_font(11, bold=True),
 
                 relief="flat",
 
-                padding=(8, 7),
+                padding=heading_pad,
 
             )
 
@@ -11438,14 +11988,6 @@ class App:
 
     def build_ui(self):
 
-        try:
-
-            self.root.state("zoomed")
-
-        except Exception:
-
-            pass
-
         self.setup_window_icon()
 
         self.setup_theme()
@@ -11484,11 +12026,11 @@ class App:
 
         def section_title(parent, title, subtitle=None):
 
-            tk.Label(parent, text=title, font=("Segoe UI", 11, "bold"), bg=UI_SURFACE, fg=UI_TEXT).pack(anchor="w")
+            tk.Label(parent, text=title, font=ui_font(10, bold=True), bg=UI_SURFACE, fg=UI_TEXT).pack(anchor="w")
 
             if subtitle:
 
-                tk.Label(parent, text=subtitle, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 0))
+                tk.Label(parent, text=subtitle, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 0))
 
 
 
@@ -11578,23 +12120,32 @@ class App:
 
             row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=UI_PRIMARY if active else "#e7edf6")
 
-            row.pack(fill="x", pady=2 if self.tiny_ui else 3)
+            row.pack(fill="x", pady=2)
 
-            inner = tk.Frame(row, bg=bg, padx=6 if self.tiny_ui else 10, pady=7 if self.tiny_ui else 9)
+            inner = tk.Frame(row, bg=bg, padx=8, pady=8)
 
             inner.pack(fill="both", expand=True)
 
-            accent = tk.Frame(inner, bg=UI_PRIMARY if active else bg, width=4, height=24)
+            accent = tk.Frame(inner, bg=UI_PRIMARY if active else bg, width=4, height=22)
 
-            accent.pack(side="left", padx=(0, 5 if self.tiny_ui else 8), fill="y")
+            accent.pack(side="left", padx=(0, 8), fill="y")
 
-            icon_label = tk.Label(inner, text=icon, width=2, bg=bg, fg=fg, font=("Segoe UI", 11))
+            icon_label = tk.Label(inner, text=icon, width=2, bg=bg, fg=fg, font=ui_font(12))
 
             icon_label.pack(side="left")
 
-            text_label = tk.Label(inner, text=text, bg=bg, fg=fg, font=("Segoe UI", 8 if self.tiny_ui else 9, "bold" if active else "normal"))
+            text_label = tk.Label(
+                inner,
+                text=text,
+                bg=bg,
+                fg=fg,
+                font=ui_font(12, bold=active),
+                anchor="w",
+                justify="left",
+                wraplength=max(96, self.sidebar_w - 60),
+            )
 
-            text_label.pack(side="left", padx=(4 if self.tiny_ui else 6, 0))
+            text_label.pack(side="left", padx=(4 if self.tiny_ui else 6, 0), fill="x", expand=True)
 
             self.nav_widgets[page_id] = {"row": row, "inner": inner, "accent": accent, "icon": icon_label, "label": text_label}
 
@@ -11642,11 +12193,11 @@ class App:
 
 
 
-        sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff")
+        sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=2 if (self.tiny_ui or self.micro_ui) else 12)
 
-        sidebar_spacer.pack(fill="both", expand=True)
+        sidebar_spacer.pack(fill="x")
 
-        user_box = card(sidebar, padx=8, pady=8)
+        user_box = card(sidebar, padx=4 if (self.tiny_ui or self.micro_ui) else 5, pady=3 if (self.tiny_ui or self.micro_ui) else 5)
 
         user_box.configure(bg="#ffffff")
 
@@ -11656,9 +12207,32 @@ class App:
 
         user_inner.pack(anchor="center", fill="x")
 
-        tk.Label(user_inner, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+        if self.tiny_ui or self.micro_ui:
+            self.sidebar_member_label = tk.Label(
+                user_inner,
+                text=f"{self.user_role_var.get()} · {self.user_name}",
+                font=ui_font(10, bold=True),
+                bg=UI_SURFACE,
+                fg=UI_TEXT,
+                justify="center",
+                wraplength=132,
+            )
+            self.sidebar_member_label.pack(anchor="center")
 
-        tk.Label(user_inner, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
+            def _sync_sidebar_member_label(*_args):
+                try:
+                    self.sidebar_member_label.config(text=f"{self.user_role_var.get()} · {self.user_name}")
+                except Exception:
+                    pass
+
+            try:
+                self.user_role_var.trace_add("write", _sync_sidebar_member_label)
+            except Exception:
+                pass
+        else:
+            tk.Label(user_inner, text=self.user_name, font=ui_font(11, bold=True), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+
+            tk.Label(user_inner, textvariable=self.user_role_var, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
 
         self.status = tk.Label(
 
@@ -11672,23 +12246,23 @@ class App:
 
             bg=UI_SURFACE,
 
-            font=("Segoe UI", 8, "bold"),
+            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10, bold=True),
 
-            wraplength=128,
+            wraplength=120,
 
             justify="center",
 
         )
-
-        self.status.pack(anchor="center", pady=(10, 0))
+        self.status.pack(anchor="center", pady=(6 if (self.tiny_ui or self.micro_ui) else 10, 0))
 
         if is_admin_build():
 
             admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
 
-            admin_btn_row.pack(anchor="center", pady=(10, 0))
+            admin_btn_row.pack(anchor="center", pady=(3 if (self.tiny_ui or self.micro_ui) else 4, 0))
 
-            ui_button(admin_btn_row, "Duyệt máy", self.open_admin_approval_panel, width=12, variant="warn").pack(anchor="center")
+            if not (self.tiny_ui or self.micro_ui):
+                ui_button(admin_btn_row, "Duyệt máy", self.open_admin_approval_panel, width=11, variant="warn").pack(anchor="center")
 
 
 
@@ -11708,30 +12282,31 @@ class App:
 
         if APP_TITLE:
 
-            tk.Label(title_box, text=APP_TITLE, font=("Segoe UI", 20 if self.compact_ui else 22, "bold"), bg=UI_BG, fg=UI_TEXT).pack(anchor="w")
+            tk.Label(title_box, text=APP_TITLE, font=ui_font(11, bold=True), bg=UI_BG, fg=UI_TEXT).pack(anchor="w")
 
-        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=("Segoe UI", 9 if self.compact_ui else 10), bg=UI_BG, fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
+        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(10), bg=UI_BG, fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
 
         if not self.tiny_ui:
 
             for text in ("☼", "⚙", "?"):
 
-                tk.Label(header, text=text, bg=UI_SURFACE, fg=UI_TEXT, width=3, height=2, font=("Segoe UI", 10 if self.compact_ui else 11), highlightthickness=1, highlightbackground="#edf2f7").pack(side="left", padx=4 if self.compact_ui else 6)
+                tk.Label(header, text=text, bg=UI_SURFACE, fg=UI_TEXT, width=3, height=2, font=ui_font(10), highlightthickness=1, highlightbackground="#edf2f7").pack(side="left", padx=4)
 
-            tk.Label(header, text="A", bg="#6366f1", fg="#ffffff", width=3, height=2, font=("Segoe UI", 10 if self.compact_ui else 11, "bold")).pack(side="left", padx=(10, 6))
+            tk.Label(header, text="A", bg="#6366f1", fg="#ffffff", width=3, height=2, font=ui_font(10, bold=True)).pack(side="left", padx=(10, 6))
 
             profile = tk.Frame(header, bg=UI_BG)
 
             profile.pack(side="left")
 
-            tk.Label(profile, text=self.user_name, font=("Segoe UI", 9, "bold"), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center")
+            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center")
 
-            tk.Label(profile, textvariable=self.user_role_var, font=("Segoe UI", 8), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
+            tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
 
 
 
+        self.content_canvas = None
+        self._content_window_id = None
         content = tk.Frame(main, bg=UI_BG)
-
         content.pack(fill="both", expand=True)
 
         self.home_page = tk.Frame(content, bg=UI_BG)
@@ -11742,8 +12317,12 @@ class App:
 
 
 
-        toolbar = card(self.home_page, padx=8 if self.tiny_ui else 12, pady=7 if self.tiny_ui else 10)
-        toolbar.pack(fill="x", pady=(8 if self.tiny_ui else 12, 8 if self.tiny_ui else 10))
+        toolbar = card(
+            self.home_page,
+            padx=6 if self.micro_ui else (8 if self.tiny_ui else 12),
+            pady=5 if self.micro_ui else (7 if self.tiny_ui else 10),
+        )
+        toolbar.pack(fill="x", pady=(6 if self.micro_ui else (8 if self.tiny_ui else 12), 6 if self.micro_ui else (8 if self.tiny_ui else 10)))
 
         toolbar_inner = tk.Frame(toolbar, bg=UI_SURFACE)
 
@@ -11759,11 +12338,11 @@ class App:
 
         toolbar_inner.grid_columnconfigure(4, weight=2, uniform="toolbar")
 
-        toolbar_gap = 3 if self.compact_ui else 5
+        toolbar_gap = 2
 
-        toolbar_group_pad = 4 if self.compact_ui else 8
+        toolbar_group_pad = 4 if self.dense_ui else 6
 
-        toolbar_sep_pad = 8 if self.compact_ui else 12
+        toolbar_sep_pad = 6 if self.dense_ui else 10
 
 
 
@@ -11775,7 +12354,7 @@ class App:
 
             if title:
 
-                tk.Label(group, text=title, font=("Segoe UI", 7 if self.tiny_ui else 8, "bold"), fg=UI_MUTED, bg=bg_color).pack(side="top", anchor="center", pady=(0, 4 if self.tiny_ui else 6))
+                tk.Label(group, text=title, font=ui_font(10, bold=True), fg=UI_MUTED, bg=bg_color).pack(side="top", anchor="center", pady=(0, 5))
 
             rows = [btns]
 
@@ -11783,7 +12362,7 @@ class App:
 
                 btn_row = tk.Frame(group, bg=bg_color)
 
-                btn_row.pack(side="top", anchor="center", pady=(1, 3 if self.tiny_ui else 0))
+                btn_row.pack(side="top", anchor="center", pady=(1, 0))
 
                 for text, command, variant in row_btns:
 
@@ -11853,7 +12432,7 @@ class App:
 
 
 
-        tk.Label(filter_top, text="Sheet:", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 9, "bold")).pack(side="left", padx=(4, 8))
+        tk.Label(filter_top, text="Sheet:", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(side="left", padx=(4, 8))
 
         self.sheet_combo = RoundedMappingDropdown(
 
@@ -11905,9 +12484,54 @@ class App:
 
         self.template_combo.pack(side="left")
 
+        if self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
+            home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
+            home_body_shell.pack(fill="both", expand=True)
+
+            self.home_body_canvas = tk.Canvas(home_body_shell, bg=UI_BG, highlightthickness=0, bd=0)
+            home_body_scroll = ttk.Scrollbar(home_body_shell, orient="vertical", command=self.home_body_canvas.yview)
+            self.home_body_scrollbar = home_body_scroll
+            self.home_body_canvas.configure(yscrollcommand=home_body_scroll.set)
+            self.home_body_canvas.pack(side="left", fill="both", expand=True)
+
+            home_body_content = tk.Frame(self.home_body_canvas, bg=UI_BG)
+            self._home_body_window_id = self.home_body_canvas.create_window((0, 0), window=home_body_content, anchor="nw")
+
+            def _sync_home_body_scrollregion(_event=None):
+                try:
+                    self.home_body_canvas.configure(scrollregion=self.home_body_canvas.bbox("all"))
+                    bbox = self.home_body_canvas.bbox("all")
+                    needs_scroll = bool(bbox and self.home_body_canvas.winfo_height() and (bbox[3] - bbox[1] > self.home_body_canvas.winfo_height() + 2))
+                    if needs_scroll:
+                        if not home_body_scroll.winfo_ismapped():
+                            home_body_scroll.pack(side="right", fill="y")
+                    else:
+                        if home_body_scroll.winfo_ismapped():
+                            home_body_scroll.pack_forget()
+                except Exception:
+                    pass
+
+            def _sync_home_body_width(event):
+                try:
+                    self.home_body_canvas.itemconfigure(self._home_body_window_id, width=event.width)
+                except Exception:
+                    pass
+
+            home_body_content.bind("<Configure>", _sync_home_body_scrollregion)
+            self.home_body_canvas.bind("<Configure>", _sync_home_body_width)
+            self.home_body_canvas.bind("<Enter>", self._bind_main_content_mousewheel)
+            self.home_body_canvas.bind("<Leave>", self._unbind_main_content_mousewheel)
+            self.root.after_idle(_sync_home_body_scrollregion)
+        else:
+            self.home_body_canvas = None
+            self._home_body_window_id = None
+            self.home_body_scrollbar = None
+            home_body_content = tk.Frame(self.home_page, bg=UI_BG)
+            home_body_content.pack(fill="both", expand=True)
 
 
-        workspace = tk.Frame(self.home_page, bg=UI_BG)
+
+        workspace = tk.Frame(home_body_content, bg=UI_BG)
 
         workspace.pack(fill="both", expand=True)
 
@@ -11942,7 +12566,7 @@ class App:
             text="Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg",
             bg="#fbfdff",
             fg=UI_MUTED,
-            font=("Segoe UI", 10),
+            font=ui_font(11),
             justify="center",
         )
         self.img_label.pack(fill="both", expand=True)
@@ -11979,7 +12603,7 @@ class App:
 
             info,
 
-            height=5 if self.short_ui else 9,
+            height=4 if self.micro_ui else (5 if self.short_ui else 9),
 
             wrap="word",
 
@@ -11995,7 +12619,7 @@ class App:
 
             highlightbackground=UI_BORDER,
 
-            font=("Segoe UI", 8),
+            font=ui_font(10),
 
         )
 
@@ -12031,45 +12655,47 @@ class App:
 
 
 
-        if not self.short_ui:
+        workflow = card(
+            home_body_content,
+            padx=10 if (self.tiny_ui or self.micro_ui) else (12 if self.compact_ui else 18),
+            pady=6 if (self.tiny_ui or self.micro_ui) else (8 if self.compact_ui else 14),
+        )
 
-            workflow = card(self.home_page, padx=12 if self.compact_ui else 18, pady=8 if self.compact_ui else 14)
+        workflow.pack(fill="x", pady=(6 if (self.tiny_ui or self.micro_ui) else (8 if self.compact_ui else 12), 0))
 
-            workflow.pack(fill="x", pady=(8 if self.compact_ui else 12, 0))
+        tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(anchor="w")
 
-            tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        steps = tk.Frame(workflow, bg=UI_SURFACE)
 
-            steps = tk.Frame(workflow, bg=UI_SURFACE)
+        steps.pack(fill="x", pady=(8 if (self.tiny_ui or self.micro_ui) else 12, 0))
 
-            steps.pack(fill="x", pady=(12, 0))
+        for i, (title, sub, color) in enumerate([
 
-            for i, (title, sub, color) in enumerate([
+            ("Chọn file / ảnh OCR", "Tải lên ảnh hoặc chọn file Excel", UI_PRIMARY),
 
-                ("Chọn file / ảnh OCR", "Tải lên ảnh hoặc chọn file Excel", UI_PRIMARY),
+            ("Đọc & Trích xuất", "Hệ thống đọc và trích xuất dữ liệu", "#38bdf8"),
 
-                ("Đọc & Trích xuất", "Hệ thống đọc và trích xuất dữ liệu", "#38bdf8"),
+            ("Kiểm tra & Sửa dữ liệu", "Xem trước và chỉnh sửa dữ liệu", "#14b8a6"),
 
-                ("Kiểm tra & Sửa dữ liệu", "Xem trước và chỉnh sửa dữ liệu", "#14b8a6"),
+            ("Ánh xạ & Xác nhận", "Map cột và xác nhận dữ liệu", UI_SUCCESS),
 
-                ("Ánh xạ & Xác nhận", "Map cột và xác nhận dữ liệu", UI_SUCCESS),
+            ("Xuất ra Excel", "Xuất dữ liệu đã xử lý ra Excel", UI_PRIMARY),
 
-                ("Xuất ra Excel", "Xuất dữ liệu đã xử lý ra Excel", UI_PRIMARY),
+        ]):
 
-            ]):
+            item = tk.Frame(steps, bg=UI_SURFACE)
 
-                item = tk.Frame(steps, bg=UI_SURFACE)
+            item.pack(side="left", fill="x", expand=True)
 
-                item.pack(side="left", fill="x", expand=True)
+            tk.Label(item, text=str(i + 1), bg="#eef4ff", fg=color, width=2 if (self.tiny_ui or self.micro_ui) else 3, height=1 if (self.tiny_ui or self.micro_ui) else 2, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(side="left", padx=(0, 8 if (self.tiny_ui or self.micro_ui) else 10))
 
-                tk.Label(item, text=str(i + 1), bg="#eef4ff", fg=color, width=3, height=2, font=("Segoe UI", 10, "bold")).pack(side="left", padx=(0, 10))
+            text_box = tk.Frame(item, bg=UI_SURFACE)
 
-                text_box = tk.Frame(item, bg=UI_SURFACE)
+            text_box.pack(side="left", fill="x")
 
-                text_box.pack(side="left", fill="x")
+            tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(anchor="w")
 
-                tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 8, "bold")).pack(anchor="w")
-
-                tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 7)).pack(anchor="w", pady=(2, 0))
+            tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10)).pack(anchor="w", pady=(2, 0))
 
 
 
@@ -12087,7 +12713,7 @@ class App:
 
         history_title.pack(side="left", fill="x", expand=True)
 
-        tk.Label(history_title, text="LỊCH SỬ XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        tk.Label(history_title, text="LỊCH SỬ XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
 
         tk.Label(
 
@@ -12099,14 +12725,14 @@ class App:
 
             fg=UI_MUTED,
 
-            font=("Segoe UI", 8),
+            font=ui_font(11),
 
         ).pack(anchor="w", pady=(2, 0))
 
         filter_row = tk.Frame(history_top, bg=UI_SURFACE)
         filter_row.pack(anchor="w", pady=(10, 0))
 
-        tk.Label(filter_row, text="Tìm ngày / tên:", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="left", padx=(0, 8))
+        tk.Label(filter_row, text="Tìm ngày / tên:", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(side="left", padx=(0, 8))
 
         self.history_filter_var = tk.StringVar(value="")
 
@@ -12116,7 +12742,7 @@ class App:
 
         ui_button(filter_row, "Xóa lọc", lambda: (self.history_filter_var.set(""), self._sync_history_view()), width=10, variant="soft").pack(side="left", padx=(8, 0))
 
-        tk.Label(filter_row, text="Hiển thị:", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="left", padx=(16, 8))
+        tk.Label(filter_row, text="Hiển thị:", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(side="left", padx=(16, 8))
 
         self.history_kind_var = tk.StringVar(value="Cả hai")
         self.history_kind_combo = RoundedMappingDropdown(
@@ -12144,7 +12770,7 @@ class App:
 
             fg=UI_PRIMARY,
 
-            font=("Segoe UI", 8, "bold"),
+            font=ui_font(11, bold=True),
 
             padx=10,
 
@@ -12187,8 +12813,8 @@ class App:
         detail_panel.configure(width=540)
         detail_panel.pack_propagate(False)
 
-        tk.Label(detail_panel, text="CHI TIẾT OCR", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(anchor="w")
-        tk.Label(detail_panel, text="Double-click vào một OCR bên trái để xem lại dữ liệu đã đọc.", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(anchor="w", pady=(2, 8))
+        tk.Label(detail_panel, text="CHI TIẾT OCR", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
+        tk.Label(detail_panel, text="Double-click vào một OCR bên trái để xem lại dữ liệu đã đọc.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(2, 8))
 
         self.history_detail_host = tk.Frame(detail_panel, bg=UI_SURFACE)
         self.history_detail_host.pack(fill="both", expand=True)
@@ -12220,7 +12846,7 @@ class App:
 
             fg=UI_MUTED,
 
-            font=("Segoe UI", 8),
+            font=("Segoe UI", max(7, scale_px(8))),
 
         ).pack(anchor="w", pady=(2, 0))
 
@@ -12291,7 +12917,7 @@ class App:
 
                 fg=UI_TEXT if mode == self.excel_recent_mode else UI_MUTED,
 
-                font=("Segoe UI", 10, "bold" if mode == self.excel_recent_mode else "normal"),
+                font=ui_font(11, bold=(mode == self.excel_recent_mode)),
 
                 padx=2,
 
@@ -12327,9 +12953,9 @@ class App:
 
         recent_header.pack(fill="x", pady=(0, 8))
 
-        tk.Label(recent_header, text="Tên", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="left", padx=(44, 0))
+        tk.Label(recent_header, text="Tên", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(side="left", padx=(44, 0))
 
-        tk.Label(recent_header, text="Ngày sửa đổi", bg=UI_SURFACE, fg=UI_MUTED, font=("Segoe UI", 8)).pack(side="right", padx=(0, 10))
+        tk.Label(recent_header, text="Ngày sửa đổi", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(side="right", padx=(0, 10))
 
 
 
@@ -12383,7 +13009,7 @@ class App:
 
             fg=UI_MUTED,
 
-            font=("Segoe UI", 8),
+            font=ui_font(10),
 
         )
 
@@ -12399,7 +13025,7 @@ class App:
 
     def save_key(self):
 
-        save_env(self.api_key_var.get(), self.model_var.get())
+        save_env(self.api_key_var.get(), self.model_var.get(), getattr(self, "screen_profile_var", tk.StringVar(value="auto")).get())
 
         self.status.config(text="Đã lưu cài đặt vào file .env")
 
