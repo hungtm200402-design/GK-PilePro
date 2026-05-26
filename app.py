@@ -537,6 +537,36 @@ class RoundedMappingLabel(tk.Canvas):
 
         self._draw()
 
+    def _fit_text(self, text, max_width):
+        text = str(text or "")
+        if max_width <= 20:
+            return ""
+        font = ui_font(10)
+        item = self.create_text(0, -100, text=text, font=font, anchor="w")
+        try:
+            bbox = self.bbox(item)
+            if bbox and bbox[2] <= max_width:
+                self.delete(item)
+                return text
+        except Exception:
+            pass
+        self.delete(item)
+        suffix = "..."
+        out = text
+        while out:
+            trial = out[:-1].rstrip() + suffix
+            item = self.create_text(0, -100, text=trial, font=font, anchor="w")
+            try:
+                bbox = self.bbox(item)
+                if bbox and bbox[2] <= max_width:
+                    self.delete(item)
+                    return trial
+            except Exception:
+                pass
+            self.delete(item)
+            out = out[:-1]
+        return suffix
+
 
 
     def _round_rect(self, x1, y1, x2, y2, radius=7, **kwargs):
@@ -563,17 +593,20 @@ class RoundedMappingLabel(tk.Canvas):
 
         self._round_rect(1, 1, w - 1, self.height_px - 1, self.radius, fill=self.bg_color, outline=self.border_color)
 
+        font_size = 9 if w < 110 else 10
+        self._text_font = ui_font(font_size)
+
         self.create_text(
 
             9,
 
             self.height_px // 2,
 
-            text=self.text,
+            text=self._fit_text(self.text, max(10, w - 18)),
 
             fill=self.text_color,
 
-            font=ui_font(10),
+            font=self._text_font,
 
             anchor="w",
 
@@ -6393,6 +6426,27 @@ class MappingEditor(tk.Frame):
 
         self.excel_headers = excel_headers
 
+        try:
+            top = self.winfo_toplevel()
+            screen_w = int(top.winfo_width() or top.winfo_screenwidth() or 1366)
+        except Exception:
+            screen_w = 1366
+        if screen_w <= 1366:
+            src_width = 64
+            target_width = 180
+            src_max_len = 9
+            row_pady = 2
+        elif screen_w <= 1600:
+            src_width = 74
+            target_width = 200
+            src_max_len = 11
+            row_pady = 3
+        else:
+            src_width = 88
+            target_width = 220
+            src_max_len = 13
+            row_pady = 3
+
 
 
         excel_choices = self._make_excel_choices(excel_headers)
@@ -6403,13 +6457,13 @@ class MappingEditor(tk.Frame):
 
             row = tk.Frame(self.inner, bg=UI_SURFACE)
 
-            row.pack(fill="x", pady=3)
+            row.pack(fill="x", pady=row_pady)
 
 
 
             try:
 
-                src_show = short_header_name(src, 18)
+                src_show = short_header_name(src, src_max_len)
 
             except Exception:
 
@@ -6439,9 +6493,9 @@ class MappingEditor(tk.Frame):
 
 
 
-            row.grid_columnconfigure(0, weight=0, minsize=118)
+            row.grid_columnconfigure(0, weight=0, minsize=src_width)
 
-            row.grid_columnconfigure(1, weight=0, minsize=18)
+            row.grid_columnconfigure(1, weight=0, minsize=14)
 
             row.grid_columnconfigure(2, weight=1)
 
@@ -6457,9 +6511,13 @@ class MappingEditor(tk.Frame):
 
                 border_color="#d8d2c8",
 
+                width=src_width,
+
+                height=28,
+
             )
 
-            src_box.grid(row=0, column=0, sticky="ew", padx=(2, 4))
+            src_box.grid(row=0, column=0, sticky="w", padx=(1, 2))
 
             tk.Label(
 
@@ -6475,7 +6533,7 @@ class MappingEditor(tk.Frame):
 
                 fg=UI_MUTED,
 
-            ).grid(row=0, column=1, sticky="w", padx=(0, 3))
+            ).grid(row=0, column=1, sticky="w", padx=(0, 1))
 
 
 
@@ -6490,6 +6548,10 @@ class MappingEditor(tk.Frame):
                 bg_color=self.target_bg,
 
                 border_color=self.mapping_border,
+
+                width=target_width,
+
+                height=30,
 
             )
 
@@ -12193,7 +12255,7 @@ class App:
 
 
 
-        sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=2 if (self.tiny_ui or self.micro_ui) else 12)
+        sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=8 if (self.tiny_ui or self.micro_ui) else 12)
 
         sidebar_spacer.pack(fill="x")
 
@@ -12201,38 +12263,39 @@ class App:
 
         user_box.configure(bg="#ffffff")
 
-        user_box.pack(fill="x", pady=(8, 0))
+        user_box.pack(fill="x", pady=(6, 0))
+        user_box.pack_propagate(False)
 
         user_inner = tk.Frame(user_box, bg=UI_SURFACE)
 
-        user_inner.pack(anchor="center", fill="x")
+        user_inner.pack(anchor="n", fill="both")
 
         if self.tiny_ui or self.micro_ui:
-            self.sidebar_member_label = tk.Label(
+            self.sidebar_member_role_label = tk.Label(
                 user_inner,
-                text=f"{self.user_role_var.get()} · {self.user_name}",
+                textvariable=self.user_role_var,
                 font=ui_font(10, bold=True),
                 bg=UI_SURFACE,
                 fg=UI_TEXT,
                 justify="center",
                 wraplength=132,
             )
-            self.sidebar_member_label.pack(anchor="center")
+            self.sidebar_member_role_label.pack(anchor="center")
 
-            def _sync_sidebar_member_label(*_args):
-                try:
-                    self.sidebar_member_label.config(text=f"{self.user_role_var.get()} · {self.user_name}")
-                except Exception:
-                    pass
-
-            try:
-                self.user_role_var.trace_add("write", _sync_sidebar_member_label)
-            except Exception:
-                pass
+            self.sidebar_member_name_label = tk.Label(
+                user_inner,
+                text=self.user_name,
+                font=ui_font(9),
+                bg=UI_SURFACE,
+                fg=UI_TEXT,
+                justify="center",
+                wraplength=132,
+            )
+            self.sidebar_member_name_label.pack(anchor="center", pady=(2, 0))
         else:
-            tk.Label(user_inner, text=self.user_name, font=ui_font(11, bold=True), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+            tk.Label(user_inner, textvariable=self.user_role_var, font=ui_font(11, bold=True), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
 
-            tk.Label(user_inner, textvariable=self.user_role_var, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center")
+            tk.Label(user_inner, text=self.user_name, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center", pady=(2, 0))
 
         self.status = tk.Label(
 
@@ -12253,13 +12316,13 @@ class App:
             justify="center",
 
         )
-        self.status.pack(anchor="center", pady=(6 if (self.tiny_ui or self.micro_ui) else 10, 0))
+        self.status.pack(anchor="center", pady=(4 if (self.tiny_ui or self.micro_ui) else 8, 0))
 
         if is_admin_build():
 
             admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
 
-            admin_btn_row.pack(anchor="center", pady=(3 if (self.tiny_ui or self.micro_ui) else 4, 0))
+            admin_btn_row.pack(anchor="center", pady=(2 if (self.tiny_ui or self.micro_ui) else 4, 0))
 
             if not (self.tiny_ui or self.micro_ui):
                 ui_button(admin_btn_row, "Duyệt máy", self.open_admin_approval_panel, width=11, variant="warn").pack(anchor="center")
@@ -12696,6 +12759,37 @@ class App:
             tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(anchor="w")
 
             tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10)).pack(anchor="w", pady=(2, 0))
+
+        self._sidebar_member_spacer = sidebar_spacer
+        self._sidebar_member_box = user_box
+        self._workflow_anchor_card = workflow
+
+        def _sync_sidebar_member_anchor(_event=None):
+            try:
+                spacer = getattr(self, "_sidebar_member_spacer", None)
+                member_box = getattr(self, "_sidebar_member_box", None)
+                anchor = getattr(self, "_workflow_anchor_card", None)
+                if spacer is None or member_box is None or anchor is None:
+                    return
+                self.root.update_idletasks()
+                if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
+                    return
+                target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
+                current_top = spacer.winfo_y()
+                new_height = max(0, int(target_top - current_top))
+                if new_height != int(str(spacer.cget("height") or 0)):
+                    spacer.configure(height=new_height)
+                target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
+                if target_height:
+                    target_height = max(target_height, 112 if (self.tiny_ui or self.micro_ui) else 124)
+                if target_height and member_box.winfo_height() != target_height:
+                    member_box.configure(height=target_height)
+            except Exception:
+                pass
+
+        self._sync_sidebar_member_anchor = _sync_sidebar_member_anchor
+        self.root.after_idle(self._sync_sidebar_member_anchor)
+        self.root.bind("<Configure>", self._sync_sidebar_member_anchor, add="+")
 
 
 
