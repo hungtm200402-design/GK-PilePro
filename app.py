@@ -754,6 +754,10 @@ class RoundedMappingDropdown(tk.Canvas):
 
         self._combo_callbacks = []
         self.popup = None
+        self.popup_canvas = None
+        self.popup_scrollbar = None
+        self.popup_inner = None
+        self.popup_content = None
 
         self.menu = tk.Menu(self, tearoff=0)
         try:
@@ -923,7 +927,8 @@ class RoundedMappingDropdown(tk.Canvas):
         y = self.winfo_rooty() + self.winfo_height() + scale_px(2)
         width = max(self.width_px, scale_px(150))
         row_h = scale_px(28)
-        height = max(scale_px(24), row_h * len(self.values) + scale_px(6))
+        max_visible_rows = 8
+        height = max(scale_px(24), min(row_h * len(self.values) + scale_px(6), row_h * max_visible_rows + scale_px(6)))
         self.popup.geometry(f"{width}x{height}+{x}+{y}")
         self.popup.configure(bg="#d8e5f4")
         self.popup.bind("<FocusOut>", lambda _e: self._close_popup())
@@ -934,12 +939,49 @@ class RoundedMappingDropdown(tk.Canvas):
     def _close_popup(self):
         popup = getattr(self, "popup", None)
         self.popup = None
+        self.popup_canvas = None
+        self.popup_scrollbar = None
+        self.popup_inner = None
+        self.popup_content = None
         if popup is not None:
             try:
                 if popup.winfo_exists():
                     popup.destroy()
             except Exception:
                 pass
+
+    def _on_popup_mousewheel(self, event):
+        canvas = getattr(self, "popup_canvas", None)
+        if canvas is None:
+            return
+        try:
+            delta = getattr(event, "delta", 0) or 0
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return
+            num = getattr(event, "num", None)
+            if num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif num == 5:
+                canvas.yview_scroll(1, "units")
+        except Exception:
+            pass
+
+    def _bind_popup_mousewheel_recursive(self, widget=None):
+        widget = widget or getattr(self, "popup_content", None)
+        if widget is None:
+            return
+        try:
+            widget.bind("<MouseWheel>", self._on_popup_mousewheel, add="+")
+            widget.bind("<Button-4>", self._on_popup_mousewheel, add="+")
+            widget.bind("<Button-5>", self._on_popup_mousewheel, add="+")
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._bind_popup_mousewheel_recursive(child)
+        except Exception:
+            pass
 
     def _build_popup(self):
         popup = getattr(self, "popup", None)
@@ -954,9 +996,33 @@ class RoundedMappingDropdown(tk.Canvas):
         outer.pack(fill="both", expand=True)
         inner = tk.Frame(outer, bg="#ffffff", bd=1, relief="solid", highlightthickness=0)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
+        self.popup_inner = inner
+        self.popup_canvas = tk.Canvas(inner, bg="#ffffff", bd=0, highlightthickness=0)
+        self.popup_scrollbar = ttk.Scrollbar(inner, orient="vertical", command=self.popup_canvas.yview)
+        self.popup_canvas.configure(yscrollcommand=self.popup_scrollbar.set)
+        self.popup_canvas.pack(side="left", fill="both", expand=True)
+        self.popup_scrollbar.pack(side="right", fill="y")
+        self.popup_content = tk.Frame(self.popup_canvas, bg="#ffffff")
+        content_window = self.popup_canvas.create_window((0, 0), window=self.popup_content, anchor="nw")
+
+        def _sync_scrollregion(_event=None):
+            try:
+                self.popup_canvas.configure(scrollregion=self.popup_canvas.bbox("all"))
+            except Exception:
+                pass
+
+        def _sync_width(event):
+            try:
+                self.popup_canvas.itemconfigure(content_window, width=event.width)
+            except Exception:
+                pass
+
+        self.popup_content.bind("<Configure>", _sync_scrollregion)
+        self.popup_canvas.bind("<Configure>", _sync_width)
+        self.popup_canvas.bind("<Enter>", lambda _e: self.popup_canvas.focus_set())
         for value in self.values:
             item = tk.Label(
-                inner,
+                self.popup_content,
                 text=value,
                 bg="#ffffff",
                 fg=UI_TEXT,
@@ -969,6 +1035,11 @@ class RoundedMappingDropdown(tk.Canvas):
             item.bind("<Enter>", lambda _e, w=item: w.configure(bg="#e8f1ff", fg=UI_PRIMARY))
             item.bind("<Leave>", lambda _e, w=item: w.configure(bg="#ffffff", fg=UI_TEXT))
             item.bind("<Button-1>", lambda _e, v=value: self._select(v))
+        self._bind_popup_mousewheel_recursive(self.popup_content)
+        try:
+            self.popup_canvas.yview_moveto(0)
+        except Exception:
+            pass
 
 
 
@@ -1917,6 +1988,11 @@ def mapping_templates_path():
     return app_data_path("tool_kl_mapping_templates.json")
 
 
+def formula_profiles_path():
+
+    return app_data_path("tool_kl_formula_profiles.json")
+
+
 def load_history_entries():
 
     try:
@@ -1983,6 +2059,40 @@ def save_mapping_templates(templates):
         mapping_templates_path().write_text(
 
             json.dumps(templates or [], ensure_ascii=False, indent=2),
+
+            encoding="utf-8",
+
+        )
+
+    except Exception:
+
+        pass
+
+
+def load_formula_profiles():
+
+    try:
+
+        data = json.loads(formula_profiles_path().read_text(encoding="utf-8"))
+
+        if isinstance(data, list):
+
+            return [item for item in data if isinstance(item, dict)]
+
+    except Exception:
+
+        pass
+
+    return []
+
+
+def save_formula_profiles(profiles):
+
+    try:
+
+        formula_profiles_path().write_text(
+
+            json.dumps(profiles or [], ensure_ascii=False, indent=2),
 
             encoding="utf-8",
 
@@ -3409,11 +3519,60 @@ def find_total_row(ws, header_row):
 
     - Dòng tổng kết dạng "KL CỌC NHẬP VỀ", "CỘNG", "TỔNG CỘNG" ngoài header.
 
+    - Dòng tổng kết kiểu nhãn ở giữa dòng như "Ép cọc đại trà" kèm các ô SUM/numeric phía sau.
+
     Không nhận các header cột như 'Tổng tổ hợp', 'Tổng số m cọc...'
 
     """
 
     start_row = max(1, header_row + 1)
+
+    def _is_num_or_formula(v):
+        if is_formula_value(v):
+            return True
+        s = str(v or "").strip()
+        if not s:
+            return False
+        try:
+            float(s.replace(",", "."))
+            return True
+        except Exception:
+            return False
+
+    def _looks_like_midrow_total(vals):
+        non_empty = [v for v in vals if str(v or "").strip()]
+        if len(non_empty) < 3:
+            return False
+        if len(non_empty) > max(8, ws.max_column // 4):
+            return False
+
+        first_non_empty_idx = None
+        for i, v in enumerate(vals[:6]):
+            if str(v or "").strip():
+                first_non_empty_idx = i
+                break
+
+        # Dòng kiểu tổng kết thường bỏ trống các cột định danh đầu bảng.
+        if first_non_empty_idx is None or first_non_empty_idx < 4:
+            return False
+
+        summary_cells = sum(1 for v in vals if _is_num_or_formula(v))
+        if summary_cells < 2:
+            return False
+
+        label_text = " ".join(
+            str(v).strip()
+            for v in vals[:12]
+            if str(v or "").strip() and not _is_num_or_formula(v)
+        )
+        label_norm = norm(label_text)
+        if not label_norm:
+            return False
+
+        if any(k in label_norm for k in ["ep coc dai tra", "dai tra", "tong hop", "khoi luong", "nhap ve", "cong", "tong", "sum"]):
+            return True
+
+        return summary_cells >= 3 and first_non_empty_idx >= 5
 
     for r in range(start_row, ws.max_row + 1):
 
@@ -3454,6 +3613,11 @@ def find_total_row(ws, header_row):
         kl_markers = ["kl coc", "kl cọc", "khoi luong coc", "cong tong", "tong cong"]
 
         if any(k in row_norm for k in kl_markers):
+
+            return r
+
+
+        if _looks_like_midrow_total(vals):
 
             return r
 
@@ -3577,6 +3741,31 @@ def _is_grey_fill(cell):
 
     return False
 
+
+
+def _is_grey_fill(cell):
+    try:
+        if not cell.fill or not cell.fill.fill_type:
+            return False
+
+        # File này dùng theme fill cho cả vùng dữ liệu, nên chỉ coi là xám
+        # khi openpyxl trả về màu rõ ràng hoặc indexed grey.
+        color = cell.fill.fgColor
+        ctype = getattr(color, "type", None)
+
+        if ctype == "rgb":
+            fg = str(color.rgb or "").upper()
+            if not fg or fg in {"00000000", "FFFFFFFF", "FF000000", "00FFFFFF"}:
+                return False
+            return fg in {"FF808080", "FFC0C0C0", "FFBFBFBF", "FF999999", "FFEAEAEA", "FFF2F2F2"}
+
+        if ctype == "indexed":
+            idx = getattr(color, "indexed", None)
+            return idx in {22, 23, 24, 25}
+
+        return False
+    except Exception:
+        return False
 
 
 def row_has_grey_background(ws, r, max_col=None):
@@ -3962,6 +4151,132 @@ def set_total_formulas_by_template(ws, total_row, formula_cols, first_data_row, 
         col = excel_col_letter(c)
 
         cell.value = f"=SUM({col}{first_data_row}:{col}{last_data_row})"
+
+
+
+def _update_sum_formula_range(formula, col_letter, first_data_row, last_data_row):
+
+    """
+
+    Nếu công thức là SUM thì cập nhật lại range theo dòng dữ liệu thực tế.
+    Không đụng các công thức khác.
+    """
+
+    if not is_formula_value(formula):
+
+        return None
+
+    s = str(formula or "").replace(" ", "")
+    col = str(col_letter).upper()
+
+    m = re.match(
+        r"^=SUM\((\$?" + re.escape(col) + r"\$?\d+):(\$?" + re.escape(col) + r"\$?\d+)\)$",
+        s,
+        flags=re.I,
+    )
+    if m:
+        return f"=SUM({col}{first_data_row}:{col}{last_data_row})"
+
+    m = re.match(
+        r"^=\+?SUM\((.*)\)$",
+        s,
+        flags=re.I,
+    )
+    if m:
+        return f"=SUM({col}{first_data_row}:{col}{last_data_row})"
+
+    return None
+
+
+
+def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_headers=None, no_col=None):
+
+    """
+
+    Cập nhật công thức dòng TỔNG theo vùng dữ liệu thực tế.
+
+    - Nếu ô TỔNG đã có SUM: giữ công thức, đổi range.
+    - Nếu ô TỔNG đang trống nhưng cột có số liệu: tạo SUM mới.
+    - Không tính STT.
+    """
+
+    if not total_row or not first_data_row or not last_data_row or last_data_row < first_data_row:
+
+        return []
+
+    updated = []
+    header_by_col = {int(c): str(name or "") for c, name in (excel_headers or [])}
+
+    def _header_is_numeric_candidate(name):
+
+        n = norm(name)
+        if not n:
+            return False
+        if any(tok in n for tok in ["stt", "no", "ngay", "gio", "bat dau", "ket thuc", "ghi chu", "ten", "loai", "ca"]):
+            return False
+        return any(tok in n for tok in ["chieu dai", "chieu sau", "tai trong", "khoi luong", "do sau", "khoi luong ep", "ep thuc te", "tong hop", "do dai", "m)", "(m)", "(t)"])
+
+    def _col_has_numeric_data(col_idx):
+
+        hits = 0
+        for r in range(first_data_row, last_data_row + 1):
+            v = ws.cell(r, col_idx).value
+            if v in (None, ""):
+                continue
+            if is_formula_value(v):
+                hits += 1
+                continue
+            if isinstance(v, (int, float)):
+                hits += 1
+                continue
+            s = str(v).strip().replace(".", "").replace(",", ".")
+            try:
+                float(s)
+                hits += 1
+            except Exception:
+                pass
+        return hits
+
+    candidate_cols = []
+    for c in range(1, ws.max_column + 1):
+        if c == no_col:
+            continue
+        cell = ws.cell(total_row, c)
+        if is_formula_value(cell.value):
+            candidate_cols.append(c)
+
+    if not candidate_cols:
+        for c in range(1, ws.max_column + 1):
+            if c == no_col:
+                continue
+            if _header_is_numeric_candidate(header_by_col.get(c, "")) and _col_has_numeric_data(c) > 0:
+                candidate_cols.append(c)
+
+    if not candidate_cols:
+        for c in range(1, ws.max_column + 1):
+            if c == no_col:
+                continue
+            if _col_has_numeric_data(c) > 0:
+                candidate_cols.append(c)
+
+    for c in sorted(set(candidate_cols)):
+        cell = ws.cell(total_row, c)
+        existing = cell.value
+        col_letter = get_column_letter(c)
+
+        new_formula = None
+        if is_formula_value(existing):
+            new_formula = _update_sum_formula_range(existing, col_letter, first_data_row, last_data_row)
+            if new_formula is None and str(existing).strip().upper().startswith("=SUM("):
+                new_formula = f"=SUM({col_letter}{first_data_row}:{col_letter}{last_data_row})"
+        elif _header_is_numeric_candidate(header_by_col.get(c, "")) or _col_has_numeric_data(c) > 0:
+            new_formula = f"=SUM({col_letter}{first_data_row}:{col_letter}{last_data_row})"
+
+        if new_formula:
+            cell.value = new_formula
+            updated.append(c)
+
+    return updated
 
 
 
@@ -4406,6 +4721,157 @@ def find_all_stt_chains(ws, no_col, header_row, total_row):
     return chains
 
 
+def score_stt_column_candidate(ws, col, header_row, total_row):
+
+    """
+
+    Chấm điểm một cột xem có giống cột STT/No hay không.
+
+    Hàm này chịu được trường hợp người dùng đã xóa/cắt vài dòng,
+    khiến chuỗi số không còn liền mạch tuyệt đối.
+    """
+
+    if not col or not total_row:
+
+        return 0, []
+
+
+
+    memo = {}
+
+    rows = []
+
+    for r in range(header_row + 1, total_row):
+
+        try:
+
+            if row_has_grey_background(ws, r):
+
+                continue
+
+        except Exception:
+
+            pass
+
+        try:
+
+            row_text = " ".join(str(ws.cell(r, c).value or "") for c in range(1, ws.max_column + 1))
+
+            if is_total_marker_text(row_text):
+
+                continue
+
+        except Exception:
+
+            pass
+
+        n = None
+
+        try:
+
+            n = get_stt_value(ws, r, col, memo)
+
+        except Exception:
+
+            n = None
+
+        if not isinstance(n, int):
+
+            s = str(ws.cell(r, col).value or "").strip()
+
+            if s.isdigit():
+
+                n = int(s)
+
+            else:
+
+                try:
+
+                    f = float(s.replace(",", "."))
+
+                    if f.is_integer():
+
+                        n = int(f)
+
+                except Exception:
+
+                    pass
+
+        if isinstance(n, int):
+
+            rows.append((r, n))
+
+
+
+    if not rows:
+
+        return 0, []
+
+
+
+    rows.sort(key=lambda x: x[0])
+
+    longest_run = 1
+
+    current_run = 1
+
+    increasing_steps = 0
+
+    small_gap_steps = 0
+
+    for prev, cur in zip(rows, rows[1:]):
+
+        prev_row, prev_val = prev
+
+        cur_row, cur_val = cur
+
+        row_gap = cur_row - prev_row
+
+        val_gap = cur_val - prev_val
+
+        if val_gap > 0:
+
+            increasing_steps += 1
+
+        if 0 < row_gap <= 8 and 0 < val_gap <= 8:
+
+            small_gap_steps += 1
+
+            current_run += 1
+
+            longest_run = max(longest_run, current_run)
+
+        else:
+
+            current_run = 1
+
+
+
+    first_row = rows[0][0]
+
+    last_val = rows[-1][1]
+
+    numeric_count = len(rows)
+
+    score = numeric_count * 12 + longest_run * 20 + increasing_steps * 3 + small_gap_steps * 2
+
+    if first_row <= header_row + 3:
+
+        score += 8
+
+    if rows[0][1] in (0, 1):
+
+        score += 6
+
+    if last_val >= numeric_count:
+
+        score += 4
+
+
+
+    return score, rows
+
+
 
 def merge_contiguous_stt_chains(chains):
 
@@ -4573,6 +5039,8 @@ def find_no_column_smart(ws, excel_headers, header_row, total_row):
 
     best_last = 0
 
+    best_score = 0
+
     scan_max_col = min(ws.max_column, 8)
 
     for c in range(1, scan_max_col + 1):
@@ -4580,6 +5048,18 @@ def find_no_column_smart(ws, excel_headers, header_row, total_row):
         chains = find_all_stt_chains(ws, c, header_row, total_row)
 
         if not chains:
+
+            score, rows = score_stt_column_candidate(ws, c, header_row, total_row)
+
+            if score > best_score:
+
+                best_col = c
+
+                best_len = len(rows)
+
+                best_last = rows[-1][1] if rows else 0
+
+                best_score = score
 
             continue
 
@@ -4589,7 +5069,13 @@ def find_no_column_smart(ws, excel_headers, header_row, total_row):
 
         last = best_chain[-1][1]
 
-        if ln > best_len or (ln == best_len and best_col is not None and c < best_col):
+        score, rows = score_stt_column_candidate(ws, c, header_row, total_row)
+
+        if (
+            score > best_score
+            or (score == best_score and ln > best_len)
+            or (score == best_score and ln == best_len and best_col is not None and c < best_col)
+        ):
 
             best_col = c
 
@@ -4597,9 +5083,11 @@ def find_no_column_smart(ws, excel_headers, header_row, total_row):
 
             best_last = last
 
+            best_score = score
 
 
-    if best_col and best_len >= 3:
+
+    if best_col and (best_len >= 3 or best_score >= 40):
 
         return best_col
 
@@ -16121,6 +16609,19 @@ def _apply_rows_insert_before_total_chot(self, wb):
 
 
 
+    updated_total_cols = []
+    try:
+        updated_total_cols = update_total_formulas(
+            ws,
+            total_row_after,
+            effective_first_data_row,
+            data_last_row,
+            excel_headers=excel_headers,
+            no_col=no_col,
+        )
+    except Exception:
+        updated_total_cols = []
+
     force_workbook_recalculate(wb)
 
 
@@ -17095,6 +17596,20 @@ def _v229_apply_rows_to_workbook(self, wb):
 
 
 
+    updated_total_cols = []
+    try:
+        updated_total_cols = update_total_formulas(
+            ws,
+            total_row_after,
+            first_data_row,
+            data_last_row,
+            excel_headers=excel_headers,
+            no_col=no_col,
+        )
+    except Exception:
+        updated_total_cols = []
+
+
     force_workbook_recalculate(wb)
 
 
@@ -17665,6 +18180,28 @@ def _v23_apply_rows_to_workbook(self, wb):
 
     force_workbook_recalculate(wb)
 
+    try:
+
+        learned_profile = _v231_capture_formula_profile_from_sheet(
+
+            ws,
+
+            header_row,
+
+            total_row_after,
+
+            no_col,
+
+            source_name=self.excel_path,
+
+        )
+
+        _v231_store_formula_profile(learned_profile)
+
+    except Exception:
+
+        pass
+
 
 
     validation = _v23_validate_written_cells(ws, target_rows, rows, source_cols, mapping, no_col)
@@ -17902,6 +18439,432 @@ def _v231_parse_sum_first_row(formula, col_letter):
 
 
 
+def _v231_normalize_header_signature(headers):
+
+    sig = []
+
+    for col_idx, name in headers or []:
+
+        n = norm(name)
+
+        if n:
+
+            sig.append({"col": int(col_idx), "name": str(name or ""), "norm": n})
+
+    return sig
+
+
+
+def _v231_profile_similarity(profile, headers, sheet_title=""):
+
+    """
+
+    Chấm điểm mức độ giống nhau giữa workbook hiện tại và profile công thức cũ.
+    """
+
+    prof_headers = profile.get("headers") or []
+
+    current_headers = _v231_normalize_header_signature(headers)
+
+    if not prof_headers or not current_headers:
+
+        return 0
+
+    prof_by_norm = {item.get("norm"): item for item in prof_headers if item.get("norm")}
+
+    current_by_norm = {item.get("norm"): item for item in current_headers if item.get("norm")}
+
+    shared_norms = set(prof_by_norm) & set(current_by_norm)
+
+    if not shared_norms:
+
+        return 0
+
+    pos_score = 0
+
+    for n in shared_norms:
+
+        p_col = int(prof_by_norm[n].get("col") or 0)
+
+        c_col = int(current_by_norm[n].get("col") or 0)
+
+        if p_col and c_col:
+
+            if p_col == c_col:
+
+                pos_score += 5
+
+            elif abs(p_col - c_col) <= 2:
+
+                pos_score += 3
+
+            else:
+
+                pos_score += 1
+
+    overlap_score = len(shared_norms) * 10
+
+    order_bonus = 0
+
+    prof_order = [item.get("norm") for item in prof_headers[:12] if item.get("norm")]
+
+    curr_order = [item.get("norm") for item in current_headers[:12] if item.get("norm")]
+
+    for i, n in enumerate(prof_order[:len(curr_order)]):
+
+        if i < len(curr_order) and curr_order[i] == n:
+
+            order_bonus += 4
+
+    title_bonus = 0
+
+    prof_title = norm(profile.get("sheet_title") or "")
+
+    curr_title = norm(sheet_title)
+
+    if prof_title and curr_title and (prof_title in curr_title or curr_title in prof_title):
+
+        title_bonus += 10
+
+    return overlap_score + pos_score + order_bonus + title_bonus
+
+
+
+def _v231_find_best_formula_profile(ws, header_row, total_row, excel_headers):
+
+    profiles = load_formula_profiles()
+
+    if not profiles:
+
+        return None
+
+    sheet_title = getattr(ws, "title", "") or ""
+
+    best = None
+
+    best_score = 0
+
+    for profile in profiles:
+
+        try:
+
+            score = _v231_profile_similarity(profile, excel_headers, sheet_title)
+
+        except Exception:
+
+            score = 0
+
+        if score > best_score:
+
+            best_score = score
+
+            best = profile
+
+    if best_score >= 18:
+
+        return best
+
+    return None
+
+
+
+def _v231_capture_formula_profile_from_sheet(ws, header_row, total_row, no_col, source_name=""):
+
+    headers = get_headers_smart(ws, header_row)
+
+    header_by_col = {c: name for c, name in headers}
+
+    first_data_row = _v231_detect_first_data_row_strict(ws, header_row, total_row, no_col)
+
+    total_formula_cols = capture_formula_columns(ws, total_row)
+
+    items = []
+
+    for c in total_formula_cols:
+
+        if c == no_col:
+
+            continue
+
+        letter = get_column_letter(c)
+
+        formula = ws.cell(total_row, c).value
+
+        start_row = _v231_parse_sum_first_row(formula, letter) or first_data_row
+
+        items.append({
+
+            "col": c,
+
+            "letter": letter,
+
+            "header": header_by_col.get(c, ""),
+
+            "header_norm": norm(header_by_col.get(c, "")),
+
+            "start_offset": max(0, int(start_row) - int(first_data_row)),
+
+            "formula": str(formula or ""),
+
+        })
+
+    return {
+
+        "id": uuid.uuid4().hex[:12].upper(),
+
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+        "source_name": str(source_name or ""),
+
+        "sheet_title": ws.title,
+
+        "sheet_title_norm": norm(ws.title),
+
+        "header_row": int(header_row or 0),
+
+        "total_row": int(total_row or 0),
+
+        "no_col": int(no_col or 0) if no_col else 0,
+
+        "headers": _v231_normalize_header_signature(headers),
+
+        "sum_columns": items,
+
+    }
+
+
+
+def _v231_store_formula_profile(profile):
+
+    if not profile:
+
+        return
+
+    profiles = load_formula_profiles()
+
+    try:
+
+        target_id = profile.get("id")
+
+        if target_id:
+
+            existing_idx = next((i for i, item in enumerate(profiles) if str(item.get("id") or "") == str(target_id)), None)
+
+            if existing_idx is not None:
+
+                profiles[existing_idx] = profile
+
+            else:
+
+                profiles.insert(0, profile)
+
+        else:
+
+            profiles.insert(0, profile)
+
+        profiles = profiles[:120]
+
+        save_formula_profiles(profiles)
+
+    except Exception:
+
+        pass
+
+
+
+def _v231_collect_stt_rows(ws, col, header_row, total_row):
+
+    memo = {}
+
+    rows = []
+
+    for r in range(header_row + 1, total_row):
+
+        try:
+
+            row_text = " ".join(str(ws.cell(r, c).value or "") for c in range(1, min(ws.max_column, 10) + 1))
+
+            if is_total_marker_text(row_text):
+
+                continue
+
+        except Exception:
+
+            pass
+
+        n = None
+
+        try:
+
+            n = get_stt_value(ws, r, col, memo)
+
+        except Exception:
+
+            n = None
+
+        if not isinstance(n, int):
+
+            s = str(ws.cell(r, col).value or "").strip()
+
+            if s.isdigit():
+
+                n = int(s)
+
+            else:
+
+                try:
+
+                    f = float(s.replace(",", "."))
+
+                    if f.is_integer():
+
+                        n = int(f)
+
+                except Exception:
+
+                    pass
+
+        if isinstance(n, int):
+
+            rows.append((r, n))
+
+    return rows
+
+
+
+def _v231_pick_stt_context(ws, header_row, total_row, excel_headers, preferred_no_col=None):
+
+    """
+
+    Chọn cột STT và dãy STT tin cậy nhất.
+
+    Dùng khi file mới có nhiều dòng trắng hoặc header bị đọc lệch.
+    """
+
+    candidates = []
+
+    if preferred_no_col:
+
+        candidates.append(int(preferred_no_col))
+
+    for col_idx, name in excel_headers or []:
+
+        if is_no_header(name) and col_idx not in candidates:
+
+            candidates.append(int(col_idx))
+
+    for c in range(1, min(ws.max_column, 8) + 1):
+
+        if c not in candidates:
+
+            candidates.append(c)
+
+    best = None
+
+    best_score = -1
+
+    for c in candidates:
+
+        rows = _v231_collect_stt_rows(ws, c, header_row, total_row)
+
+        if not rows:
+
+            continue
+
+        rows.sort(key=lambda x: x[0])
+
+        numeric_count = len(rows)
+
+        longest_run = 1
+
+        current_run = 1
+
+        increasing = 0
+
+        for prev, cur in zip(rows, rows[1:]):
+
+            prev_row, prev_val = prev
+
+            cur_row, cur_val = cur
+
+            if cur_val > prev_val:
+
+                increasing += 1
+
+            if 0 < (cur_row - prev_row) <= 8 and 0 < (cur_val - prev_val) <= 8:
+
+                current_run += 1
+
+                longest_run = max(longest_run, current_run)
+
+            else:
+
+                current_run = 1
+
+        first_row = rows[0][0]
+
+        last_row = rows[-1][0]
+
+        last_no = rows[-1][1]
+
+        score = numeric_count * 12 + longest_run * 20 + increasing * 3
+
+        if first_row <= header_row + 3:
+
+            score += 8
+
+        if rows[0][1] in (0, 1):
+
+            score += 8
+
+        if last_no >= numeric_count:
+
+            score += 4
+
+        if score > best_score:
+
+            best_score = score
+
+            best = {
+
+                "no_col": c,
+
+                "first_row": first_row,
+
+                "last_row": last_row,
+
+                "last_no": last_no,
+
+                "rows": rows,
+
+                "score": score,
+
+            }
+
+    if best:
+
+        return best
+
+    return {
+
+        "no_col": preferred_no_col or 1,
+
+        "first_row": header_row + 1,
+
+        "last_row": max(header_row + 1, total_row - 1),
+
+        "last_no": 0,
+
+        "rows": [],
+
+        "score": 0,
+
+    }
+
+
+
 def _v231_detect_first_data_row_strict(ws, header_row, total_row, no_col):
 
     """Tìm dòng dữ liệu đầu tiên thật sự trước TỔNG, ưu tiên STT số/công thức STT."""
@@ -17948,7 +18911,7 @@ def _v231_detect_first_data_row_strict(ws, header_row, total_row, no_col):
 
 
 
-def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_col):
+def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_col, excel_headers=None, formula_profile=None):
 
     """
 
@@ -17964,6 +18927,98 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
     result = {}
 
+    header_by_norm = {}
+
+    header_by_col = {}
+
+    for col_idx, name in (excel_headers or []):
+
+        n = norm(name)
+
+        if n and n not in header_by_norm:
+
+            header_by_norm[n] = col_idx
+
+        header_by_col[int(col_idx)] = str(name or "")
+
+    def _looks_like_text_or_time_header(name):
+
+        n = norm(name)
+
+        if not n:
+
+            return False
+
+        bad_tokens = {
+
+            "ngay", "gio", "bat dau", "ket thuc", "thoi gian", "ghi chu",
+
+            "noi dung", "ten", "loai", "ma", "stt", "no", "ca",
+
+        }
+
+        return any(tok in n for tok in bad_tokens)
+
+    def _column_has_enough_numbers(col_idx):
+
+        numeric_hits = 0
+
+        text_hits = 0
+
+        for rr in range(default_first_row, total_row):
+
+            vv = ws.cell(rr, col_idx).value
+
+            if vv is None or str(vv).strip() == "":
+
+                continue
+
+            if isinstance(vv, (int, float)):
+
+                numeric_hits += 1
+
+                continue
+
+            svv = str(vv).strip().replace(".", "").replace(",", ".")
+
+            try:
+
+                float(svv)
+
+                numeric_hits += 1
+
+            except Exception:
+
+                text_hits += 1
+
+        return numeric_hits, text_hits
+
+    def _best_start_row_for_col(col_idx):
+
+        for rr in range(default_first_row, total_row):
+
+            vv = ws.cell(rr, col_idx).value
+
+            if isinstance(vv, (int, float)):
+
+                return rr
+
+            svv = str(vv or "").strip().replace(".", "").replace(",", ".")
+
+            try:
+
+                if svv != "":
+
+                    float(svv)
+
+                    return rr
+
+            except Exception:
+
+                pass
+
+        return default_first_row
+
     for c in range(1, ws.max_column + 1):
 
         if c == no_col:
@@ -17976,7 +19031,15 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
         if _v229_is_formula(v):
 
-            first = _v231_parse_sum_first_row(v, letter) or default_first_row
+            parsed_first = _v231_parse_sum_first_row(v, letter)
+
+            if parsed_first:
+
+                first = min(parsed_first, default_first_row)
+
+            else:
+
+                first = default_first_row
 
             result[c] = first
 
@@ -18031,6 +19094,56 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
                     result[c] = default_first_row
 
                     break
+
+            except Exception:
+
+                pass
+
+    # Fallback: nếu dòng TỔNG trống, suy ra các cột số từ dữ liệu bên dưới.
+    if not result:
+
+        for c in range(1, ws.max_column + 1):
+
+            if c == no_col:
+
+                continue
+
+            header_name = header_by_col.get(c, "")
+
+            if _looks_like_text_or_time_header(header_name):
+
+                continue
+
+            numeric_hits, text_hits = _column_has_enough_numbers(c)
+
+            if numeric_hits >= 2 and numeric_hits >= text_hits:
+
+                result[c] = _best_start_row_for_col(c)
+
+    # Nếu sheet mới chưa có công thức tổng rõ ràng, học từ profile file cũ.
+    if formula_profile and isinstance(formula_profile, dict):
+
+        for item in formula_profile.get("sum_columns") or []:
+
+            try:
+
+                header_norm = norm(item.get("header_norm") or item.get("header") or "")
+
+                if not header_norm:
+
+                    continue
+
+                c = header_by_norm.get(header_norm)
+
+                if not c or c == no_col:
+
+                    continue
+
+                if c not in result:
+
+                    offset = int(item.get("start_offset") or 0)
+
+                    result[c] = max(default_first_row, default_first_row + offset)
 
             except Exception:
 
@@ -18162,29 +19275,104 @@ def _v231_apply_rows_to_workbook(self, wb):
 
 
 
-    first_data_row_old, style_row, last_no = _v229_find_stt_before_total(ws, no_col, header_row, total_row)
+    stt_context = _v231_pick_stt_context(ws, header_row, total_row, excel_headers, preferred_no_col=no_col)
+
+    no_col = stt_context.get("no_col") or no_col
+
+    first_data_row_old = stt_context.get("first_row") or header_row + 1
+
+    style_row = stt_context.get("last_row") or max(header_row + 1, total_row - 1)
+
+    last_no = stt_context.get("last_no") or 0
 
     strict_first_row = _v231_detect_first_data_row_strict(ws, header_row, total_row, no_col)
 
     first_data_row = min(first_data_row_old or strict_first_row, strict_first_row)
 
+    formula_profile = _v231_find_best_formula_profile(ws, header_row, total_row, excel_headers)
+
 
 
     # Quan trọng: lấy mẫu công thức TỔNG trước khi insert để giữ đúng dòng bắt đầu SUM.
 
-    sum_col_first_rows = _v231_capture_sum_columns_and_starts(ws, total_row, first_data_row, no_col)
+    sum_col_first_rows = _v231_capture_sum_columns_and_starts(
+
+        ws,
+
+        total_row,
+
+        first_data_row,
+
+        no_col,
+
+        excel_headers=excel_headers,
+
+        formula_profile=formula_profile,
+
+    )
 
 
-
-    insert_at = total_row
 
     row_count = len(rows)
 
-    _v229_merged_ranges_shift_for_insert(ws, insert_at, row_count)
+    blank_rows = find_blank_rows_before_total(
 
-    total_row_after = total_row + row_count
+        ws,
 
-    target_rows = list(range(insert_at, insert_at + row_count))
+        header_row,
+
+        total_row,
+
+        row_count,
+
+        mapping,
+
+        no_col,
+
+    )
+
+    target_rows = list(blank_rows[:row_count])
+
+    missing_count = row_count - len(target_rows)
+
+    insert_at = None
+
+    if missing_count > 0:
+
+        insert_at = total_row
+
+        _v229_merged_ranges_shift_for_insert(ws, insert_at, missing_count)
+
+        target_rows.extend(range(insert_at, insert_at + missing_count))
+
+        total_row_after = total_row + missing_count
+
+    else:
+
+        total_row_after = total_row
+
+    if not target_rows:
+
+        raise ValueError("Không tìm thấy dòng trống phù hợp để ghi dữ liệu.")
+
+    effective_first_data_row = min(first_data_row, min(target_rows))
+    data_last_row = max(target_rows)
+
+    sum_col_first_rows = _v231_capture_sum_columns_and_starts(
+
+        ws,
+
+        total_row,
+
+        effective_first_data_row,
+
+        no_col,
+
+        excel_headers=excel_headers,
+
+        formula_profile=formula_profile,
+
+    )
 
 
 
@@ -18192,7 +19380,9 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         dst_row = target_rows[i]
 
-        _v229_safe_copy_row(ws, style_row, dst_row)
+        if dst_row >= total_row:
+
+            _v229_safe_copy_row(ws, style_row, dst_row)
 
         self._safe_set_cell_value(ws, dst_row, no_col, last_no + i + 1)
 
@@ -18236,7 +19426,7 @@ def _v231_apply_rows_to_workbook(self, wb):
 
     # CHỐT: SUM hết tới dòng ngay trước dòng TỔNG mới.
 
-    sum_last_row = total_row_after - 1
+    sum_last_row = data_last_row
 
     sum_columns = sorted(sum_col_first_rows.keys())
 
@@ -18259,9 +19449,21 @@ def _v231_apply_rows_to_workbook(self, wb):
             pass
 
 
+    updated_total_cols = []
+    try:
+        updated_total_cols = update_total_formulas(
+            ws,
+            total_row_after,
+            first_data_row,
+            data_last_row,
+            excel_headers=excel_headers,
+            no_col=no_col,
+        )
+    except Exception:
+        updated_total_cols = []
+
 
     force_workbook_recalculate(wb)
-
 
 
     validation = _v23_validate_written_cells(ws, target_rows, rows, source_cols, mapping, no_col)
@@ -18298,7 +19500,23 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         "first_data_row_strict": strict_first_row,
 
+        "stt_context": {
+
+            "no_col": no_col,
+
+            "first_row": first_data_row_old,
+
+            "style_row": style_row,
+
+            "last_no": last_no,
+
+            "score": stt_context.get("score", 0),
+
+        },
+
         "sum_last_row_before_total": sum_last_row,
+
+        "updated_total_cols": updated_total_cols,
 
         "sum_columns": [
 
@@ -18346,7 +19564,7 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         "last_stt_before": last_no,
 
-        "start_fill_row": insert_at,
+        "start_fill_row": insert_at if insert_at is not None else min(target_rows),
 
         "next_stt_start": last_no + 1,
 
@@ -18354,7 +19572,7 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         "total_row_after": total_row_after,
 
-        "sum_first_row": first_data_row,
+        "sum_first_row": effective_first_data_row,
 
         "sum_last_row": sum_last_row,
 
