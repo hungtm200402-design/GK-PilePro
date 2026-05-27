@@ -116,6 +116,34 @@ def sharp_icon_image(image, size):
     return img
 
 
+
+def sharp_icon_image_small(image, size):
+
+    """
+
+    Resize an icon aggressively for very small taskbar/window sizes.
+
+    """
+
+    img = image.convert("RGBA").resize(size, Image.Resampling.LANCZOS)
+
+    try:
+
+        from PIL import ImageEnhance, ImageFilter
+
+        img = ImageEnhance.Sharpness(img).enhance(1.9)
+
+        img = ImageEnhance.Contrast(img).enhance(1.14)
+
+        img = img.filter(ImageFilter.UnsharpMask(radius=0.35, percent=245, threshold=0))
+
+    except Exception:
+
+        pass
+
+    return img
+
+
 def get_windows_work_area():
     try:
         if not hasattr(ctypes, "windll") or wintypes is None:
@@ -206,17 +234,7 @@ def build_simplified_taskbar_icon(size=256):
 
 
 
-    # Rounded square background, but keep the inner content large and bold.
-
-    draw.rounded_rectangle((6, 6, size - 6, size - 6), radius=max(20, size // 8), fill=bg)
-
-    draw.rounded_rectangle((12, 12, size - 12, size - 12), radius=max(18, size // 9), fill=bg2)
-
-    draw.rounded_rectangle((18, 18, size - 18, size - 18), radius=max(16, size // 10), outline=accent, width=max(2, size // 110))
-
-
-
-    # A compact mark that stays readable at 16 px.
+    # A compact mark that stays readable at 16 px without a dark box.
 
     try:
 
@@ -246,9 +264,9 @@ def build_simplified_taskbar_icon(size=256):
 
     bar_y = int(size * 0.78)
 
-    draw.rounded_rectangle((int(size * 0.14), bar_y, int(size * 0.86), bar_y + max(9, size // 18)), radius=max(4, size // 28), fill="#09213c")
+    draw.rounded_rectangle((int(size * 0.14), bar_y, int(size * 0.86), bar_y + max(9, size // 18)), radius=max(4, size // 28), fill="#0d2748")
 
-    draw.rectangle((int(size * 0.43), int(size * 0.14), int(size * 0.49), int(size * 0.75)), fill="#091b31")
+    draw.rectangle((int(size * 0.43), int(size * 0.14), int(size * 0.49), int(size * 0.75)), fill="#1d3557")
 
     draw.rectangle((int(size * 0.49), int(size * 0.14), int(size * 0.52), int(size * 0.75)), fill=accent)
 
@@ -284,11 +302,11 @@ def build_detailed_app_icon(source_path, size=256):
 
         img = img.crop(bbox)
 
-    canvas = Image.new("RGBA", (size, size), (17, 17, 17, 255))
+    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
 
-    fit_w = int(size * 0.88)
+    fit_w = int(size * 1.00)
 
-    fit_h = int(size * 0.88)
+    fit_h = int(size * 1.00)
 
     scale = min(fit_w / img.size[0], fit_h / img.size[1])
 
@@ -296,7 +314,7 @@ def build_detailed_app_icon(source_path, size=256):
 
     img = img.resize(new_size, Image.Resampling.LANCZOS)
 
-    canvas.alpha_composite(img, ((size - new_size[0]) // 2, int(size * 0.06)))
+    canvas.alpha_composite(img, ((size - new_size[0]) // 2, 0))
 
     img = canvas
 
@@ -304,17 +322,80 @@ def build_detailed_app_icon(source_path, size=256):
 
         from PIL import ImageEnhance, ImageFilter
 
-        img = ImageEnhance.Sharpness(img).enhance(1.15)
+        img = ImageEnhance.Sharpness(img).enhance(1.6)
 
-        img = ImageEnhance.Contrast(img).enhance(1.04)
+        img = ImageEnhance.Contrast(img).enhance(1.12)
 
-        img = img.filter(ImageFilter.UnsharpMask(radius=0.7, percent=140, threshold=1))
+        img = img.filter(ImageFilter.UnsharpMask(radius=0.4, percent=230, threshold=0))
 
     except Exception:
 
         pass
 
     return img
+
+
+
+def build_icon_variant(source_path, size):
+
+    """
+
+    Build a size-specific transparent app icon variant from the logo source.
+
+    """
+
+    img = Image.open(source_path).convert("RGBA")
+
+    w, h = img.size
+
+    img = img.crop((0, 0, w, int(h * 0.76)))
+
+    bbox = img.getchannel("A").getbbox()
+
+    if bbox:
+
+        img = img.crop(bbox)
+
+    params = {
+        16: (1.00, 1.95, 1.16, 0.34, 250),
+        32: (1.00, 1.80, 1.14, 0.36, 235),
+        48: (1.00, 1.65, 1.12, 0.40, 220),
+        64: (1.00, 1.50, 1.10, 0.42, 200),
+        128: (1.00, 1.34, 1.08, 0.46, 175),
+        256: (1.00, 1.22, 1.06, 0.50, 155),
+    }
+
+    fit_ratio, sharpness, contrast, radius, percent = params.get(int(size), (1.00, 1.45, 1.08, 0.45, 180))
+
+    canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+
+    fit_w = int(size * fit_ratio)
+
+    fit_h = int(size * fit_ratio)
+
+    scale = min(fit_w / img.size[0], fit_h / img.size[1])
+
+    new_size = (max(1, int(img.size[0] * scale)), max(1, int(img.size[1] * scale)))
+
+    img = img.resize(new_size, Image.Resampling.LANCZOS)
+
+    canvas.alpha_composite(img, ((size - new_size[0]) // 2, 0))
+
+    try:
+
+        from PIL import ImageEnhance, ImageFilter
+
+        canvas = ImageEnhance.Sharpness(canvas).enhance(sharpness)
+
+        canvas = ImageEnhance.Contrast(canvas).enhance(contrast)
+
+        canvas = canvas.filter(ImageFilter.UnsharpMask(radius=radius, percent=percent, threshold=0))
+
+    except Exception:
+
+        pass
+
+    return canvas
 
 
 
@@ -12054,23 +12135,22 @@ class App:
 
         try:
 
-            base = build_detailed_app_icon(resource_path(*APP_LOGO_PNG.parts), 256)
+            logo_path = resource_path(*APP_LOGO_PNG.parts)
+            detailed_base = build_detailed_app_icon(logo_path, 256) if logo_path.exists() else build_simplified_taskbar_icon(256)
 
             icon_imgs = [
 
-                ImageTk.PhotoImage(base.resize((16, 16), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 16) if logo_path.exists() else sharp_icon_image_small(detailed_base, (16, 16))),
 
-                ImageTk.PhotoImage(base.resize((20, 20), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 32) if logo_path.exists() else sharp_icon_image_small(detailed_base, (32, 32))),
 
-                ImageTk.PhotoImage(base.resize((24, 24), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 48) if logo_path.exists() else sharp_icon_image_small(detailed_base, (48, 48))),
 
-                ImageTk.PhotoImage(base.resize((32, 32), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 64) if logo_path.exists() else sharp_icon_image_small(detailed_base, (64, 64))),
 
-                ImageTk.PhotoImage(base.resize((48, 48), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 128) if logo_path.exists() else sharp_icon_image_small(detailed_base, (128, 128))),
 
-                ImageTk.PhotoImage(base.resize((64, 64), Image.Resampling.LANCZOS)),
-
-                ImageTk.PhotoImage(base.resize((128, 128), Image.Resampling.LANCZOS)),
+                ImageTk.PhotoImage(build_icon_variant(logo_path, 256) if logo_path.exists() else sharp_icon_image(detailed_base, (256, 256))),
 
             ]
 

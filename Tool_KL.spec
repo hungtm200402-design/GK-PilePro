@@ -73,7 +73,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Tool_KL_UI8',
+    name='GK PilePro',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
