@@ -753,8 +753,24 @@ class RoundedMappingDropdown(tk.Canvas):
         self.radius = radius
 
         self._combo_callbacks = []
+        self.popup = None
 
         self.menu = tk.Menu(self, tearoff=0)
+        try:
+            self.menu.configure(
+                bg="#ffffff",
+                fg=UI_TEXT,
+                activebackground="#e8f1ff",
+                activeforeground=UI_PRIMARY,
+                bd=1,
+                relief="solid",
+                font=ui_font(10),
+                cursor="hand2",
+                activeborderwidth=0,
+                borderwidth=1,
+            )
+        except Exception:
+            pass
 
         self._rebuild_menu()
 
@@ -787,6 +803,8 @@ class RoundedMappingDropdown(tk.Canvas):
         for value in self.values:
 
             self.menu.add_command(label=value, command=lambda v=value: self._select(v))
+        if getattr(self, "popup", None) is not None and self.popup.winfo_exists():
+            self._build_popup()
 
 
 
@@ -877,6 +895,7 @@ class RoundedMappingDropdown(tk.Canvas):
     def _select(self, value):
 
         self.variable.set(value)
+        self._close_popup()
 
         for callback in list(self._combo_callbacks):
 
@@ -891,20 +910,65 @@ class RoundedMappingDropdown(tk.Canvas):
 
 
     def _open_menu(self, event=None):
-
+        self._close_popup()
+        if not self.values:
+            return
+        self.popup = tk.Toplevel(self)
+        self.popup.overrideredirect(True)
         try:
+            self.popup.attributes("-topmost", True)
+        except Exception:
+            pass
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height() + scale_px(2)
+        width = max(self.width_px, scale_px(150))
+        row_h = scale_px(28)
+        height = max(scale_px(24), row_h * len(self.values) + scale_px(6))
+        self.popup.geometry(f"{width}x{height}+{x}+{y}")
+        self.popup.configure(bg="#d8e5f4")
+        self.popup.bind("<FocusOut>", lambda _e: self._close_popup())
+        self.popup.bind("<Escape>", lambda _e: self._close_popup())
+        self.popup.focus_force()
+        self._build_popup()
 
-            self.menu.tk_popup(self.winfo_rootx(), self.winfo_rooty() + self.winfo_height())
-
-        finally:
-
+    def _close_popup(self):
+        popup = getattr(self, "popup", None)
+        self.popup = None
+        if popup is not None:
             try:
-
-                self.menu.grab_release()
-
+                if popup.winfo_exists():
+                    popup.destroy()
             except Exception:
-
                 pass
+
+    def _build_popup(self):
+        popup = getattr(self, "popup", None)
+        if popup is None or not popup.winfo_exists():
+            return
+        for child in popup.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        outer = tk.Frame(popup, bg="#d8e5f4", bd=0, highlightthickness=0)
+        outer.pack(fill="both", expand=True)
+        inner = tk.Frame(outer, bg="#ffffff", bd=1, relief="solid", highlightthickness=0)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+        for value in self.values:
+            item = tk.Label(
+                inner,
+                text=value,
+                bg="#ffffff",
+                fg=UI_TEXT,
+                font=ui_font(10),
+                anchor="w",
+                padx=12,
+                pady=4,
+            )
+            item.pack(fill="x")
+            item.bind("<Enter>", lambda _e, w=item: w.configure(bg="#e8f1ff", fg=UI_PRIMARY))
+            item.bind("<Leave>", lambda _e, w=item: w.configure(bg="#ffffff", fg=UI_TEXT))
+            item.bind("<Button-1>", lambda _e, v=value: self._select(v))
 
 
 
@@ -962,7 +1026,7 @@ class RoundedMappingDropdown(tk.Canvas):
 
         arrow_x = w - 16
 
-        self.create_line(arrow_x - 8, 6, arrow_x - 8, self.height_px - 6, fill=self.border_color)
+        self.create_line(arrow_x - 8, 6, arrow_x - 8, self.height_px - 6, fill="#d5e3f5")
 
         self.create_polygon(
 
@@ -978,15 +1042,127 @@ class RoundedMappingDropdown(tk.Canvas):
 
             self.height_px // 2 + 3,
 
-            fill=UI_MUTED,
+            fill=UI_PRIMARY,
 
-            outline=UI_MUTED,
+            outline=UI_PRIMARY,
 
         )
 
-        text = self._fit_text(self.variable.get(), max(10, w - 34))
+        text = self._fit_text(self.variable.get(), max(10, w - 38))
 
-        self.create_text(10, self.height_px // 2, text=text, fill=UI_TEXT, font=ui_font(10), anchor="w")
+        self.create_text(12, self.height_px // 2, text=text, fill=UI_TEXT, font=ui_font(10), anchor="w")
+
+
+
+class RoundedMappingEntry(tk.Canvas):
+
+    def __init__(
+
+        self,
+
+        parent,
+
+        textvariable,
+
+        bg_color,
+
+        border_color,
+
+        width=220,
+
+        height=30,
+
+        radius=7,
+
+        font=None,
+
+    ):
+
+        self.width_px = scale_px(width)
+        self.height_px = scale_px(height)
+
+        super().__init__(
+
+            parent,
+
+            width=self.width_px,
+
+            height=self.height_px,
+
+            bg=parent.cget("bg") if hasattr(parent, "cget") else UI_SURFACE,
+
+            bd=0,
+
+            highlightthickness=0,
+
+        )
+
+        self.variable = textvariable or tk.StringVar()
+        self.bg_color = bg_color
+        self.border_color = border_color
+        self.radius = radius
+        self.border_color_current = border_color
+        self._entry_font = font or ui_font(11)
+
+        self.inner = tk.Frame(self, bg=self.bg_color, bd=0, highlightthickness=0)
+        self.entry = tk.Entry(
+            self.inner,
+            textvariable=self.variable,
+            relief="flat",
+            bd=0,
+            bg=self.bg_color,
+            fg=UI_TEXT,
+            insertbackground=UI_TEXT,
+            highlightthickness=0,
+            font=self._entry_font,
+        )
+        self._window_id = self.create_window((0, 0), window=self.inner, anchor="nw")
+
+        self.bind("<Configure>", self._draw)
+        self.entry.bind("<FocusIn>", self._focus)
+        self.entry.bind("<FocusOut>", self._blur)
+        self.inner.bind("<Button-1>", lambda _e: self.entry.focus_set())
+        self.bind("<Button-1>", lambda _e: self.entry.focus_set())
+        self.entry.bind("<Button-1>", lambda _e: self.entry.focus_set())
+        self.variable.trace_add("write", lambda *_: self._draw())
+        self._draw()
+
+    def _focus(self, _event=None):
+        self.border_color_current = UI_PRIMARY
+        self._draw()
+
+    def _blur(self, _event=None):
+        self.border_color_current = self.border_color
+        self._draw()
+
+    def _draw(self, _event=None):
+        self.delete("bg")
+        w = max(40, self.winfo_width())
+        h = max(20, self.winfo_height())
+        border = getattr(self, "border_color_current", self.border_color)
+        self._round_rect(1, 1, w - 1, h - 1, self.radius, fill=self.bg_color, outline=border, tags=("bg",))
+        pad_x = max(10, scale_px(10))
+        pad_y = max(5, scale_px(5))
+        inner_w = max(1, w - pad_x * 2)
+        inner_h = max(1, h - pad_y * 2)
+        self.coords(self._window_id, pad_x, pad_y)
+        self.itemconfigure(self._window_id, width=inner_w, height=inner_h)
+        self.tag_raise(self._window_id)
+        self.inner.configure(bg=self.bg_color, width=inner_w, height=inner_h)
+        self.entry.configure(width=max(1, int(inner_w / 8)))
+        try:
+            self.entry.pack_forget()
+        except Exception:
+            pass
+        self.entry.pack(fill="both", expand=True)
+
+    def _round_rect(self, x1, y1, x2, y2, radius=7, **kwargs):
+        points = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        return self.create_polygon(points, smooth=True, splinesteps=18, **kwargs)
 
 
 
@@ -13255,9 +13431,29 @@ class App:
 
         self.history_filter_var = tk.StringVar(value="")
 
-        filter_entry = tk.Entry(filter_row, textvariable=self.history_filter_var, width=26, relief="solid", bd=1, bg="#ffffff", fg=UI_TEXT, highlightthickness=1, highlightbackground="#d7e3f2")
-        filter_entry.pack(side="left")
+        filter_shell = RoundedMappingEntry(
+            filter_row,
+            textvariable=self.history_filter_var,
+            bg_color="#f8fbff",
+            border_color="#bcd2ee",
+            width=200,
+            height=30,
+            radius=8,
+            font=ui_font(11),
+        )
+        filter_shell.pack(side="left")
+        filter_entry = filter_shell.entry
         filter_entry.bind("<KeyRelease>", lambda _e: self._sync_history_view())
+        if not getattr(self, "_history_filter_blur_bound", False):
+            def _clear_history_filter_focus(event, shell=filter_shell):
+                try:
+                    if str(event.widget).startswith(str(shell)):
+                        return
+                    self.root.focus_set()
+                except Exception:
+                    pass
+            self.root.bind_all("<Button-1>", _clear_history_filter_focus, add="+")
+            self._history_filter_blur_bound = True
 
         ui_button(filter_row, "Xóa lọc", lambda: (self.history_filter_var.set(""), self._sync_history_view()), width=10, variant="soft").pack(side="left", padx=(8, 0))
 
@@ -13270,7 +13466,7 @@ class App:
             variable=self.history_kind_var,
             bg_color="#f8fbff",
             border_color="#bcd2ee",
-            width=140,
+            width=150,
             height=30,
             radius=8,
         )
