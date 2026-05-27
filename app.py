@@ -2854,8 +2854,6 @@ def copy_style_row(ws, src_row, dst_row, max_col):
 
             pass
 
-
-
     try:
 
         ws.row_dimensions[dst_row].height = ws.row_dimensions[src_row].height
@@ -7541,7 +7539,9 @@ class App:
 
         if not is_admin_build():
 
-            self.user_role = resolve_member_display_name(get_machine_code())
+            self.user_name = resolve_member_display_name(get_machine_code())
+
+            self.user_role = "Thành viên"
 
         self.user_role_var = tk.StringVar(value=self.user_role)
 
@@ -7834,6 +7834,8 @@ class App:
                 for child in mid.winfo_children() + right.winfo_children():
 
                     child.bind("<Double-Button-1>", open_row)
+
+            self._bind_recent_mousewheel_recursive()
 
         except Exception:
 
@@ -9154,19 +9156,19 @@ class App:
 
                 tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} workflow", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
-                status_bg, status_border, accent = self._history_status_style(
-                    {"status": "error" if group["has_error"] else "success", "action": "export_excel" if group["has_export"] else ("ocr_done" if group["has_ocr"] else "")}
-                )
+            status_bg, status_border, accent = self._history_status_style(
+                {"status": "error" if group["has_error"] else "success", "action": "export_excel" if group["has_export"] else ("ocr_done" if group["has_ocr"] else "")}
+            )
 
-                row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
-                row.pack(fill="x", pady=(0, 8))
+            row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
+            row.pack(fill="x", pady=(0, 8))
 
-                accent_bar = tk.Frame(row, bg=accent, width=6)
-                accent_bar.pack(side="left", fill="y", padx=(0, 12))
-                accent_bar.pack_propagate(False)
+            accent_bar = tk.Frame(row, bg=accent, width=6)
+            accent_bar.pack(side="left", fill="y", padx=(0, 12))
+            accent_bar.pack_propagate(False)
 
-                body = tk.Frame(row, bg=status_bg)
-                body.pack(side="left", fill="both", expand=True)
+            body = tk.Frame(row, bg=status_bg)
+            body.pack(side="left", fill="both", expand=True)
 
             head = tk.Frame(body, bg=status_bg)
 
@@ -9301,6 +9303,8 @@ class App:
 
                 child.bind("<Double-Button-1>", open_history_item)
 
+        self._bind_history_mousewheel_recursive()
+
 
     def _render_history_ocr_view(self):
 
@@ -9422,14 +9426,14 @@ class App:
                 tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
                 tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} OCR", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
-                status_bg, status_border, accent = self._history_status_style({"status": "error" if group["has_error"] else "success", "action": "ocr_done"})
+            status_bg, status_border, accent = self._history_status_style({"status": "error" if group["has_error"] else "success", "action": "ocr_done"})
 
-                row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
-                row.pack(fill="x", pady=(0, 8))
+            row = tk.Frame(current_day_box, bg=status_bg, highlightthickness=1, highlightbackground=status_border, padx=12, pady=10)
+            row.pack(fill="x", pady=(0, 8))
 
-                accent_bar = tk.Frame(row, bg=accent, width=6)
-                accent_bar.pack(side="left", fill="y", padx=(0, 12))
-                accent_bar.pack_propagate(False)
+            accent_bar = tk.Frame(row, bg=accent, width=6)
+            accent_bar.pack(side="left", fill="y", padx=(0, 12))
+            accent_bar.pack_propagate(False)
 
             thumb_box = tk.Frame(row, bg=status_bg, width=96, height=120)
             thumb_box.pack(side="left", padx=(0, 12))
@@ -9576,6 +9580,7 @@ class App:
                 grouped_items[0]["entries"][0] if grouped_items and grouped_items[0]["entries"] else None,
             )
 
+        self._bind_history_mousewheel_recursive()
         self._render_history_detail(self.history_selected_entry)
 
 
@@ -9711,6 +9716,187 @@ class App:
             canvas = getattr(self, "home_body_canvas", None) or getattr(self, "content_canvas", None)
             if canvas is not None:
                 canvas.unbind_all("<MouseWheel>")
+        except Exception:
+            pass
+
+
+    def _history_widget_contains(self, widget):
+        targets = {
+            getattr(self, "history_canvas", None),
+            getattr(self, "history_inner", None),
+            getattr(self, "history_list_panel", None),
+        }
+        while widget is not None:
+            if widget in targets:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+
+    def _on_history_mousewheel(self, event):
+        canvas = getattr(self, "history_canvas", None)
+        if canvas is None:
+            return
+        if not self._history_widget_contains(getattr(event, "widget", None)):
+            return
+        try:
+            delta = getattr(event, "delta", 0) or 0
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return
+            num = getattr(event, "num", None)
+            if num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif num == 5:
+                canvas.yview_scroll(1, "units")
+        except Exception:
+            pass
+
+
+    def _bind_history_mousewheel(self, event=None):
+        try:
+            for widget in (
+                getattr(self, "history_canvas", None),
+                getattr(self, "history_inner", None),
+                getattr(self, "history_list_panel", None),
+            ):
+                if widget is None:
+                    continue
+                widget.bind("<MouseWheel>", self._on_history_mousewheel, add="+")
+                widget.bind("<Button-4>", self._on_history_mousewheel, add="+")
+                widget.bind("<Button-5>", self._on_history_mousewheel, add="+")
+        except Exception:
+            pass
+
+
+    def _unbind_history_mousewheel(self, event=None):
+        try:
+            for widget in (
+                getattr(self, "history_canvas", None),
+                getattr(self, "history_inner", None),
+                getattr(self, "history_list_panel", None),
+            ):
+                if widget is None:
+                    continue
+                widget.unbind("<MouseWheel>")
+                widget.unbind("<Button-4>")
+                widget.unbind("<Button-5>")
+        except Exception:
+            pass
+
+
+    def _bind_history_mousewheel_recursive(self, widget=None):
+        widget = widget or getattr(self, "history_inner", None)
+        if widget is None:
+            return
+        try:
+            widget.bind("<MouseWheel>", self._on_history_mousewheel, add="+")
+            widget.bind("<Button-4>", self._on_history_mousewheel, add="+")
+            widget.bind("<Button-5>", self._on_history_mousewheel, add="+")
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._bind_history_mousewheel_recursive(child)
+        except Exception:
+            pass
+
+
+    def _recent_widget_contains(self, widget):
+        targets = {
+            getattr(self, "excel_recent_canvas", None),
+            getattr(self, "excel_recent_inner", None),
+            getattr(self, "excel_recent_panel", None),
+        }
+        while widget is not None:
+            if widget in targets:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+
+    def _on_recent_mousewheel(self, event):
+        canvas = getattr(self, "excel_recent_canvas", None)
+        if canvas is None:
+            return
+        if not self._recent_widget_contains(getattr(event, "widget", None)):
+            return
+        try:
+            delta = getattr(event, "delta", 0) or 0
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return
+            num = getattr(event, "num", None)
+            if num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif num == 5:
+                canvas.yview_scroll(1, "units")
+        except Exception:
+            pass
+
+
+    def _bind_recent_mousewheel_recursive(self, widget=None):
+        widget = widget or getattr(self, "excel_recent_inner", None)
+        if widget is None:
+            return
+        try:
+            widget.bind("<MouseWheel>", self._on_recent_mousewheel, add="+")
+            widget.bind("<Button-4>", self._on_recent_mousewheel, add="+")
+            widget.bind("<Button-5>", self._on_recent_mousewheel, add="+")
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._bind_recent_mousewheel_recursive(child)
+        except Exception:
+            pass
+
+
+    def _mapping_widget_contains(self, widget):
+        targets = {
+            getattr(self, "mapping_templates_canvas", None),
+            getattr(self, "mapping_templates_inner", None),
+        }
+        while widget is not None:
+            if widget in targets:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+
+    def _on_mapping_mousewheel(self, event):
+        canvas = getattr(self, "mapping_templates_canvas", None)
+        if canvas is None:
+            return
+        if not self._mapping_widget_contains(getattr(event, "widget", None)):
+            return
+        try:
+            delta = getattr(event, "delta", 0) or 0
+            if delta:
+                canvas.yview_scroll(int(-1 * (delta / 120)), "units")
+                return
+            num = getattr(event, "num", None)
+            if num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif num == 5:
+                canvas.yview_scroll(1, "units")
+        except Exception:
+            pass
+
+
+    def _bind_mapping_mousewheel_recursive(self, widget=None):
+        widget = widget or getattr(self, "mapping_templates_inner", None)
+        if widget is None:
+            return
+        try:
+            widget.bind("<MouseWheel>", self._on_mapping_mousewheel, add="+")
+            widget.bind("<Button-4>", self._on_mapping_mousewheel, add="+")
+            widget.bind("<Button-5>", self._on_mapping_mousewheel, add="+")
+        except Exception:
+            pass
+        try:
+            for child in widget.winfo_children():
+                self._bind_mapping_mousewheel_recursive(child)
         except Exception:
             pass
 
@@ -10186,6 +10372,8 @@ class App:
 
                 tk.Label(rows, text=f"... còn {total - 14} cặp mapping", bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
 
+        self._bind_mapping_mousewheel_recursive()
+
 
     def _refresh_nav_state(self):
 
@@ -10234,6 +10422,14 @@ class App:
             except Exception:
 
                 pass
+
+
+    def _activate_nav_item(self, page_name, callback=None):
+        self.current_page = page_name
+        self._refresh_nav_state()
+        if callback is not None:
+            return callback()
+        return None
 
 
 
@@ -10620,6 +10816,7 @@ class App:
 
 
     def show_settings_dialog(self, event=None):
+        return_page = getattr(self, "current_page", "home")
         win = tk.Toplevel(self.root)
         win.title("Hiển thị")
         win.configure(bg="#1f2128")
@@ -11044,6 +11241,15 @@ class App:
         tk.Label(note, text="Lưu ý", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
         tk.Label(note, text="Lưu để áp dụng cả cấu hình hiển thị lẫn API, sau đó ứng dụng sẽ khởi động lại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
 
+        def return_to_previous_page():
+            try:
+                self.show_page(return_page)
+            except Exception:
+                try:
+                    self.show_home_page()
+                except Exception:
+                    pass
+
         def resolve_selected_profile():
             mode_name = mode_var.get()
             if mode_name == "Tự động":
@@ -11072,10 +11278,13 @@ class App:
                 self.status.config(text="Đã lưu cấu hình hiển thị.")
             except Exception:
                 pass
+            return_to_previous_page()
             win.destroy()
             self.refresh_ui()
 
-        cancel_btn = dark_button(footer, "Hủy", win.destroy, width=12)
+        win.protocol("WM_DELETE_WINDOW", lambda: (return_to_previous_page(), win.destroy()))
+
+        cancel_btn = dark_button(footer, "Hủy", lambda: (return_to_previous_page(), win.destroy()), width=12)
         cancel_btn.pack(side="right")
         save_btn = dark_button(footer, "Lưu & khởi động lại", save, width=21, accent_button=True)
         save_btn.pack(side="right", padx=(0, 10))
@@ -11093,6 +11302,7 @@ class App:
 
 
     def show_help_dialog(self, event=None):
+        return_page = getattr(self, "current_page", "home")
 
         messagebox.showinfo(
 
@@ -11115,10 +11325,15 @@ class App:
             "7. Bấm 'Điền vào Excel' để ghi trực tiếp dữ liệu vào tệp Excel của bạn."
 
         )
+        try:
+            self.show_page(return_page)
+        except Exception:
+            self.show_home_page()
 
 
 
     def show_about_dialog(self, event=None):
+        return_page = getattr(self, "current_page", "home")
 
         messagebox.showinfo(
 
@@ -11133,6 +11348,10 @@ class App:
             "Ứng dụng được thiết kế giúp tự động hóa quá trình xử Khối Lượng và Phiếu Cọc xây dựng."
 
         )
+        try:
+            self.show_page(return_page)
+        except Exception:
+            self.show_home_page()
 
 
 
@@ -12320,25 +12539,25 @@ class App:
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_excel_page)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_excel_page))
 
             elif page_id == "home":
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_home_page)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_home_page))
 
             elif page_id == "history":
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_history_page)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_history_page))
 
             elif page_id == "mapping":
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_mapping_page)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_mapping_page))
 
             elif page_id == "settings":
 
@@ -12373,7 +12592,7 @@ class App:
 
         user_inner = tk.Frame(user_box, bg=UI_SURFACE)
 
-        user_inner.pack(anchor="n", fill="both")
+        user_inner.pack(anchor="n", fill="both", expand=True)
 
         if self.tiny_ui or self.micro_ui:
             self.sidebar_member_role_label = tk.Label(
@@ -12421,16 +12640,21 @@ class App:
             justify="center",
 
         )
-        self.status.pack(anchor="center", pady=(4 if (self.tiny_ui or self.micro_ui) else 8, 0))
+        self.status.pack(anchor="center", pady=(3 if (self.tiny_ui or self.micro_ui) else 5, 0))
 
         if is_admin_build():
 
             admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
 
-            admin_btn_row.pack(anchor="center", pady=(2 if (self.tiny_ui or self.micro_ui) else 4, 0))
+            admin_btn_row.pack(anchor="center", pady=(0 if (self.tiny_ui or self.micro_ui) else 1, 0))
 
-            if not (self.tiny_ui or self.micro_ui):
-                ui_button(admin_btn_row, "Duyệt máy", self.open_admin_approval_panel, width=11, variant="warn").pack(anchor="center")
+            ui_button(
+                admin_btn_row,
+                "Duyệt máy",
+                self.open_admin_approval_panel,
+                width=10 if (self.tiny_ui or self.micro_ui) else 11,
+                variant="warn",
+            ).pack(anchor="center")
 
 
 
@@ -12466,9 +12690,9 @@ class App:
 
             profile.pack(side="left")
 
-            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center")
-
             tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
+
+            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
 
 
 
@@ -12888,13 +13112,21 @@ class App:
                 if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
                     return
                 target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
+                target_top -= scale_px(44 if (self.tiny_ui or self.micro_ui) else 56)
+                max_top = max(0, int(sidebar.winfo_height() - member_box.winfo_reqheight() - scale_px(12)))
+                target_top = min(int(target_top), max_top)
                 current_top = spacer.winfo_y()
                 new_height = max(0, int(target_top - current_top))
                 if new_height != int(str(spacer.cget("height") or 0)):
                     spacer.configure(height=new_height)
-                target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
-                if target_height:
-                    target_height = max(target_height, 112 if (self.tiny_ui or self.micro_ui) else 124)
+                if is_admin_build():
+                    target_height = max(0, int(member_box.winfo_reqheight() or 0))
+                    target_height = max(target_height, scale_px(120 if (self.tiny_ui or self.micro_ui) else 128))
+                else:
+                    target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
+                    min_member_height = 112 if (self.tiny_ui or self.micro_ui) else 124
+                    if target_height:
+                        target_height = max(target_height, scale_px(min_member_height))
                 if target_height and member_box.winfo_height() != target_height:
                     member_box.configure(height=target_height)
             except Exception:
@@ -12992,6 +13224,7 @@ class App:
 
         history_list_panel = tk.Frame(history_body, bg=UI_SURFACE)
         history_list_panel.pack(side="left", fill="both", expand=True)
+        self.history_list_panel = history_list_panel
 
         self.history_canvas = tk.Canvas(history_list_panel, bg=UI_SURFACE, highlightthickness=0, bd=0)
         history_scroll = ttk.Scrollbar(history_list_panel, orient="vertical", command=self.history_canvas.yview)
@@ -13014,6 +13247,7 @@ class App:
 
         self.history_inner.bind("<Configure>", _sync_history_scrollregion)
         self.history_canvas.bind("<Configure>", lambda e: self.history_canvas.itemconfigure(self.history_canvas_window, width=e.width))
+        self._bind_history_mousewheel()
 
         detail_panel = card(history_body, padx=12, pady=12)
         detail_panel.pack(side="right", fill="y", padx=(12, 0))
@@ -13092,6 +13326,9 @@ class App:
             lambda e: self.mapping_templates_canvas.itemconfigure(self.mapping_templates_window, width=e.width),
 
         )
+        self.mapping_templates_canvas.bind("<MouseWheel>", self._on_mapping_mousewheel, add="+")
+        self.mapping_templates_canvas.bind("<Button-4>", self._on_mapping_mousewheel, add="+")
+        self.mapping_templates_canvas.bind("<Button-5>", self._on_mapping_mousewheel, add="+")
 
 
         self.excel_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
@@ -13181,6 +13418,9 @@ class App:
         recent_scroll.config(command=canvas.yview)
 
         self.excel_recent_canvas = canvas
+        self.excel_recent_canvas.bind("<MouseWheel>", self._on_recent_mousewheel, add="+")
+        self.excel_recent_canvas.bind("<Button-4>", self._on_recent_mousewheel, add="+")
+        self.excel_recent_canvas.bind("<Button-5>", self._on_recent_mousewheel, add="+")
 
         self.excel_recent_inner = tk.Frame(canvas, bg=UI_SURFACE)
 
