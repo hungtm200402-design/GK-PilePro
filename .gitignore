@@ -15,3 +15,6 @@ dist/gk_pilepro_*.json
 dist/tool_kl_*.json
 dist/last_run_v12/
 dist/gk_pilepro_error.log
+presence_state.db
+presence_server.pid
+presence_server_error.log

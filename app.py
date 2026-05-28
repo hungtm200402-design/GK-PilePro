@@ -10,13 +10,19 @@ import hashlib
 
 import shutil
 
+import subprocess
+
 import uuid
+
+import threading
 
 from datetime import datetime
 
 import unicodedata
 
 import copy, re, json, traceback, copy, difflib, glob
+
+from urllib import error as urllib_error, parse as urllib_parse, request as urllib_request
 
 import ctypes
 
@@ -1275,7 +1281,7 @@ SYNONYM_GROUPS = [
 
     {"d6", "đ6", "6th", "to hop coc 6", "to hop 6", "cot to hop 6"},
 
-    {"chieu dai to hop", "tong to hop", "total", "total m", "length of pile", "chieu dai coc", "chieu dai to hop m", "tong so m coc", "tong so m coc d500", "tong so m", "total of pile detail length", "total of pile detail length m", "total of pile detail length (m)", "pile detail length", "pile detail length m", "pile detail length (m)"},
+    {"chieu dai to hop", "tong to hop", "total", "total m", "length of pile", "chieu dai coc", "chieu dai to hop m", "tong so m", "tong so met", "tong so met coc", "tong so m coc", "tong so m coc d500", "total of pile detail length", "total of pile detail length m", "total of pile detail length (m)", "pile detail length", "pile detail length m", "pile detail length (m)"},
 
     {"length of pile under ground", "under ground length", "ground length", "length under ground"},
 
@@ -1858,6 +1864,8 @@ def remember_admin_approved_machine(machine_code, user_name=None):
 
             item["approved_at"] = now
 
+            item["last_seen_at"] = item.get("last_seen_at") or now
+
             if user_name:
 
                 item["user_name"] = user_name
@@ -1878,6 +1886,8 @@ def remember_admin_approved_machine(machine_code, user_name=None):
 
             "approved_at": now,
 
+            "last_seen_at": now,
+
             "user_name": user_name,
 
         })
@@ -1885,6 +1895,62 @@ def remember_admin_approved_machine(machine_code, user_name=None):
     save_admin_approved_machines(items)
 
     return approval_code
+
+
+def update_admin_machine_last_seen(machine_code, seen_at=None):
+    machine_code = str(machine_code or "").strip().upper()
+    if not machine_code:
+        return False
+    items = load_admin_approved_machines()
+    now = seen_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    changed = False
+    for item in items:
+        if str(item.get("machine_code", "")).strip().upper() == machine_code:
+            item["last_seen_at"] = now
+            changed = True
+            break
+    if changed:
+        save_admin_approved_machines(items)
+    return changed
+
+
+def parse_machine_datetime(text):
+    s = str(text or "").strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None
+
+
+def format_machine_last_seen(text, now=None):
+    dt = parse_machine_datetime(text)
+    if dt is None:
+        return "Chưa có dữ liệu"
+    now = now or datetime.now()
+    delta = now - dt
+    seconds = max(0, int(delta.total_seconds()))
+    if seconds < 120:
+        return "Đang hoạt động"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"Truy cập {minutes} phút trước"
+    hours = minutes // 60
+    if hours < 24:
+        return f"Truy cập {hours} giờ trước"
+    days = hours // 24
+    return f"Truy cập {days} ngày trước"
+
+
+def is_machine_active_recently(text, now=None):
+    dt = parse_machine_datetime(text)
+    if dt is None:
+        return False
+    now = now or datetime.now()
+    return (now - dt).total_seconds() < 120
 
 
 
@@ -2139,6 +2205,8 @@ def load_env_values():
 
         "SCREEN_PROFILE": os.getenv("SCREEN_PROFILE", "auto") or "auto",
 
+        "PRESENCE_SERVER_URL": os.getenv("PRESENCE_SERVER_URL", DEFAULT_PRESENCE_SERVER_URL).strip() or DEFAULT_PRESENCE_SERVER_URL,
+
     }
 
     try:
@@ -2157,6 +2225,10 @@ def load_env_values():
 
             values["SCREEN_PROFILE"] = str(settings["SCREEN_PROFILE"])
 
+        if is_admin_build() and settings.get("PRESENCE_SERVER_URL"):
+
+            values["PRESENCE_SERVER_URL"] = str(settings["PRESENCE_SERVER_URL"]).strip() or values["PRESENCE_SERVER_URL"]
+
     except Exception:
 
         pass
@@ -2165,7 +2237,11 @@ def load_env_values():
 
 
 
-def save_env(api_key, model, screen_profile="auto"):
+def save_env(api_key, model, screen_profile="auto", presence_server_url=None):
+
+    resolved_presence_server_url = normalize_presence_server_url(
+        presence_server_url if is_admin_build() else DEFAULT_PRESENCE_SERVER_URL
+    ) or DEFAULT_PRESENCE_SERVER_URL
 
     payload = {
 
@@ -2174,6 +2250,8 @@ def save_env(api_key, model, screen_profile="auto"):
         "GEMINI_MODEL": (model.strip() or DEFAULT_MODEL),
 
         "SCREEN_PROFILE": str(screen_profile or "auto").strip() or "auto",
+
+        "PRESENCE_SERVER_URL": resolved_presence_server_url,
 
     }
 
@@ -2191,7 +2269,7 @@ def save_env(api_key, model, screen_profile="auto"):
 
         env_path().write_text(
 
-            f"GEMINI_API_KEY={api_key.strip()}\nGEMINI_MODEL={(model.strip() or DEFAULT_MODEL)}\nSCREEN_PROFILE={str(screen_profile or 'auto').strip() or 'auto'}\n",
+            f"GEMINI_API_KEY={api_key.strip()}\nGEMINI_MODEL={(model.strip() or DEFAULT_MODEL)}\nSCREEN_PROFILE={str(screen_profile or 'auto').strip() or 'auto'}\nPRESENCE_SERVER_URL={resolved_presence_server_url}\n",
 
             encoding="utf-8"
 
@@ -2204,6 +2282,73 @@ def save_env(api_key, model, screen_profile="auto"):
     except Exception:
 
         pass
+
+
+def normalize_presence_server_url(url):
+    value = str(url or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    return value
+
+
+DEFAULT_PRESENCE_SERVER_URL = normalize_presence_server_url(os.getenv("PRESENCE_SERVER_URL_DEFAULT", "http://192.168.100.35:8765"))
+
+
+def presence_server_url_from_env():
+    env = load_env_values()
+    return normalize_presence_server_url(env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL)
+
+
+def _presence_client_request_json(url, payload=None, timeout=3, method=None):
+    data = None
+    headers = {"Content-Type": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib_request.Request(url, data=data, headers=headers, method=method or ("POST" if data is not None else "GET"))
+    with urllib_request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw) if raw else None
+
+
+def send_presence_heartbeat(server_url, payload, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return False
+    try:
+        _presence_client_request_json(f"{base}/heartbeat", payload=payload, timeout=timeout, method="POST")
+        return True
+    except Exception:
+        return False
+
+
+def check_presence_server_alive(server_url, timeout=2):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return False
+    try:
+        data = _presence_client_request_json(f"{base}/health", timeout=timeout, method="GET")
+        return bool(isinstance(data, dict) and data.get("ok"))
+    except Exception:
+        return False
+
+
+def fetch_presence_machines(server_url, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return []
+    try:
+        data = _presence_client_request_json(f"{base}/machines", timeout=timeout, method="GET")
+        if isinstance(data, dict):
+            machines = data.get("machines")
+            if isinstance(machines, list):
+                return machines
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
 
 
 
@@ -2703,7 +2848,11 @@ QUY TẮC SỐ:
 
 - Giữ ngày như ảnh: 11/05/2026.
 
+- Nếu AI trả ngày kiểu 2026-05-26 hoặc 2026/05/26 thì đổi về dd/mm/yyyy.
+
 - D300 giữ là D300, PHC500 giữ là PHC500.
+
+- Nếu phiếu có ô hoặc cột "Tổng số mét" thì phải điền đúng giá trị đó vào cột Excel tương ứng "Tổng số m cọc D500" / "Tổng số m cọc" / "Tổng số m", không được để trống.
 
 - Với cột khối lượng/số lượng/chiều dài/lực ép:
 
@@ -2763,11 +2912,13 @@ NGUYÊN TẮC:
 
 2. Không bịa dữ liệu.
 
-3. Giữ ngày tháng, số liệu đúng như ảnh.
+3. Giữ ngày tháng theo kiểu Việt Nam, ví dụ 11/05/2026.
 
-4. Không lấy dòng tổng/cộng làm dữ liệu.
+4. Nếu ngày đang ở dạng 2026-05-26 hoặc 2026/05/26 thì đổi về dd/mm/yyyy.
 
-5. Không lấy chữ ký.
+5. Không lấy dòng tổng/cộng làm dữ liệu.
+
+6. Không lấy chữ ký.
 
 
 
@@ -4028,12 +4179,26 @@ def capture_total_sum_columns(ws, total_row, first_data_row=None, last_data_row=
 
     cols = []
 
+    def _is_contract_like_header(name):
+        n = norm(name)
+        if not n:
+            return False
+        return any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"])
+
+    header_by_col = {}
+    try:
+        header_row = find_header_row_smart(ws)
+        header_by_col = {int(c): str(v or "") for c, v in get_headers_smart(ws, header_row)}
+    except Exception:
+        header_by_col = {}
+
     if not total_row:
 
         return cols
 
     for c in range(1, ws.max_column + 1):
-
+        if _is_contract_like_header(header_by_col.get(c, "")):
+            continue
         v = ws.cell(total_row, c).value
 
         if is_formula_value(v):
@@ -4211,6 +4376,8 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
 
         n = norm(name)
         if not n:
+            return False
+        if any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"]):
             return False
         if any(tok in n for tok in ["stt", "no", "ngay", "gio", "bat dau", "ket thuc", "ghi chu", "ten", "loai", "ca"]):
             return False
@@ -5166,6 +5333,63 @@ def convert_excel_value(value):
         pass
 
 
+
+    return s
+
+
+
+def normalize_vietnam_date(value):
+
+    """
+
+    Chuẩn hóa ngày về dd/mm/yyyy để phiếu cọc ghi đúng kiểu Việt Nam.
+
+    Chỉ xử lý các dạng ngày phổ biến; nếu không nhận ra thì trả nguyên chuỗi.
+    """
+
+    if value is None:
+
+        return ""
+
+    if isinstance(value, datetime):
+
+        return value.strftime("%d/%m/%Y")
+
+    try:
+
+        from datetime import date
+
+        if isinstance(value, date):
+
+            return value.strftime("%d/%m/%Y")
+
+    except Exception:
+
+        pass
+
+    s = str(value).strip()
+
+    if not s:
+
+        return ""
+
+    s = s.split(" ")[0].strip()
+
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", s)
+
+    if m:
+
+        y, mo, d = m.groups()
+
+        return f"{int(d):02d}/{int(mo):02d}/{y}"
+
+    m = re.match(r"^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$", s)
+
+    if m:
+
+        d, mo, y = m.groups()
+
+        return f"{int(d):02d}/{int(mo):02d}/{y}"
 
     return s
 
@@ -8218,6 +8442,8 @@ class App:
 
         self.screen_profile_var = tk.StringVar(value=env.get("SCREEN_PROFILE") or "auto")
 
+        self.presence_server_var = tk.StringVar(value=env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL)
+
         self._setup_responsive_metrics()
 
         self.app_logo_img = None
@@ -8294,6 +8520,18 @@ class App:
 
         self.admin_approval_panel = None
 
+        self._presence_machine_cache = []
+        self._presence_cache_lock = threading.Lock()
+        self._presence_ping_inflight = False
+        self._presence_poll_inflight = False
+        self._presence_server_check_inflight = False
+        self._presence_server_online = None
+        self._presence_server_down_notified = False
+        self._presence_server_process = None
+        self._presence_server_db_path = app_data_path("presence_state.db")
+        self._presence_server_pid_path = app_data_path("presence_server.pid")
+        self._presence_server_runtime_lock = threading.Lock()
+
         self.member_locked = (not is_admin_build()) and (not is_machine_approved())
 
         if self.member_locked:
@@ -8310,6 +8548,8 @@ class App:
 
         self.build_ui()
 
+        self._apply_user_visibility()
+
         self.root.bind_all("<Control-v>", self.paste_image_from_clipboard)
 
         self.root.bind_all("<Control-V>", self.paste_image_from_clipboard)
@@ -8317,6 +8557,11 @@ class App:
         self.root.bind_all("<F5>", self.refresh_ui)
 
         self.root.after(300, self._check_member_approval_loop)
+        self.root.after(1500, self._machine_presence_ping_loop)
+        self.root.after(1800, self._presence_cache_poll_loop)
+        self.root.after(0, self._presence_server_monitor_loop)
+        if is_admin_build():
+            self.root.after(250, self._ensure_presence_server_on_start)
 
 
 
@@ -8355,6 +8600,339 @@ class App:
             messagebox.showerror("Khong tai lai duoc", traceback.format_exc())
 
             return
+
+    def _set_presence_machine_cache(self, rows):
+
+        try:
+
+            normalized = []
+
+            if isinstance(rows, list):
+
+                for item in rows:
+
+                    if isinstance(item, dict):
+
+                        normalized.append(dict(item))
+
+            with self._presence_cache_lock:
+
+                self._presence_machine_cache = normalized
+
+        except Exception:
+
+            pass
+
+    def _get_presence_machine_cache(self):
+
+        try:
+
+            with self._presence_cache_lock:
+
+                return [dict(item) for item in self._presence_machine_cache if isinstance(item, dict)]
+
+        except Exception:
+
+            return []
+
+    def _presence_server_is_running(self):
+
+        try:
+
+            proc = getattr(self, "_presence_server_process", None)
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        return True
+                except Exception:
+                    pass
+
+            pid = self._read_presence_server_pid()
+            if pid is not None and self._is_pid_alive(pid):
+                return True
+
+            return False
+
+        except Exception:
+
+            return False
+
+    def _read_presence_server_pid(self):
+
+        try:
+
+            path = Path(self._presence_server_pid_path)
+            if not path.exists():
+                return None
+            raw = path.read_text(encoding="utf-8").strip()
+            pid = int(raw)
+            return pid if pid > 0 else None
+
+        except Exception:
+
+            return None
+
+    def _write_presence_server_pid(self, pid):
+
+        try:
+
+            Path(self._presence_server_pid_path).write_text(str(int(pid)), encoding="utf-8")
+
+        except Exception:
+
+            pass
+
+    def _clear_presence_server_pid(self):
+
+        try:
+
+            Path(self._presence_server_pid_path).unlink(missing_ok=True)
+
+        except Exception:
+
+            pass
+
+    def _is_pid_alive(self, pid):
+
+        try:
+
+            os.kill(int(pid), 0)
+            return True
+
+        except Exception:
+
+            return False
+
+    def _ensure_presence_server_on_start(self):
+
+        if not is_admin_build():
+
+            return
+
+        try:
+
+            if self._presence_server_is_running():
+
+                try:
+
+                    self.status.config(text="Server trạng thái máy đang chạy.")
+
+                except Exception:
+
+                    pass
+
+                return
+
+            ok, msg = self._start_presence_server()
+
+            try:
+
+                self.status.config(text=msg)
+
+            except Exception:
+
+                pass
+
+            if not ok:
+
+                try:
+
+                    messagebox.showerror("Không khởi động được server", msg)
+
+                except Exception:
+
+                    pass
+
+        except Exception:
+
+            pass
+
+    def _start_presence_server(self):
+
+        if not is_admin_build():
+
+            return False, "Chỉ bản admin mới được điều khiển server."
+
+        with self._presence_server_runtime_lock:
+
+            if self._presence_server_is_running():
+
+                return True, "Server đã đang chạy."
+
+            try:
+
+                db_path = Path(self._presence_server_db_path).resolve()
+                try:
+                    import presence_server as presence_mod
+                    presence_mod.init_db(db_path)
+                except Exception:
+                    pass
+
+                if getattr(sys, "frozen", False):
+                    cmd = [
+                        sys.executable,
+                        "--presence-server",
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        "8765",
+                        "--db",
+                        str(db_path),
+                        "--timeout",
+                        "20",
+                    ]
+                else:
+                    cmd = [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--presence-server",
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        "8765",
+                        "--db",
+                        str(db_path),
+                        "--timeout",
+                        "20",
+                    ]
+
+                creationflags = 0
+                for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
+                    creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(Path(__file__).resolve().parent),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+
+                self._presence_server_process = proc
+                self._write_presence_server_pid(proc.pid)
+                try:
+                    self.status.config(text="Server trạng thái máy đang chạy.")
+                except Exception:
+                    pass
+                return True, "Đã khởi động server."
+
+            except Exception as exc:
+
+                self._presence_server_process = None
+                self._clear_presence_server_pid()
+                return False, f"Không khởi động được server: {exc}"
+
+    def _stop_presence_server(self):
+
+        if not is_admin_build():
+
+            return False, "Chỉ bản admin mới được điều khiển server."
+
+        with self._presence_server_runtime_lock:
+
+            proc = getattr(self, "_presence_server_process", None)
+            pid = None
+            if proc is not None:
+                try:
+                    if proc.poll() is None:
+                        pid = proc.pid
+                    else:
+                        proc = None
+                except Exception:
+                    proc = None
+
+            if proc is None:
+                pid = self._read_presence_server_pid()
+                if pid is None or not self._is_pid_alive(pid):
+                    self._presence_server_process = None
+                    self._clear_presence_server_pid()
+                    return True, "Server đang tắt."
+
+            try:
+
+                if proc is not None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        pass
+                elif pid is not None:
+                    subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True)
+
+            except Exception:
+
+                pass
+
+            self._presence_server_process = None
+            self._clear_presence_server_pid()
+
+            try:
+
+                self.status.config(text="Server trạng thái máy đã tắt.")
+
+            except Exception:
+
+                pass
+
+            return True, "Đã tắt server."
+
+    def _apply_user_visibility(self):
+
+        if is_admin_build():
+
+            return
+
+        can_show = (not self.member_locked) and (self._presence_server_online is True)
+
+        try:
+
+            if can_show:
+
+                self.root.deiconify()
+
+                self.root.lift()
+
+                try:
+
+                    self.status.config(text="Máy đã kết nối server trạng thái.")
+
+                except Exception:
+
+                    pass
+
+            else:
+
+                self.root.withdraw()
+
+        except Exception:
+
+            pass
+
+    def _notify_presence_server_down(self):
+
+        if is_admin_build() or self.member_locked:
+
+            return
+
+        try:
+
+            self.status.config(text="Server trạng thái máy đang tắt.")
+
+        except Exception:
+
+            pass
+
+        try:
+
+            messagebox.showwarning(
+                "Server đang tắt",
+                "Server trạng thái máy đang tắt.\n\nVui lòng chờ admin mở lại server để tiếp tục sử dụng ứng dụng.",
+            )
+
+        except Exception:
+
+            pass
 
 
 
@@ -8880,6 +9458,13 @@ class App:
         return str(value)
 
 
+    def _history_display_date(self, value):
+
+        text = normalize_vietnam_date(value)
+
+        return text or "Không rõ"
+
+
     def _history_format_row(self, row):
 
         if isinstance(row, dict):
@@ -9176,7 +9761,7 @@ class App:
 
         lines.append("┌" + "─" * width + "┐")
         lines.append(self._history_make_box_line("KHUNG HÔM NAY", width))
-        lines.append(self._history_make_box_line(f"Ngày: {entry.get('date') or ''}", width))
+        lines.append(self._history_make_box_line(f"Ngày: {self._history_display_date(entry.get('date'))}", width))
         lines.append(self._history_make_box_line(f"Loại: {extra.get('ocr_type') or entry.get('action') or 'ocr'}", width))
         lines.append(self._history_make_box_line(f"Bảng: {table_title}", width))
         lines.append(self._history_make_box_line(f"Cột: {len(columns)}  Dòng: {len(rows)}", width))
@@ -9576,6 +10161,7 @@ class App:
             if group["date"] != current_day:
 
                 current_day = group["date"]
+                current_day_display = self._history_display_date(current_day)
 
                 day_box = tk.Frame(inner, bg=UI_SURFACE, padx=0, pady=0)
 
@@ -9587,7 +10173,7 @@ class App:
 
                 day_head.pack(fill="x", pady=(0, 8))
 
-                tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
+                tk.Label(day_head, text=current_day_display, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
 
                 tk.Label(
 
@@ -9888,6 +10474,7 @@ class App:
             if group["date"] != current_day:
 
                 current_day = group["date"]
+                current_day_display = self._history_display_date(current_day)
 
                 current_day_box = tk.Frame(inner, bg=UI_SURFACE)
 
@@ -9897,7 +10484,7 @@ class App:
 
                 day_head.pack(fill="x", pady=(0, 8))
 
-                tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
+                tk.Label(day_head, text=current_day_display, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
 
                 tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} workflow", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
@@ -10164,11 +10751,12 @@ class App:
         for group in grouped_items:
             if group["date"] != current_day:
                 current_day = group["date"]
+                current_day_display = self._history_display_date(current_day)
                 current_day_box = tk.Frame(inner, bg=UI_SURFACE)
                 current_day_box.pack(fill="x", pady=(0, 12))
                 day_head = tk.Frame(current_day_box, bg=UI_SURFACE)
                 day_head.pack(fill="x", pady=(0, 8))
-                tk.Label(day_head, text=current_day, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
+                tk.Label(day_head, text=current_day_display, bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 11, "bold")).pack(side="left")
                 tk.Label(day_head, text=f"{sum(1 for g in grouped_items if g['date'] == current_day)} OCR", bg="#eef4ff", fg=UI_PRIMARY, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="right")
 
             status_bg, status_border, accent = self._history_status_style({"status": "error" if group["has_error"] else "success", "action": "ocr_done"})
@@ -11170,6 +11758,10 @@ class App:
 
 
     def _activate_nav_item(self, page_name, callback=None):
+        if page_name in {"settings", "help", "about"}:
+            self._dialog_return_page = getattr(self, "current_page", "home")
+        else:
+            self._dialog_return_page = None
         self.current_page = page_name
         self._refresh_nav_state()
         if callback is not None:
@@ -11312,10 +11904,6 @@ class App:
 
                 try:
 
-                    self.root.deiconify()
-
-                    self.root.lift()
-
                     if not is_admin_build():
 
                         self.user_role = resolve_member_display_name(get_machine_code())
@@ -11336,6 +11924,8 @@ class App:
 
                     pass
 
+                self._apply_user_visibility()
+
         finally:
 
             try:
@@ -11345,6 +11935,147 @@ class App:
             except Exception:
 
                 pass
+
+
+    def _machine_presence_ping_loop(self):
+
+        try:
+
+            if not self.member_locked and self._presence_server_online is not False:
+                server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+                if server_url and not self._presence_ping_inflight:
+                    self._presence_ping_inflight = True
+
+                    def worker():
+
+                        try:
+
+                            payload = {
+                                "machine_code": get_machine_code(),
+                                "user_name": getattr(self, "user_name", "") or current_os_username(),
+                                "role": getattr(self, "user_role", ""),
+                                "app_kind": "admin" if is_admin_build() else "user",
+                                "status": "online",
+                            }
+                            if send_presence_heartbeat(server_url, payload):
+                                update_admin_machine_last_seen(get_machine_code())
+
+                        finally:
+
+                            self._presence_ping_inflight = False
+
+                    threading.Thread(target=worker, daemon=True).start()
+
+        except Exception:
+
+            pass
+
+        try:
+
+            self.root.after(5000, self._machine_presence_ping_loop)
+
+        except Exception:
+
+            pass
+
+    def _presence_server_monitor_loop(self):
+
+        try:
+
+            if not is_admin_build() and not self.member_locked:
+
+                server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+
+                if server_url and not self._presence_server_check_inflight:
+
+                    self._presence_server_check_inflight = True
+
+                    def worker():
+
+                        online = False
+
+                        try:
+
+                            online = check_presence_server_alive(server_url, timeout=1)
+
+                        finally:
+
+                            previous = self._presence_server_online
+
+                            self._presence_server_online = online
+
+                            self._presence_server_check_inflight = False
+
+                            if previous is not online:
+
+                                if not online:
+
+                                    if not self._presence_server_down_notified:
+
+                                        self._presence_server_down_notified = True
+
+                                        try:
+                                            self.root.after(0, self._notify_presence_server_down)
+                                        except Exception:
+                                            pass
+
+                                else:
+
+                                    self._presence_server_down_notified = False
+
+                            self._apply_user_visibility()
+
+                    threading.Thread(target=worker, daemon=True).start()
+
+        except Exception:
+
+            pass
+
+        try:
+
+            self.root.after(1000, self._presence_server_monitor_loop)
+
+        except Exception:
+
+            pass
+
+    def _presence_cache_poll_loop(self):
+
+        try:
+
+            server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+
+            if server_url and not self._presence_poll_inflight:
+
+                self._presence_poll_inflight = True
+
+                def worker():
+
+                    rows = []
+
+                    try:
+
+                        rows = fetch_presence_machines(server_url, timeout=2)
+
+                    finally:
+
+                        self._set_presence_machine_cache(rows)
+
+                        self._presence_poll_inflight = False
+
+                threading.Thread(target=worker, daemon=True).start()
+
+        except Exception:
+
+            pass
+
+        try:
+
+            self.root.after(5000, self._presence_cache_poll_loop)
+
+        except Exception:
+
+            pass
 
 
 
@@ -11561,7 +12292,10 @@ class App:
 
 
     def show_settings_dialog(self, event=None):
-        return_page = getattr(self, "current_page", "home")
+        return_page = getattr(self, "_dialog_return_page", None)
+        if return_page not in {"home", "excel", "history", "mapping"}:
+            return_page = getattr(self, "current_page", "home")
+        settings_is_admin = is_admin_build()
         win = tk.Toplevel(self.root)
         win.title("Hiển thị")
         win.configure(bg="#1f2128")
@@ -11660,7 +12394,8 @@ class App:
         def show_page(name):
             for child in page_host.winfo_children():
                 child.pack_forget()
-            (display_page if name == "display" else api_page).pack(fill="both", expand=True)
+            target_page = display_page if name == "display" or not settings_is_admin else api_page
+            target_page.pack(fill="both", expand=True)
             for key, btn in top_tabs.items():
                 active = key == name
                 btn.config(
@@ -11671,7 +12406,11 @@ class App:
                     font=ui_font(11, bold=active),
                 )
 
-        for key, label in (("display", "Hiển thị"), ("api", "API")):
+        tab_defs = [("display", "Hiển thị")]
+        if settings_is_admin:
+            tab_defs.append(("api", "API"))
+
+        for key, label in tab_defs:
             btn = dark_button(nav_row, label, lambda k=key: show_page(k), width=13, active=(key == "display"))
             btn.pack(side="left", padx=(0, 10))
             top_tabs[key] = btn
@@ -11926,65 +12665,118 @@ class App:
 
         set_mode(initial_mode)
 
-        api_card = tk.Frame(api_page, bg=panel_bg, highlightthickness=1, highlightbackground=card_border, padx=16, pady=16)
-        api_card.pack(fill="both", expand=True)
-        tk.Label(api_card, text="Cấu hình API", bg=panel_bg, fg=text_main, font=ui_font(12, bold=True)).pack(anchor="w")
-        tk.Label(api_card, text="Thiết lập khóa Gemini và model dùng cho OCR / đọc bảng.", bg=panel_bg, fg=text_sub, font=ui_font(11)).pack(anchor="w", pady=(6, 14))
+        if settings_is_admin:
+            api_card = tk.Frame(api_page, bg=panel_bg, highlightthickness=1, highlightbackground=card_border, padx=16, pady=16)
+            api_card.pack(fill="both", expand=True)
+            tk.Label(api_card, text="Cấu hình API", bg=panel_bg, fg=text_main, font=ui_font(12, bold=True)).pack(anchor="w")
+            tk.Label(api_card, text="Thiết lập khóa Gemini và model dùng cho OCR / đọc bảng.", bg=panel_bg, fg=text_sub, font=ui_font(11)).pack(anchor="w", pady=(6, 14))
 
-        key_box = tk.Frame(api_card, bg=panel_bg)
-        key_box.pack(fill="x", pady=(0, 16))
-        tk.Label(key_box, text="Khóa API", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
-        key_shell = tk.Frame(key_box, bg=card_soft, highlightthickness=1, highlightbackground=card_border)
-        key_shell.pack(fill="x")
-        api_entry = tk.Entry(
-            key_shell,
-            textvariable=self.api_key_var,
-            bg=card_soft,
-            fg=text_main,
-            insertbackground=text_main,
-            relief="flat",
-            bd=0,
-            highlightthickness=0,
-            font=ui_font(11),
-        )
-        api_entry.pack(fill="x", padx=12, pady=9)
+            key_box = tk.Frame(api_card, bg=panel_bg)
+            key_box.pack(fill="x", pady=(0, 16))
+            tk.Label(key_box, text="Khóa API", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+            key_shell = tk.Frame(key_box, bg=card_soft, highlightthickness=1, highlightbackground=card_border)
+            key_shell.pack(fill="x")
+            api_entry = tk.Entry(
+                key_shell,
+                textvariable=self.api_key_var,
+                bg=card_soft,
+                fg=text_main,
+                insertbackground=text_main,
+                relief="flat",
+                bd=0,
+                highlightthickness=0,
+                font=ui_font(11),
+            )
+            api_entry.pack(fill="x", padx=12, pady=9)
 
-        model_box = tk.Frame(api_card, bg=panel_bg)
-        model_box.pack(fill="x", pady=(0, 16))
-        tk.Label(model_box, text="Mô hình", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
-        model_menu = tk.Menu(win, tearoff=0, bg="#ffffff", fg="#111827", activebackground=UI_PRIMARY, activeforeground="#ffffff", font=ui_font(11))
-        model_values = [
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-        ]
-        model_button = tk.Button(
-            model_box,
-            text=self.model_var.get() or DEFAULT_MODEL,
-            command=lambda: model_menu.tk_popup(model_button.winfo_rootx(), model_button.winfo_rooty() + model_button.winfo_height()),
-            bg=card_soft,
-            fg=text_main,
-            activebackground="#3f4351",
-            activeforeground=text_main,
-            relief="flat",
-            bd=0,
-            highlightthickness=1,
-            highlightbackground=card_border,
-            font=ui_font(11),
-            anchor="w",
-            padx=12,
-            pady=8,
-        )
-        model_button.pack(fill="x")
-        for value in model_values:
-            model_menu.add_command(label=value, command=lambda v=value: (self.model_var.set(v), model_button.config(text=v)))
+            model_box = tk.Frame(api_card, bg=panel_bg)
+            model_box.pack(fill="x", pady=(0, 16))
+            tk.Label(model_box, text="Mô hình", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+            model_menu = tk.Menu(win, tearoff=0, bg="#ffffff", fg="#111827", activebackground=UI_PRIMARY, activeforeground="#ffffff", font=ui_font(11))
+            model_values = [
+                "gemini-3.1-flash-lite",
+                "gemini-2.5-flash-lite",
+                "gemini-2.5-flash",
+                "gemini-1.5-flash",
+                "gemini-1.5-pro",
+            ]
+            model_button = tk.Button(
+                model_box,
+                text=self.model_var.get() or DEFAULT_MODEL,
+                command=lambda: model_menu.tk_popup(model_button.winfo_rootx(), model_button.winfo_rooty() + model_button.winfo_height()),
+                bg=card_soft,
+                fg=text_main,
+                activebackground="#3f4351",
+                activeforeground=text_main,
+                relief="flat",
+                bd=0,
+                highlightthickness=1,
+                highlightbackground=card_border,
+                font=ui_font(11),
+                anchor="w",
+                padx=12,
+                pady=8,
+            )
+            model_button.pack(fill="x")
+            for value in model_values:
+                model_menu.add_command(label=value, command=lambda v=value: (self.model_var.set(v), model_button.config(text=v)))
 
-        note = tk.Frame(api_card, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
-        note.pack(fill="x")
-        tk.Label(note, text="Lưu ý", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
-        tk.Label(note, text="Lưu để áp dụng cả cấu hình hiển thị lẫn API, sau đó ứng dụng sẽ khởi động lại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
+            presence_box = tk.Frame(api_card, bg=panel_bg)
+            presence_box.pack(fill="x", pady=(0, 16))
+            tk.Label(presence_box, text="Server trạng thái máy", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+            presence_shell = tk.Frame(presence_box, bg=card_soft, highlightthickness=1, highlightbackground=card_border)
+            presence_shell.pack(fill="x")
+            presence_entry = tk.Entry(
+                presence_shell,
+                textvariable=self.presence_server_var,
+                bg=card_soft,
+                fg=text_main,
+                insertbackground=text_main,
+                relief="flat",
+                bd=0,
+                highlightthickness=0,
+                font=ui_font(11),
+            )
+            presence_entry.pack(fill="x", padx=12, pady=9)
+            tk.Label(presence_box, text="Ví dụ: http://192.168.1.10:8765", bg=panel_bg, fg=text_sub, font=ui_font(10)).pack(anchor="w", pady=(4, 0))
+
+            server_status_row = tk.Frame(presence_box, bg=panel_bg)
+            server_status_row.pack(fill="x", pady=(10, 0))
+            server_status_var = tk.StringVar(value="Đang kiểm tra...")
+            tk.Label(server_status_row, textvariable=server_status_var, bg=panel_bg, fg=text_sub, font=ui_font(10)).pack(side="left")
+
+            def refresh_server_status_label():
+                if self._presence_server_is_running():
+                    server_status_var.set("Server: đang chạy")
+                else:
+                    server_status_var.set("Server: đang tắt")
+
+            def start_server():
+                ok, msg = self._start_presence_server()
+                refresh_server_status_label()
+                self.status.config(text=msg)
+                if not ok:
+                    messagebox.showerror("Không khởi động được server", msg)
+
+            def stop_server():
+                ok, msg = self._stop_presence_server()
+                refresh_server_status_label()
+                self.status.config(text=msg)
+                if not ok:
+                    messagebox.showerror("Không tắt được server", msg)
+
+            btn_box = tk.Frame(presence_box, bg=panel_bg)
+            btn_box.pack(fill="x", pady=(8, 0))
+            ui_button(btn_box, "Mở server", start_server, width=12, variant="primary").pack(side="left")
+            ui_button(btn_box, "Tắt server", stop_server, width=12, variant="warn").pack(side="left", padx=(8, 0))
+            refresh_server_status_label()
+
+            note = tk.Frame(api_card, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
+            note.pack(fill="x")
+            tk.Label(note, text="Lưu ý", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
+            tk.Label(note, text="Lưu để áp dụng cả cấu hình hiển thị lẫn API, sau đó ứng dụng sẽ khởi động lại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
+        else:
+            show_page("display")
 
         def return_to_previous_page():
             try:
@@ -12018,18 +12810,22 @@ class App:
             if not profile_key:
                 return
             self.screen_profile_var.set(profile_key)
-            save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
+            if settings_is_admin:
+                save_env(self.api_key_var.get(), self.model_var.get(), profile_key, self.presence_server_var.get())
+            else:
+                save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
             try:
                 self.status.config(text="Đã lưu cấu hình hiển thị.")
             except Exception:
                 pass
             return_to_previous_page()
+            self._dialog_return_page = None
             win.destroy()
             self.refresh_ui()
 
-        win.protocol("WM_DELETE_WINDOW", lambda: (return_to_previous_page(), win.destroy()))
+        win.protocol("WM_DELETE_WINDOW", lambda: (return_to_previous_page(), setattr(self, "_dialog_return_page", None), win.destroy()))
 
-        cancel_btn = dark_button(footer, "Hủy", lambda: (return_to_previous_page(), win.destroy()), width=12)
+        cancel_btn = dark_button(footer, "Hủy", lambda: (return_to_previous_page(), setattr(self, "_dialog_return_page", None), win.destroy()), width=12)
         cancel_btn.pack(side="right")
         save_btn = dark_button(footer, "Lưu & khởi động lại", save, width=21, accent_button=True)
         save_btn.pack(side="right", padx=(0, 10))
@@ -12047,7 +12843,9 @@ class App:
 
 
     def show_help_dialog(self, event=None):
-        return_page = getattr(self, "current_page", "home")
+        return_page = getattr(self, "_dialog_return_page", None)
+        if return_page not in {"home", "excel", "history", "mapping"}:
+            return_page = getattr(self, "current_page", "home")
 
         messagebox.showinfo(
 
@@ -12055,7 +12853,7 @@ class App:
 
             "Quy trình sử dụng cơ bản:\n\n"
 
-            "1. Click 'Cài đặt' ở thanh bên để nhập khóa API Gemini của bạn.\n"
+            "1. Click 'Cài đặt' ở thanh bên để chỉnh độ hiển thị của ứng dụng.\n"
 
             "2. Bấm 'Chọn Excel' để tải tệp dữ liệu cọc của bạn lên.\n"
 
@@ -12074,11 +12872,15 @@ class App:
             self.show_page(return_page)
         except Exception:
             self.show_home_page()
+        finally:
+            self._dialog_return_page = None
 
 
 
     def show_about_dialog(self, event=None):
-        return_page = getattr(self, "current_page", "home")
+        return_page = getattr(self, "_dialog_return_page", None)
+        if return_page not in {"home", "excel", "history", "mapping"}:
+            return_page = getattr(self, "current_page", "home")
 
         messagebox.showinfo(
 
@@ -12097,6 +12899,8 @@ class App:
             self.show_page(return_page)
         except Exception:
             self.show_home_page()
+        finally:
+            self._dialog_return_page = None
 
 
 
@@ -12149,6 +12953,12 @@ class App:
         def close_panel():
 
             try:
+
+                if refresh_job["id"] is not None:
+                    try:
+                        panel.after_cancel(refresh_job["id"])
+                    except Exception:
+                        pass
 
                 panel.destroy()
 
@@ -12214,7 +13024,13 @@ class App:
 
         list_header.pack(fill="x", pady=(18, 6))
 
-        tk.Label(list_header, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(side="left")
+        list_title_box = tk.Frame(list_header, bg=UI_SURFACE)
+        list_title_box.pack(side="left")
+
+        tk.Label(list_title_box, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+
+        summary_var = tk.StringVar(value="Đang tải...")
+        tk.Label(list_title_box, textvariable=summary_var, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
 
 
 
@@ -12228,6 +13044,8 @@ class App:
 
         search_entry.pack(side="left", fill="x", expand=True)
 
+        form_inputs = {machine_entry, name_entry, approval_entry, search_entry}
+
 
 
         list_frame = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
@@ -12238,7 +13056,7 @@ class App:
 
             list_frame,
 
-            columns=("machine", "user", "code", "time"),
+            columns=("machine", "user", "code", "time", "status"),
 
             show="headings",
 
@@ -12248,11 +13066,12 @@ class App:
 
         approved_tree.heading("machine", text="Mã máy")
 
-        approved_tree.heading("user", text="User")
+        approved_tree.heading("user", text="Tên người")
 
         approved_tree.heading("code", text="Mã duyệt")
 
         approved_tree.heading("time", text="Thời gian duyệt")
+        approved_tree.heading("status", text="Trạng thái")
 
         approved_tree.column("machine", width=210, anchor="center")
 
@@ -12261,6 +13080,11 @@ class App:
         approved_tree.column("code", width=150, anchor="center")
 
         approved_tree.column("time", width=150, anchor="center")
+        approved_tree.column("status", width=170, anchor="w")
+
+        approved_tree.tag_configure("online", foreground="#16a34a")
+        approved_tree.tag_configure("away", foreground="#d97706")
+        approved_tree.tag_configure("old", foreground="#6b7280")
 
         approved_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=approved_tree.yview)
 
@@ -12279,6 +13103,8 @@ class App:
         list_actions = tk.Frame(body, bg=UI_SURFACE)
 
         list_actions.pack(fill="x", pady=(8, 0))
+
+        refresh_job = {"id": None}
 
 
 
@@ -12307,6 +13133,7 @@ class App:
                         str(row.get("approval_code", "")),
 
                         str(row.get("approved_at", "")),
+                        str(row.get("last_seen_at", "")),
 
                     ]
 
@@ -12320,11 +13147,69 @@ class App:
 
 
 
-        def refresh_list(select_machine=None, fill_selection=True):
+        def _is_editing_approval_form():
+
+            try:
+
+                focused = self.root.focus_get()
+
+            except Exception:
+
+                focused = None
+
+            if focused in form_inputs:
+
+                return True
+
+            try:
+
+                return bool(focused and any(str(focused).startswith(str(widget)) for widget in form_inputs))
+
+            except Exception:
+
+                return False
+
+
+        def refresh_list(select_machine=None, fill_selection=True, auto=False):
+
+            if auto and _is_editing_approval_form():
+
+                try:
+
+                    if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
+
+                        if refresh_job["id"] is not None:
+
+                            try:
+
+                                self.admin_approval_panel.after_cancel(refresh_job["id"])
+
+                            except Exception:
+
+                                pass
+
+                        refresh_job["id"] = self.admin_approval_panel.after(
+                            1500,
+                            lambda: refresh_list(select_machine=select_machine, fill_selection=False, auto=True),
+                        )
+
+                except Exception:
+
+                    pass
+
+                return
 
             import_local_approval_to_admin_list()
 
             rows = filter_rows(load_admin_approved_machines(), search_var.get())
+            server_rows = self._get_presence_machine_cache()
+            server_map = {}
+            for item in server_rows:
+                if not isinstance(item, dict):
+                    continue
+                machine_key = str(item.get("machine_code") or "").strip().upper()
+                if machine_key:
+                    server_map[machine_key] = item
 
             for item in approved_tree.get_children():
 
@@ -12333,6 +13218,18 @@ class App:
             for row in rows:
 
                 machine = row.get("machine_code", "")
+                live = server_map.get(str(machine).strip().upper(), {})
+                last_seen = live.get("last_seen_at") or row.get("last_seen_at") or row.get("approved_at") or ""
+                status_text = format_machine_last_seen(last_seen)
+                if is_machine_active_recently(last_seen):
+                    status_tag = "online"
+                else:
+                    dt = parse_machine_datetime(last_seen)
+                    if dt is None:
+                        status_tag = "old"
+                    else:
+                        age_min = max(0, int((datetime.now() - dt).total_seconds() // 60))
+                        status_tag = "away" if age_min < 180 else "old"
 
                 approved_tree.insert(
 
@@ -12351,10 +13248,21 @@ class App:
                         row.get("approval_code", ""),
 
                         row.get("approved_at", ""),
+                        status_text,
 
                     ),
+                    tags=(status_tag,),
 
                 )
+
+            total_count = len(rows)
+            online_count = sum(1 for row in rows if is_machine_active_recently(
+                (server_map.get(str(row.get("machine_code", "")).strip().upper(), {}) or {}).get("last_seen_at")
+                or row.get("last_seen_at")
+                or row.get("approved_at")
+                or ""
+            ))
+            summary_var.set(f"Đã duyệt: {total_count} máy | Đang hoạt động: {online_count} máy")
 
             target = str(select_machine or "").strip().upper()
 
@@ -12379,6 +13287,20 @@ class App:
                     approved_tree.selection_remove(approved_tree.selection())
 
             self.status.config(text=f"Đã tải {len(rows)} dòng.")
+
+            try:
+                if refresh_job["id"] is not None:
+                    self.admin_approval_panel.after_cancel(refresh_job["id"])
+            except Exception:
+                pass
+            try:
+                if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
+                    refresh_job["id"] = self.admin_approval_panel.after(
+                        5000,
+                        lambda: refresh_list(select_machine=select_machine, fill_selection=False, auto=True),
+                    )
+            except Exception:
+                refresh_job["id"] = None
 
 
 
@@ -12470,7 +13392,7 @@ class App:
 
             approval_entry.configure(state="normal")
 
-            approval_var.set("")
+            approval_var.set(code)
 
             approval_entry.configure(state="readonly")
 
@@ -13307,19 +14229,19 @@ class App:
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_settings_dialog)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_settings_dialog))
 
             elif page_id == "help":
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_help_dialog)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_help_dialog))
 
             elif page_id == "about":
 
                 for widget in (row, inner, accent, icon_label, text_label):
 
-                    widget.bind("<Button-1>", self.show_about_dialog)
+                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_about_dialog))
 
 
 
@@ -13365,27 +14287,6 @@ class App:
 
             tk.Label(user_inner, text=self.user_name, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center", pady=(2, 0))
 
-        self.status = tk.Label(
-
-            user_inner,
-
-            text="● Sẵn sàng",
-
-            anchor="center",
-
-            fg=UI_SUCCESS,
-
-            bg=UI_SURFACE,
-
-            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10, bold=True),
-
-            wraplength=120,
-
-            justify="center",
-
-        )
-        self.status.pack(anchor="center", pady=(3 if (self.tiny_ui or self.micro_ui) else 5, 0))
-
         if is_admin_build():
 
             admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
@@ -13399,6 +14300,22 @@ class App:
                 width=10 if (self.tiny_ui or self.micro_ui) else 11,
                 variant="warn",
             ).pack(anchor="center")
+
+        status_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#e7edf6")
+        status_card.pack(fill="x", pady=(6, 0))
+        status_inner = tk.Frame(status_card, bg="#ffffff", padx=8, pady=6)
+        status_inner.pack(fill="both", expand=True)
+        self.status = tk.Label(
+            status_inner,
+            text="● Sẵn sàng",
+            anchor="center",
+            fg=UI_SUCCESS,
+            bg="#ffffff",
+            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10, bold=True),
+            wraplength=max(120, self.sidebar_w - 26),
+            justify="center",
+        )
+        self.status.pack(fill="x")
 
 
 
@@ -13437,7 +14354,6 @@ class App:
             tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
 
             tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
-
 
 
         self.content_canvas = None
@@ -13935,6 +14851,8 @@ class App:
         if not getattr(self, "_history_filter_blur_bound", False):
             def _clear_history_filter_focus(event, shell=filter_shell):
                 try:
+                    if getattr(self, "current_page", "") != "history":
+                        return
                     if str(event.widget).startswith(str(shell)):
                         return
                     self.root.focus_set()
@@ -14236,7 +15154,12 @@ class App:
 
     def save_key(self):
 
-        save_env(self.api_key_var.get(), self.model_var.get(), getattr(self, "screen_profile_var", tk.StringVar(value="auto")).get())
+        save_env(
+            self.api_key_var.get(),
+            self.model_var.get(),
+            getattr(self, "screen_profile_var", tk.StringVar(value="auto")).get(),
+            getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get(),
+        )
 
         self.status.config(text="Đã lưu cài đặt vào file .env")
 
@@ -14319,6 +15242,55 @@ class App:
                 excel_columns=excel_col_names
 
             )
+
+            def _normalize_phieu_coc_dates(tables_data):
+
+                normalized_tables = []
+
+                for table in tables_data or []:
+
+                    if not isinstance(table, dict):
+
+                        normalized_tables.append(table)
+
+                        continue
+
+                    cols = list(table.get("columns") or [])
+
+                    date_cols = {
+                        idx for idx, name in enumerate(cols)
+                        if any(tok in norm(name) for tok in ("ngay", "date"))
+                    }
+
+                    rows = []
+
+                    for row in table.get("rows") or []:
+
+                        if not isinstance(row, list):
+
+                            rows.append(row)
+
+                            continue
+
+                        new_row = list(row)
+
+                        for idx in date_cols:
+
+                            if idx < len(new_row):
+
+                                new_row[idx] = normalize_vietnam_date(new_row[idx])
+
+                        rows.append(new_row)
+
+                    new_table = dict(table)
+
+                    new_table["rows"] = rows
+
+                    normalized_tables.append(new_table)
+
+                return normalized_tables
+
+            tables = _normalize_phieu_coc_dates(tables)
 
 
 
@@ -16938,10 +17910,23 @@ def _v229_capture_sum_columns(ws, total_row, first_data_row, last_data_row, no_c
 
     cols = set()
 
+    def _is_contract_like_header(col_idx):
+        try:
+            header_row = find_header_row_smart(ws)
+            headers = get_headers_smart(ws, header_row)
+            header_by_col = {int(c): str(v or "") for c, v in headers}
+            n = norm(header_by_col.get(col_idx, ""))
+            return any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"])
+        except Exception:
+            return False
+
     for c in range(1, ws.max_column + 1):
 
         if c == no_col:
 
+            continue
+
+        if _is_contract_like_header(c):
             continue
 
         v = ws.cell(total_row, c).value
@@ -17887,6 +18872,10 @@ def _v23_convert_by_source(src_name, value):
     # các cột này phải giữ đúng như ảnh
 
     if any(x in n for x in ["ngay", "date", "gio", "time", "bat dau", "ket thuc", "ten", "pile", "loai", "type", "vi tri", "ghi chu", "note", "remark"]):
+
+        if any(x in n for x in ["ngay", "date"]):
+
+            return normalize_vietnam_date(s)
 
         return s
 
@@ -18941,6 +19930,10 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
         header_by_col[int(col_idx)] = str(name or "")
 
+    def _is_contract_like_header(col_idx):
+        n = norm(header_by_col.get(int(col_idx), ""))
+        return any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"])
+
     def _looks_like_text_or_time_header(name):
 
         n = norm(name)
@@ -19023,6 +20016,9 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
         if c == no_col:
 
+            continue
+
+        if _is_contract_like_header(c):
             continue
 
         letter = get_column_letter(c)
@@ -19110,6 +20106,9 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
             header_name = header_by_col.get(c, "")
 
+            if _is_contract_like_header(c):
+                continue
+
             if _looks_like_text_or_time_header(header_name):
 
                 continue
@@ -19137,6 +20136,9 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
                 if not c or c == no_col:
 
+                    continue
+
+                if _is_contract_like_header(c):
                     continue
 
                 if c not in result:
@@ -19639,8 +20641,21 @@ def main():
 
 
 if __name__ == "__main__":
-
-    main()
+    if "--presence-server" in sys.argv:
+        try:
+            sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[1:] if arg != "--presence-server"]
+            import presence_server as _presence_server_main_mod
+            _presence_server_main_mod.main()
+        except SystemExit:
+            raise
+        except Exception:
+            try:
+                app_data_path("presence_server_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
+            raise
+    else:
+        main()
 
 
 
