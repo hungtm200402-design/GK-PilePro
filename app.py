@@ -436,6 +436,11 @@ UI_WARN = "#b7791f"
 UI_ERROR = "#dc2626"
 
 UI_SCALE = 1.0
+UI_FONT_BONUS = 0
+UI_FONT_MIN_SIZE = 11
+UI_READABILITY_MODE = False
+UI_FONT_FAMILY = "Segoe UI"
+UI_FONT_FAMILY_BOLD = "Segoe UI Semibold"
 
 
 def scale_px(value, minimum=1):
@@ -453,13 +458,18 @@ def ui_font(size=None, bold=False):
 
     try:
 
-        base = max(12, scale_px(size if size is not None else 12))
+        requested = size if size is not None else 12
+        if UI_READABILITY_MODE and requested <= 11:
+            requested += UI_FONT_BONUS
+        base = max(UI_FONT_MIN_SIZE, scale_px(requested))
 
     except Exception:
 
-        base = 12 if size is None else int(size)
+        base = max(UI_FONT_MIN_SIZE, 12 if size is None else int(size))
 
-    return ("Segoe UI", base, "bold" if bold else "normal")
+    family = UI_FONT_FAMILY_BOLD if bold else UI_FONT_FAMILY
+
+    return (family, base, "normal")
 
 
 
@@ -772,6 +782,7 @@ class RoundedMappingDropdown(tk.Canvas):
         self.popup_scrollbar = None
         self.popup_inner = None
         self.popup_content = None
+        self._popup_global_click_binding = None
 
         self.menu = tk.Menu(self, tearoff=0)
         try:
@@ -945,10 +956,33 @@ class RoundedMappingDropdown(tk.Canvas):
         height = max(scale_px(24), min(row_h * len(self.values) + scale_px(6), row_h * max_visible_rows + scale_px(6)))
         self.popup.geometry(f"{width}x{height}+{x}+{y}")
         self.popup.configure(bg="#d8e5f4")
-        self.popup.bind("<FocusOut>", lambda _e: self._close_popup())
         self.popup.bind("<Escape>", lambda _e: self._close_popup())
-        self.popup.focus_force()
         self._build_popup()
+        try:
+            self._popup_global_click_binding = self.winfo_toplevel().bind("<Button-1>", self._close_popup_if_clicked_outside, add="+")
+        except Exception:
+            self._popup_global_click_binding = None
+        try:
+            self.popup.focus_force()
+        except Exception:
+            pass
+
+    def _widget_is_popup_child(self, widget):
+        popup = getattr(self, "popup", None)
+        while widget is not None:
+            if widget is self or widget is popup:
+                return True
+            widget = getattr(widget, "master", None)
+        return False
+
+    def _close_popup_if_clicked_outside(self, event=None):
+        try:
+            widget = getattr(event, "widget", None)
+            if self._widget_is_popup_child(widget):
+                return
+        except Exception:
+            pass
+        self._close_popup()
 
     def _close_popup(self):
         popup = getattr(self, "popup", None)
@@ -957,6 +991,12 @@ class RoundedMappingDropdown(tk.Canvas):
         self.popup_scrollbar = None
         self.popup_inner = None
         self.popup_content = None
+        try:
+            if self._popup_global_click_binding:
+                self.winfo_toplevel().unbind("<Button-1>", self._popup_global_click_binding)
+        except Exception:
+            pass
+        self._popup_global_click_binding = None
         if popup is not None:
             try:
                 if popup.winfo_exists():
@@ -2879,6 +2919,14 @@ CÁCH ĐỌC BẢNG:
 
 - Nếu một header cha có nhiều cột con thì phải tách từng cột con riêng.
 
+- Nếu nhiều vùng bảng có cùng header và STT nối tiếp nhau, coi đó là một bảng kéo dài: trả về 1 object trong `tables` và nối toàn bộ rows theo thứ tự STT.
+
+- Nếu cùng một bảng bị ngắt trang, ngắt ảnh, hoặc chia thành nhiều khung nhưng STT vẫn nối tiếp, phải gộp hết rows vào một bảng duy nhất.
+
+- Chỉ trả nhiều object trong `tables` khi đó là các bảng khác loại, khác header, hoặc không phải dữ liệu nối tiếp nhau.
+
+- Không bỏ các dòng sau phần ngắt bảng; phải đọc hết đến dòng dữ liệu cuối cùng.
+
 
 
 QUY TẮC TỔ HỢP CỌC:
@@ -3046,6 +3094,19 @@ Output JSON thuần, không markdown, không giải thích:
         ["ô11", "ô12", "ô13"],
 
         ["ô21", "ô22", "ô23"]
+
+      ]
+    },
+
+    {
+
+      "title": "bảng khác loại nếu ảnh có nhiều bảng khác header",
+
+      "columns": ["cột 1", "cột 2"],
+
+      "rows": [
+
+        ["ô11", "ô12"]
 
       ]
 
@@ -4404,6 +4465,20 @@ def is_summary_sum_header(name):
 
 
 
+def is_actual_pressing_depth_header(name):
+
+    n = norm(name)
+
+    return any(x in n for x in [
+
+        "chieu sau ep thuc te",
+        "pressing depth",
+        "actual depth",
+        "chieu sau thuc te",
+        "ep thuc te",
+    ])
+
+
 def is_segment_header(name):
 
     n = norm(name)
@@ -4712,7 +4787,7 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
             return False
         if any(tok in n for tok in ["stt", "no", "ngay", "gio", "bat dau", "ket thuc", "ghi chu", "ten", "loai", "ca"]):
             return False
-        return any(tok in n for tok in ["chieu dai", "chieu sau", "tai trong", "khoi luong", "do sau", "khoi luong ep", "ep thuc te", "tong hop", "do dai", "m)", "(m)", "(t)"])
+        return any(tok in n for tok in ["chieu dai", "chieu sau", "tai trong", "khoi luong", "do sau", "khoi luong ep", "ep thuc te", "tong hop", "do dai", "m)", "(m)", "(t)"]) or is_actual_pressing_depth_header(n)
 
     def _col_has_numeric_data(col_idx):
 
@@ -5823,6 +5898,333 @@ def normalize_numeric_like_text(value):
     except Exception:
 
         return token.replace(".", ",")
+
+
+
+def _static_jacking_to_float(value):
+
+    if value is None:
+
+        return None
+
+    if isinstance(value, (int, float)):
+
+        return float(value)
+
+    s = str(value).strip()
+
+    if not s:
+
+        return None
+
+    m = re.search(r"[-+]?\d[\d.,]*", s.replace("\u00a0", " "))
+    if not m:
+
+        return None
+
+    token = m.group(0)
+
+    if "," in token and "." in token:
+
+        last_comma = token.rfind(",")
+
+        last_dot = token.rfind(".")
+
+        decimal_sep = "," if last_comma > last_dot else "."
+
+        thousand_sep = "." if decimal_sep == "," else ","
+
+        token = token.replace(thousand_sep, "")
+
+        token = token.replace(decimal_sep, ".")
+
+    elif token.count(",") == 1 and token.count(".") == 0:
+
+        token = token.replace(",", ".")
+
+    elif token.count(",") > 1 and "." not in token:
+
+        token = token.replace(",", "")
+
+    elif token.count(".") > 1 and "," not in token:
+
+        token = token.replace(".", "")
+
+    try:
+
+        return float(token)
+
+    except Exception:
+
+        return None
+
+
+def _summary_date_sort_key(date_text):
+
+    s = str(date_text or "").strip()
+
+    if not s:
+
+        return (1, "")
+
+    for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y-%m-%d"):
+
+        try:
+
+            return (0, datetime.strptime(s, fmt))
+
+        except Exception:
+
+            pass
+
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+
+    if m:
+
+        d, mo, y = m.groups()
+
+        try:
+
+            return (0, datetime(int(y), int(mo), int(d)))
+
+        except Exception:
+
+            pass
+
+    m = re.match(r"^(\d{1,2})/(\d{1,2})$", s)
+
+    if m:
+
+        d, mo = m.groups()
+
+        try:
+
+            return (0, datetime(datetime.now().year, int(mo), int(d)))
+
+        except Exception:
+
+            pass
+
+    return (1, s)
+
+
+def build_static_jacking_daily_summary_lines(tables):
+
+    summary_lines = []
+
+    if not tables:
+
+        return summary_lines
+
+    def _is_match(name, aliases):
+
+        n = norm(name)
+
+        return any(alias in n for alias in aliases)
+
+    def _find_col(cols, aliases):
+
+        for idx, col in enumerate(cols):
+
+            if _is_match(col, aliases):
+
+                return idx
+
+        return None
+
+    def _score_date_cell(value):
+
+        s = str(value or "").strip()
+
+        if not s:
+
+            return 0
+
+        if normalize_vietnam_date(s) != s:
+
+            return 4
+
+        if re.search(r"\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b", s):
+
+            return 3
+
+        if re.search(r"\b20\d{2}\b", s) and re.search(r"\b\d{1,2}\b", s):
+
+            return 2
+
+        return 0
+
+    def _score_depth_cell(value):
+
+        s = str(value or "").strip()
+
+        if not s:
+
+            return 0
+
+        if re.search(r"\d", s) and ("m" in norm(s) or "." in s or "," in s):
+
+            return 3
+
+        if _static_jacking_to_float(s) is not None:
+
+            return 2
+
+        return 0
+
+    def _score_pile_cell(value):
+
+        s = str(value or "").strip()
+
+        if not s:
+
+            return 0
+
+        if re.search(r"\d", s) and not re.search(r"\b\d{1,2}[/-]\d{1,2}\b", s):
+
+            return 2
+
+        if len(s) >= 2 and any(ch.isalpha() for ch in s):
+
+            return 1
+
+        return 0
+
+    def _normalize_summary_date(value):
+
+        s = str(value or "").strip()
+
+        if not s:
+
+            return ""
+
+        normalized = normalize_vietnam_date(s)
+
+        if re.search(r"\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b", str(normalized)):
+
+            return normalized
+
+        return ""
+
+    def _find_by_data_score(rows, cols_len, scorer, avoid=None):
+
+        avoid = set(avoid or [])
+        best_idx = None
+        best_score = 0
+        for idx in range(cols_len):
+            if idx in avoid:
+                continue
+            score = 0
+            for row in rows:
+                if idx < len(row):
+                    score += scorer(row[idx])
+            if score > best_score:
+                best_idx = idx
+                best_score = score
+        return best_idx, best_score
+
+    grouped = {}
+    matched_tables = 0
+    source_image_count = 0
+
+    for candidate in tables:
+
+        if not isinstance(candidate, dict):
+
+            continue
+
+        cols = [str(c or "").strip() for c in (candidate.get("columns") or [])]
+        rows = [list(r) if isinstance(r, (list, tuple)) else [r] for r in (candidate.get("rows") or [])]
+        if not cols or not rows:
+
+            continue
+
+        date_idx = _find_col(cols, ("ngay ep", "ngay", "date", "jacking date"))
+        pile_idx = _find_col(cols, ("ten tim coc", "ten coc", "pile name", "pile no", "ten tim", "tim coc", "pile"))
+        depth_idx = _find_col(cols, ("chieu sau ep thuc te", "chieu sau thuc te", "chieu sau ep", "chieu sau", "do sau ep thuc te", "do sau ep", "pressing depth", "actual depth", "ep thuc te", "ep coc thuc te", "depth"))
+
+        if date_idx is None:
+            date_idx, _ = _find_by_data_score(rows, len(cols), _score_date_cell)
+        if pile_idx is None:
+            pile_idx, _ = _find_by_data_score(rows, len(cols), _score_pile_cell, avoid={date_idx} if date_idx is not None else set())
+        if depth_idx is None:
+            depth_idx, _ = _find_by_data_score(rows, len(cols), _score_depth_cell, avoid={date_idx, pile_idx} - {None})
+
+        if date_idx is None or pile_idx is None or depth_idx is None:
+
+            continue
+
+        matched_tables += 1
+        try:
+
+            source_image_count = max(source_image_count, int(candidate.get("_source_image_count") or 0))
+
+        except Exception:
+
+            pass
+
+        for row in rows:
+
+            if pile_idx >= len(row) or date_idx >= len(row) or depth_idx >= len(row):
+
+                continue
+
+            pile_value = str(row[pile_idx] or "").strip()
+
+            if not pile_value:
+
+                continue
+
+            date_value = _normalize_summary_date(row[date_idx])
+
+            if not date_value:
+
+                date_value = "Không rõ ngày"
+
+            depth_num = _static_jacking_to_float(row[depth_idx])
+
+            bucket = grouped.setdefault(date_value, {"tim": 0, "depth": 0.0})
+
+            bucket["tim"] += 1
+
+            if depth_num is not None:
+
+                bucket["depth"] += depth_num
+
+    if not matched_tables:
+
+        return [
+            "Chưa đủ cột rõ ràng để tổng hợp chính xác.",
+            "Cần tối thiểu: cột ngày ép, cột tên tim/cọc, và cột chiều sâu ép thực tế.",
+        ]
+
+    if not grouped:
+
+        return ["Chưa có dòng hợp lệ để tổng hợp."]
+
+    if source_image_count > 0:
+
+        summary_lines.append(f"Tổng hợp theo ngày từ {source_image_count} ảnh đã đọc")
+
+    else:
+
+        summary_lines.append("Tổng hợp theo ngày từ toàn bộ dữ liệu đã đọc")
+
+    for date_value, bucket in sorted(grouped.items(), key=lambda item: _summary_date_sort_key(item[0])):
+
+        total_depth = bucket["depth"]
+
+        if abs(total_depth - round(total_depth)) < 1e-9:
+
+            depth_text = str(int(round(total_depth)))
+
+        else:
+
+            depth_text = str(round(total_depth, 3)).rstrip("0").rstrip(".")
+
+        summary_lines.append(f"{date_value}: {bucket['tim']} tim - chiều sâu ép thực tế {depth_text} m")
+
+    return summary_lines
 
 
 
@@ -7818,6 +8220,12 @@ class MappingEditor(tk.Frame):
 
     def set_mapping(self, table_cols, excel_headers, auto_map_idx, selected_values=None):
 
+        if selected_values is None and getattr(self, "mapping_vars", None):
+            try:
+                selected_values = [var.get() for var in self.mapping_vars]
+            except Exception:
+                selected_values = []
+
         self.clear()
 
         self.table_cols = table_cols
@@ -8196,6 +8604,7 @@ class TableEditor(tk.Frame):
         self.current = 0
 
         self.active_cell = None
+        self.on_change = None
 
 
 
@@ -8474,6 +8883,7 @@ class TableEditor(tk.Frame):
             self.combo.current(0)
 
         self.render()
+        self._notify_change()
 
 
 
@@ -8484,6 +8894,32 @@ class TableEditor(tk.Frame):
         self.current = self.combo.current()
 
         self.render()
+        self._notify_change()
+
+
+    def _notify_change(self):
+
+        cb = getattr(self, "on_change", None)
+
+        if callable(cb):
+
+            try:
+
+                cb(self.get_tables())
+
+            except TypeError:
+
+                try:
+
+                    cb()
+
+                except Exception:
+
+                    pass
+
+            except Exception:
+
+                pass
 
 
 
@@ -8584,6 +9020,7 @@ class TableEditor(tk.Frame):
         self.tree.after_idle(self._refresh_preview_grid)
 
         self.sync_current_from_tree()
+        self._notify_change()
 
 
 
@@ -8594,6 +9031,7 @@ class TableEditor(tk.Frame):
             self.tree.delete(item)
 
         self.sync_current_from_tree()
+        self._notify_change()
 
 
 
@@ -8668,6 +9106,7 @@ class TableEditor(tk.Frame):
         self.tree.item(item, values=vals)
 
         self.sync_current_from_tree()
+        self._notify_change()
 
 
 
@@ -8740,6 +9179,7 @@ class TableEditor(tk.Frame):
             ent.destroy()
 
             self.sync_current_from_tree()
+            self._notify_change()
 
 
 
@@ -8784,6 +9224,8 @@ class App:
         self.template_var = tk.StringVar(value="Bảng bất kỳ - tự nhận cột")
 
         self.image_path = None
+        self.image_paths = []
+        self.preview_image_index = 0
 
         self.excel_path = None
 
@@ -13709,13 +14151,13 @@ del "%~f0" >nul 2>nul
             finally:
                 self.admin_approval_panel = None
 
-        sidebar_w = getattr(self, "sidebar_w", scale_px(190)) if hasattr(self, 'sidebar_w') else 190
-        sidebar = tk.Frame(panel, width=sidebar_w, bg="#f8fbff", highlightthickness=1, highlightbackground="#e7edf6")
+        sidebar_w = scale_px(254)
+        sidebar = tk.Frame(panel, width=sidebar_w, bg="#f8fbff", highlightthickness=1, highlightbackground="#dbe6f3")
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
         brand = tk.Frame(sidebar, bg="#f8fbff")
-        brand.pack(fill="x", pady=(0, 24))
+        brand.pack(fill="x", pady=(0, 22))
         try:
             if hasattr(self, 'app_logo_img') and self.app_logo_img is not None:
                 tk.Label(brand, image=self.app_logo_img, bg="#f8fbff").pack(anchor="center", pady=(14, 0))
@@ -13733,18 +14175,15 @@ del "%~f0" >nul 2>nul
         ]
 
         for page_id, icon, text, active in nav_items:
-            if active:
-                bg = UI_PRIMARY
-                fg = "#ffffff"
-            else:
-                bg = "#f8fbff"
-                fg = "#667085"
-            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=0, cursor="hand2")
-            row.pack(fill="x", padx=8, pady=2)
-            inner = tk.Frame(row, bg=bg, padx=10, pady=8, cursor="hand2")
+            bg = "#eef6ff" if active else "#f8fbff"
+            fg = UI_PRIMARY if active else "#475569"
+            border = UI_PRIMARY if active else "#dbe6f3"
+            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=border, cursor="hand2")
+            row.pack(fill="x", padx=20, pady=4)
+            inner = tk.Frame(row, bg=bg, padx=14, pady=11, cursor="hand2")
             inner.pack(fill="both", expand=True)
-            tk.Label(inner, text=icon, font=ui_font(12), bg=bg, fg=fg, width=2, anchor="center", cursor="hand2").pack(side="left", padx=(0, 6))
-            lbl = tk.Label(inner, text=text, font=ui_font(10, bold=active), bg=bg, fg=fg, anchor="w", cursor="hand2")
+            tk.Label(inner, text=icon, font=ui_font(12), bg=bg, fg=fg, width=2, anchor="center", cursor="hand2").pack(side="left", padx=(0, 9))
+            lbl = tk.Label(inner, text=text, font=ui_font(11, bold=active), bg=bg, fg=fg, anchor="w", cursor="hand2")
             lbl.pack(side="left", fill="x", expand=True)
             for widget in (row, inner, lbl):
                 widget.bind("<Button-1>", lambda e: close_panel())
@@ -13754,9 +14193,9 @@ del "%~f0" >nul 2>nul
         member_info.pack(side="bottom", fill="x", pady=(0, 16))
         tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg="#f8fbff", fg=UI_TEXT).pack(anchor="center")
         tk.Label(member_info, text="Admin", font=ui_font(9), bg="#f8fbff", fg=UI_MUTED).pack(anchor="center", pady=(2, 10))
-        active_btn = tk.Frame(member_info, bg="#fff7ed", highlightthickness=1, highlightbackground="#fed7aa")
-        active_btn.pack(pady=4, padx=12, fill="x")
-        tk.Label(active_btn, text="Duyệt máy ✓", font=ui_font(9, bold=True), bg="#fff7ed", fg="#ea580c").pack(pady=6)
+        active_btn = tk.Frame(member_info, bg="#fff7ed", highlightthickness=1, highlightbackground="#f59e0b")
+        active_btn.pack(pady=4, padx=20, fill="x")
+        tk.Label(active_btn, text="Duyệt máy     🛡", font=ui_font(10, bold=True), bg="#fff7ed", fg="#ea580c").pack(pady=10)
 
         # Stats box in sidebar (quick glance)
         stat_total_var = tk.StringVar(value="Đang tải...")
@@ -13766,61 +14205,38 @@ del "%~f0" >nul 2>nul
         tk.Label(stats_box, textvariable=stat_total_var, bg="#eef6ff", fg="#16a34a", font=ui_font(9, bold=True), anchor="w").pack(padx=10, pady=(8, 0), anchor="w")
         tk.Label(stats_box, textvariable=stat_time_var, bg="#eef6ff", fg="#64748b", font=ui_font(8), anchor="w").pack(padx=10, pady=(2, 8), anchor="w")
 
-        # ─── Right Panel: Tổng quan hệ thống ───
-        right_panel = tk.Frame(panel, bg=UI_BG, width=220)
-        right_panel.pack(side="right", fill="y", padx=(0, 20), pady=20)
-        right_panel.pack_propagate(False)
-
-        right_card = tk.Frame(right_panel, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
-        right_card.pack(fill="x")
-
-        tk.Label(right_card, text="Tổng quan hệ thống", bg="#ffffff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w", padx=16, pady=(18, 14))
-
         stat_active_var = tk.StringVar(value="0")
         stat_pending_var = tk.StringVar(value="0")
         stat_blocked_var = tk.StringVar(value="0")
         stat_total_num_var = tk.StringVar(value="0")
 
-        def _add_stat(parent, icon, title, val_var, icon_fg, icon_bg, val_fg):
-            row = tk.Frame(parent, bg="#ffffff")
-            row.pack(fill="x", padx=16, pady=8)
-            ic = tk.Label(row, text=icon, font=ui_font(14), bg=icon_bg, fg=icon_fg, width=2, height=1)
-            ic.pack(side="left", padx=(0, 12))
-            tf = tk.Frame(row, bg="#ffffff")
-            tf.pack(side="left", fill="x", expand=True)
-            tk.Label(tf, text=title, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w")
-            tk.Label(tf, textvariable=val_var, bg="#ffffff", fg=val_fg, font=ui_font(14, bold=True)).pack(anchor="w")
-
-        _add_stat(right_card, "📄", "Máy đã duyệt", stat_total_num_var, "#2563eb", "#eff6ff", "#2563eb")
-        _add_stat(right_card, "🛡", "Đang hoạt động", stat_active_var, "#16a34a", "#f0fdf4", "#16a34a")
-        _add_stat(right_card, "⏳", "Chờ duyệt", stat_pending_var, "#d97706", "#fffbeb", "#d97706")
-        _add_stat(right_card, "🚫", "Đã chặn", stat_blocked_var, "#dc2626", "#fef2f2", "#dc2626")
-
-        time_frame = tk.Frame(right_card, bg="#ffffff")
-        time_frame.pack(fill="x", padx=16, pady=(16, 16))
-        tk.Label(time_frame, textvariable=stat_time_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(8)).pack(side="left")
-        refresh_icon = tk.Label(time_frame, text="↻", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(12, bold=True), cursor="hand2")
-        refresh_icon.pack(side="right")
-
         # ─── Main Content ───
         main_content = tk.Frame(panel, bg=UI_BG)
-        main_content.pack(side="left", fill="both", expand=True, padx=(20, 12), pady=20)
+        main_content.pack(side="left", fill="both", expand=True, padx=(12, 18), pady=12)
 
         header_frame = tk.Frame(main_content, bg=UI_BG)
-        header_frame.pack(fill="x", pady=(0, 20))
+        header_frame.pack(fill="x", pady=(18, 24))
         
         title_row = tk.Frame(header_frame, bg=UI_BG)
         title_row.pack(fill="x")
-        tk.Label(title_row, text="👥", bg=UI_BG, fg=UI_PRIMARY, font=ui_font(16)).pack(side="left", padx=(0, 8))
-        tk.Label(title_row, text="Duyệt máy thành viên", bg=UI_BG, fg=UI_TEXT, font=ui_font(16, bold=True)).pack(side="left")
+        icon_box = tk.Frame(title_row, bg="#eef6ff", width=68, height=68)
+        icon_box.pack(side="left", padx=(20, 18))
+        icon_box.pack_propagate(False)
+        tk.Label(icon_box, text="👥", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(24)).pack(expand=True)
+        tk.Label(title_row, text="Duyệt máy thành viên", bg=UI_BG, fg="#0f172a", font=ui_font(20, bold=True)).pack(side="left")
         
-        tk.Label(header_frame, text="Nhập mã máy do thành viên cung cấp để tạo mã duyệt cho họ.", bg=UI_BG, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(4, 0), padx=(36, 0))
+        tk.Label(header_frame, text="Nhập mã máy do thành viên cung cấp để tạo mã duyệt cho họ.", bg=UI_BG, fg="#64748b", font=ui_font(11)).pack(anchor="w", pady=(4, 0), padx=(108, 0))
 
-        form_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
+        form_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#bfdbfe")
         form_box.pack(fill="x", pady=(0, 16))
         
-        tk.Label(form_box, text="🔑  Tạo mã duyệt mới", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(11, bold=True)).pack(anchor="w", padx=20, pady=(16, 0))
-        tk.Frame(form_box, bg=UI_BORDER, height=1).pack(fill="x", padx=20, pady=(12, 14))
+        form_title = tk.Frame(form_box, bg="#ffffff")
+        form_title.pack(fill="x", padx=20, pady=(20, 14))
+        mini_icon = tk.Frame(form_title, bg="#eef6ff", width=36, height=36)
+        mini_icon.pack(side="left", padx=(0, 12))
+        mini_icon.pack_propagate(False)
+        tk.Label(mini_icon, text="🔑", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(14)).pack(expand=True)
+        tk.Label(form_title, text="Tạo mã duyệt mới", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(13, bold=True)).pack(side="left")
 
         form_grid = tk.Frame(form_box, bg="#ffffff")
         form_grid.pack(fill="x", padx=20)
@@ -13830,7 +14246,7 @@ del "%~f0" >nul 2>nul
         tk.Label(col1, text="Mã máy", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         machine_var = tk.StringVar()
         machine_entry = tk.Entry(col1, textvariable=machine_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        machine_entry.pack(fill="x", pady=(6, 12), ipady=7)
+        machine_entry.pack(fill="x", pady=(8, 18), ipady=10)
         machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp")
         machine_entry.bind("<FocusIn>", lambda e: (machine_entry.delete(0, 'end'), machine_entry.configure(fg=UI_TEXT)) if machine_var.get().startswith("⊙") else None)
         machine_entry.bind("<FocusOut>", lambda e: (machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp"), machine_entry.configure(fg="#94a3b8")) if not machine_var.get() else None)
@@ -13840,7 +14256,7 @@ del "%~f0" >nul 2>nul
         tk.Label(col2, text="Tên người (tuỳ chọn)", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         name_var = tk.StringVar()
         name_entry = tk.Entry(col2, textvariable=name_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        name_entry.pack(fill="x", pady=(6, 12), ipady=7)
+        name_entry.pack(fill="x", pady=(8, 18), ipady=10)
         name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)")
         name_entry.bind("<FocusIn>", lambda e: (name_entry.delete(0, 'end'), name_entry.configure(fg=UI_TEXT)) if name_var.get().startswith("👤") else None)
         name_entry.bind("<FocusOut>", lambda e: (name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)"), name_entry.configure(fg="#94a3b8")) if not name_var.get() else None)
@@ -13848,16 +14264,16 @@ del "%~f0" >nul 2>nul
         tk.Label(form_box, text="Mã duyệt", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w", padx=20)
         approval_var = tk.StringVar()
         approval_entry = tk.Entry(form_box, textvariable=approval_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground="#E5EAF3")
-        approval_entry.pack(fill="x", padx=20, pady=(6, 16), ipady=6)
+        approval_entry.pack(fill="x", padx=20, pady=(8, 20), ipady=10)
         approval_entry.insert(0, "Mã duyệt sẽ được tạo tự động")
         approval_entry.configure(state="readonly")
 
         last_generated_code = {"value": ""}
 
         actions = tk.Frame(form_box, bg="#ffffff")
-        actions.pack(fill="x", padx=20, pady=(0, 20))
+        actions.pack(fill="x", padx=20, pady=(0, 22))
 
-        list_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
+        list_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#d5e5fb")
         list_box.pack(fill="both", expand=True)
 
         list_header = tk.Frame(list_box, bg="#ffffff")
@@ -13866,7 +14282,7 @@ del "%~f0" >nul 2>nul
         list_title_box = tk.Frame(list_header, bg="#ffffff")
         list_title_box.pack(side="left")
 
-        tk.Label(list_title_box, text="📄 Danh sách máy đã duyệt", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(list_title_box, text="▣  Danh sách máy đã duyệt", bg="#ffffff", fg="#0f172a", font=ui_font(13, bold=True)).pack(anchor="w")
         summary_var = tk.StringVar(value="Đang tải...")
         tk.Label(list_title_box, textvariable=summary_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w", pady=(2, 0))
 
@@ -13874,7 +14290,7 @@ del "%~f0" >nul 2>nul
         search_bar.pack(fill="x", padx=20, pady=(0, 12))
         search_var = tk.StringVar()
         search_entry = tk.Entry(search_bar, textvariable=search_var, relief="flat", bd=0, font=ui_font(10), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        search_entry.pack(side="left", fill="x", expand=True, ipady=7)
+        search_entry.pack(side="left", fill="x", expand=True, ipady=10)
         search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...")
         search_entry.bind("<FocusIn>", lambda e: (search_entry.delete(0, 'end'), search_entry.configure(fg=UI_TEXT)) if search_var.get().startswith("🔍") else None)
         search_entry.bind("<FocusOut>", lambda e: (search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt..."), search_entry.configure(fg="#94a3b8")) if not search_var.get() else None)
@@ -13885,12 +14301,13 @@ del "%~f0" >nul 2>nul
         list_frame.pack(fill="both", expand=True, padx=20)
 
         style = ttk.Style()
-        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=44, borderwidth=0, font=ui_font(10))
-        style.configure("Custom.Treeview.Heading", font=ui_font(9, bold=True), background="#f1f5f9", foreground="#64748b", relief="flat", borderwidth=0)
+        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=58, borderwidth=0, font=ui_font(11))
+        style.configure("Custom.Treeview.Heading", font=ui_font(11, bold=True), background="#eff6ff", foreground="#0f172a", relief="flat", borderwidth=0)
         style.map("Custom.Treeview.Heading", background=[("active", "#e2e8f0")])
         style.layout("Custom.Treeview", [('Custom.Treeview.treearea', {'sticky': 'nswe'})])
 
-        approved_tree = ttk.Treeview(list_frame, style="Custom.Treeview", columns=("machine", "user", "code", "time", "status", "action"), show="headings", height=8)
+        approved_tree = ttk.Treeview(list_frame, style="Custom.Treeview", columns=("select", "machine", "user", "code", "time", "status", "action"), show="headings", height=8)
+        approved_tree.heading("select", text="☐")
         approved_tree.heading("machine", text="  Mã máy")
         approved_tree.heading("user", text="Tên người")
         approved_tree.heading("code", text="Mã duyệt")
@@ -13898,12 +14315,13 @@ del "%~f0" >nul 2>nul
         approved_tree.heading("status", text="Trạng thái")
         approved_tree.heading("action", text="Thao tác")
 
-        approved_tree.column("machine", width=200, anchor="w")
-        approved_tree.column("user", width=100, anchor="center")
-        approved_tree.column("code", width=160, anchor="center")
-        approved_tree.column("time", width=150, anchor="center")
-        approved_tree.column("status", width=130, anchor="center")
-        approved_tree.column("action", width=60, anchor="center")
+        approved_tree.column("select", width=44, minwidth=44, anchor="center", stretch=False)
+        approved_tree.column("machine", width=260, anchor="w")
+        approved_tree.column("user", width=160, anchor="w")
+        approved_tree.column("code", width=210, anchor="w")
+        approved_tree.column("time", width=210, anchor="w")
+        approved_tree.column("status", width=170, anchor="center")
+        approved_tree.column("action", width=80, anchor="center")
 
         approved_tree.tag_configure("online", foreground="#16a34a", background="#ffffff")
         approved_tree.tag_configure("away", foreground="#d97706", background="#ffffff")
@@ -14009,7 +14427,7 @@ del "%~f0" >nul 2>nul
                                 age_min = max(0, int((datetime.now() - dt).total_seconds() // 60))
                                 status_tag = "away" if age_min < 180 else "old"
                         tags = (status_tag, "stripe" if i % 2 == 1 else "")
-                        values = ("  " + machine, str(row.get("user_name", "") or "").strip(), row.get("approval_code", ""), row.get("approved_at", ""), status_text, "⋮")
+                        values = ("☐", "  🖥  " + machine, str(row.get("user_name", "") or "").strip(), row.get("approval_code", ""), row.get("approved_at", ""), status_text, "⋮")
                         if machine in existing_iids:
                             approved_tree.item(machine, values=values, tags=tags)
                         else:
@@ -14076,10 +14494,11 @@ del "%~f0" >nul 2>nul
                 return
             values = approved_tree.item(selected[0], "values")
             if values:
-                machine_var.set(str(values[0]).strip())
-                name_var.set(values[1] if len(values) > 1 else "")
+                machine_text = re.sub(r"^[^\w]*", "", str(values[1] if len(values) > 1 else "")).replace("🖥", "").strip()
+                machine_var.set(machine_text)
+                name_var.set(values[2] if len(values) > 2 else "")
                 approval_entry.configure(state="normal")
-                approval_var.set(values[2] if len(values) > 2 else "")
+                approval_var.set(values[3] if len(values) > 3 else "")
                 approval_entry.configure(state="readonly")
 
         def clear_approval_form():
@@ -14097,6 +14516,10 @@ del "%~f0" >nul 2>nul
         def generate():
             machine = str(machine_var.get() or "").strip().upper()
             user_name = str(name_var.get() or "").strip()
+            if machine.startswith("⊙") or "NHẬP MÃ MÁY" in machine:
+                machine = ""
+            if user_name.startswith("👤") or "Nhập tên người" in user_name:
+                user_name = ""
             code = remember_admin_approved_machine(machine, user_name)
             if not code:
                 messagebox.showwarning("Thiếu mã máy", "Bạn chưa nhập mã máy cần duyệt.")
@@ -14146,13 +14569,13 @@ del "%~f0" >nul 2>nul
         approved_tree.bind("<Delete>", lambda _e: delete_selected())
         approved_tree.bind("<Button-3>", open_list_menu)
 
-        ui_button(actions, "+ Tạo mã duyệt", generate, width=13, variant="primary").pack(side="left", padx=(0, 8))
-        ui_button(actions, "❐ Copy mã", copy_code, width=10, variant="soft").pack(side="left")
-        ui_button(actions, "✕ Đóng", close_panel, width=9).pack(side="right")
+        ui_button(actions, "⊙  Tạo mã duyệt", generate, width=15, variant="primary").pack(side="left", padx=(0, 12))
+        ui_button(actions, "▣  Copy mã", copy_code, width=12, variant="soft").pack(side="left")
+        ui_button(actions, "×  Đóng", close_panel, width=10).pack(side="right")
 
-        ui_button(search_bar, "🔍 Tìm", search_rows, width=8, variant="primary").pack(side="left", padx=(8, 0))
-        ui_button(search_bar, "🔽 Bộ lọc", search_rows, width=8, variant="soft").pack(side="left", padx=(8, 0))
-        ui_button(search_bar, "🗑 Xóa máy", delete_selected, width=10, variant="warn").pack(side="right")
+        ui_button(search_bar, "⌕  Tìm", search_rows, width=11, variant="soft").pack(side="left", padx=(20, 0))
+        ui_button(search_bar, "▽  Bộ lọc", search_rows, width=11, variant="default").pack(side="left", padx=(20, 0))
+        ui_button(search_bar, "🗑  Xóa máy", delete_selected, width=12, variant="warn").pack(side="left", padx=(20, 0))
 
         ui_button(list_actions, "🗑 Xóa máy đã chọn", delete_selected, width=16, variant="warn").pack(side="left")
         ui_button(list_actions, "↻ Tải lại danh sách", clear_search, width=16, variant="soft").pack(side="left", padx=(8, 0))
@@ -14232,18 +14655,24 @@ del "%~f0" >nul 2>nul
         self.main_content_scroll = False
 
         try:
-            global UI_SCALE
+            global UI_SCALE, UI_FONT_BONUS, UI_FONT_MIN_SIZE, UI_READABILITY_MODE
             if self.screen_profile_mode == "auto":
                 if sw <= 1366 or sh <= 768:
-                    UI_SCALE = max(0.92, min(1.08, round(actual_dpi / 120.0, 2)))
+                    UI_SCALE = max(1.00, min(1.12, round(actual_dpi / 120.0, 2)))
                 elif sw <= 1600 or sh <= 900:
-                    UI_SCALE = max(0.96, min(1.15, round(actual_dpi / 108.0, 2)))
+                    UI_SCALE = max(1.03, min(1.16, round(actual_dpi / 108.0, 2)))
                 else:
                     UI_SCALE = max(1.0, min(1.20, round(actual_dpi / 96.0, 2)))
             else:
-                UI_SCALE = max(0.90, min(1.20, round(dpi_for_scale / 240.0, 2)))
+                UI_SCALE = max(1.00, min(1.20, round(dpi_for_scale / 240.0, 2)))
+            UI_READABILITY_MODE = bool(sw <= 1600 or sh <= 900)
+            UI_FONT_BONUS = 1 if UI_READABILITY_MODE else 0
+            UI_FONT_MIN_SIZE = 11 if UI_READABILITY_MODE else 10
         except Exception:
             UI_SCALE = 1.0
+            UI_FONT_BONUS = 0
+            UI_FONT_MIN_SIZE = 11
+            UI_READABILITY_MODE = False
 
         try:
             self.root.tk.call("tk", "scaling", UI_SCALE)
@@ -14397,7 +14826,7 @@ del "%~f0" >nul 2>nul
 
         try:
 
-            row_height = scale_px(22) if getattr(self, "micro_ui", False) else (scale_px(24) if getattr(self, "dense_ui", False) else scale_px(28))
+            row_height = scale_px(30) if getattr(self, "micro_ui", False) else (scale_px(31) if getattr(self, "dense_ui", False) else scale_px(32))
 
             heading_pad = (scale_px(6), scale_px(5)) if getattr(self, "micro_ui", False) else ((scale_px(7), scale_px(6)) if getattr(self, "dense_ui", False) else (scale_px(8), scale_px(7)))
 
@@ -14405,7 +14834,15 @@ del "%~f0" >nul 2>nul
 
             style.theme_use("clam")
 
-            style.configure(".", font=("Segoe UI", 11), background=UI_BG, foreground=UI_TEXT)
+            try:
+                self.root.option_add("*Font", ui_font(11))
+                self.root.option_add("*Entry.Font", ui_font(11))
+                self.root.option_add("*Text.Font", ui_font(11))
+                self.root.option_add("*Menu.Font", ui_font(11))
+            except Exception:
+                pass
+
+            style.configure(".", font=ui_font(11), background=UI_BG, foreground=UI_TEXT)
 
             style.configure(
 
@@ -14416,6 +14853,8 @@ del "%~f0" >nul 2>nul
                 background=UI_SURFACE,
 
                 foreground=UI_TEXT,
+
+                font=ui_font(11),
 
                 bordercolor=UI_BORDER,
 
@@ -14456,6 +14895,8 @@ del "%~f0" >nul 2>nul
                 foreground=UI_TEXT,
 
                 bordercolor="#bcd2ee",
+
+                font=ui_font(11),
 
                 lightcolor="#bcd2ee",
 
@@ -14499,6 +14940,8 @@ del "%~f0" >nul 2>nul
 
                 bordercolor=UI_BORDER,
 
+                font=ui_font(11),
+
                 lightcolor=UI_BORDER,
 
                 darkcolor=UI_BORDER,
@@ -14522,6 +14965,8 @@ del "%~f0" >nul 2>nul
                 foreground=UI_TEXT,
 
                 rowheight=row_height,
+
+                font=ui_font(11),
 
                 bordercolor=UI_BORDER,
 
@@ -14558,6 +15003,8 @@ del "%~f0" >nul 2>nul
                 fieldbackground="#f7f7f3",
 
                 foreground="#1f2933",
+
+                font=ui_font(11),
 
                 rowheight=row_height,
 
@@ -15280,33 +15727,127 @@ del "%~f0" >nul 2>nul
         upload_box.pack(fill="x", expand=False, pady=(8, 0))
         upload_box.pack_propagate(False)
 
+        preview_shell = tk.Frame(upload_box, bg="#fbfdff")
+        preview_shell.pack(fill="x", expand=False)
+
+        preview_w = 260 if not (self.tiny_ui or self.micro_ui) else 220
+        preview_h = max(170, int(self.image_drop_h))
+
+        self.preview_frame = tk.Frame(
+            preview_shell,
+            bg="#f8fbff",
+            highlightthickness=1,
+            highlightbackground="#d7e3f2",
+            width=preview_w,
+            height=preview_h,
+        )
+        self.preview_frame.pack(side="left")
+        self.preview_frame.pack_propagate(False)
+
         self.img_label = tk.Label(
-            upload_box,
+            self.preview_frame,
             text="Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg",
-            bg="#fbfdff",
+            bg="#f8fbff",
             fg=UI_MUTED,
             font=ui_font(11),
             justify="center",
+            cursor="hand2",
         )
         self.img_label.pack(fill="both", expand=True)
+        self.img_label.bind("<Button-1>", self.open_current_preview_image)
         self.img_label.bind("<Control-v>", self.paste_image_from_clipboard)
         self.img_label.bind("<Control-V>", self.paste_image_from_clipboard)
-        
-        def on_img_label_resize(event):
-            if not hasattr(self, '_original_image') or self._original_image is None:
-                return
-            w, h = event.width, event.height
-            if w < 10 or h < 10: return
-            if hasattr(self, '_last_img_size'):
-                if abs(w - self._last_img_size[0]) < 10 and abs(h - self._last_img_size[1]) < 10:
-                    return
-            self._last_img_size = (w, h)
-            im = self._original_image.copy()
-            im.thumbnail((w, h))
-            self.tk_img = ImageTk.PhotoImage(im)
-            self.img_label.config(image=self.tk_img)
-            
-        self.img_label.bind("<Configure>", on_img_label_resize)
+
+        self.preview_prev_btn = tk.Button(
+            self.preview_frame,
+            text="‹",
+            command=lambda: self.move_preview_image(-1),
+            bg="#ffffff",
+            fg=UI_TEXT,
+            activebackground="#e8f1ff",
+            activeforeground=UI_TEXT,
+            relief="flat",
+            bd=0,
+            font=ui_font(18, bold=True),
+            cursor="hand2",
+            width=2,
+            height=1,
+        )
+        self.preview_next_btn = tk.Button(
+            self.preview_frame,
+            text="›",
+            command=lambda: self.move_preview_image(1),
+            bg="#ffffff",
+            fg=UI_TEXT,
+            activebackground="#e8f1ff",
+            activeforeground=UI_TEXT,
+            relief="flat",
+            bd=0,
+            font=ui_font(18, bold=True),
+            cursor="hand2",
+            width=2,
+            height=1,
+        )
+        self.preview_prev_btn.place(relx=0.03, rely=0.5, anchor="w")
+        self.preview_next_btn.place(relx=0.97, rely=0.5, anchor="e")
+        self.preview_prev_btn.lower()
+        self.preview_next_btn.lower()
+
+        self._preview_hover_hide_job = None
+
+        def _preview_pointer_inside():
+            try:
+                x, y = self.preview_frame.winfo_pointerxy()
+                widget = self.preview_frame.winfo_containing(x, y)
+                while widget is not None:
+                    if widget is self.preview_frame:
+                        return True
+                    widget = getattr(widget, "master", None)
+            except Exception:
+                pass
+            return False
+
+        def _preview_hover(_event=None):
+            try:
+                if self._preview_hover_hide_job:
+                    self.preview_frame.after_cancel(self._preview_hover_hide_job)
+                    self._preview_hover_hide_job = None
+            except Exception:
+                pass
+            self.preview_prev_btn.lift()
+            self.preview_next_btn.lift()
+
+        def _preview_leave(_event=None):
+            def _hide_if_outside():
+                self._preview_hover_hide_job = None
+                if not _preview_pointer_inside():
+                    self.preview_prev_btn.lower()
+                    self.preview_next_btn.lower()
+
+            try:
+                if self._preview_hover_hide_job:
+                    self.preview_frame.after_cancel(self._preview_hover_hide_job)
+                self._preview_hover_hide_job = self.preview_frame.after(140, _hide_if_outside)
+            except Exception:
+                _hide_if_outside()
+
+        self.preview_frame.bind("<Enter>", _preview_hover)
+        self.preview_frame.bind("<Leave>", _preview_leave)
+        self.img_label.bind("<Enter>", _preview_hover)
+        self.img_label.bind("<Leave>", _preview_leave)
+        self.preview_prev_btn.bind("<Enter>", _preview_hover)
+        self.preview_prev_btn.bind("<Leave>", _preview_leave)
+        self.preview_next_btn.bind("<Enter>", _preview_hover)
+        self.preview_next_btn.bind("<Leave>", _preview_leave)
+
+        self.preview_counter_var = tk.StringVar(value="")
+        tk.Label(
+            upload_box,
+            textvariable=self.preview_counter_var,
+            bg="#fbfdff",
+            fg=UI_MUTED,
+            font=ui_font(10),
+        ).pack(anchor="center", pady=(8, 0))
 
         ui_button(upload_box, "Chọn ảnh / Tải lên", self.choose_image, width=18, variant="primary").pack(pady=(8, 0))
 
@@ -15353,6 +15894,7 @@ del "%~f0" >nul 2>nul
         section_title(center_col, "PREVIEW BẢNG", "Kiểm tra và sửa dữ liệu trước khi đưa vào Excel")
 
         self.table_editor = TableEditor(center_col)
+        self.table_editor.on_change = self._refresh_daily_summary_panel
 
 
 
@@ -15363,6 +15905,32 @@ del "%~f0" >nul 2>nul
         right_col.grid(row=0, column=2, sticky="nsew")
 
         section_title(right_col, "XÁC NHẬN ÁNH XẠ CỘT", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn")
+
+        summary_card = tk.Frame(right_col, bg=UI_SURFACE)
+        summary_card.pack(fill="x", pady=(8, 0))
+
+        tk.Label(
+            summary_card,
+            text="TỔNG HỢP THEO NGÀY",
+            bg=UI_SURFACE,
+            fg=UI_TEXT,
+            font=ui_font(10, bold=True),
+            anchor="w",
+        ).pack(anchor="w")
+
+        self.daily_summary_text = tk.Text(
+            summary_card,
+            height=5 if self.micro_ui else (6 if self.short_ui else 7),
+            wrap="word",
+            bg="#fbfdff",
+            fg=UI_TEXT,
+            relief="flat",
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=UI_BORDER,
+            font=ui_font(10),
+        )
+        self.daily_summary_text.pack(fill="x", expand=False, pady=(6, 0))
 
         mapping_action_row = tk.Frame(right_col, bg=UI_SURFACE)
 
@@ -15823,6 +16391,52 @@ del "%~f0" >nul 2>nul
         self._set_status("Đã lưu cài đặt vào file .env", "success")
 
 
+    def _set_daily_summary_text(self, lines):
+
+        try:
+
+            widget = getattr(self, "daily_summary_text", None)
+
+            if widget is None:
+
+                return
+
+            widget.delete("1.0", "end")
+
+            text = "\n".join(lines or []).strip()
+
+            if not text:
+
+                text = "Chưa có dữ liệu tổng hợp."
+
+            widget.insert("1.0", text + "\n")
+
+        except Exception:
+
+            pass
+
+
+    def _refresh_daily_summary_panel(self, tables=None):
+
+        try:
+
+            tables_to_scan = tables if isinstance(tables, list) else (self.tables or [])
+
+            lines = build_static_jacking_daily_summary_lines(tables_to_scan)
+
+            self._set_daily_summary_text(lines)
+
+        except Exception:
+
+            try:
+
+                self._set_daily_summary_text([])
+
+            except Exception:
+
+                pass
+
+
 
     def run_gemini_phieu_coc(self):
 
@@ -15842,7 +16456,9 @@ del "%~f0" >nul 2>nul
 
         """
 
-        if not self.image_path:
+        image_paths = list(getattr(self, "image_paths", None) or ([] if not self.image_path else [self.image_path]))
+
+        if not image_paths:
 
             messagebox.showwarning("Thiếu ảnh", "Bạn chưa chọn ảnh.")
 
@@ -15880,7 +16496,7 @@ del "%~f0" >nul 2>nul
 
         self._set_status(
 
-            f"Đang đọc phiếu cọc... ({len(excel_col_names)} cột Excel: "
+            f"Đang đọc phiếu cọc... ({len(image_paths)} ảnh, {len(excel_col_names)} cột Excel: "
 
             + ", ".join(excel_col_names[:5])
 
@@ -15896,13 +16512,27 @@ del "%~f0" >nul 2>nul
 
         try:
 
-            tables, raw = call_gemini_phieu_coc(
+            all_tables = []
+            raw_parts = []
 
-                self.image_path, api_key, self.model_var.get().strip(),
+            for idx, image_path in enumerate(image_paths, start=1):
 
-                excel_columns=excel_col_names
+                self._set_status(f"Đang đọc phiếu cọc {idx}/{len(image_paths)}...", "warn")
+                self.root.update()
 
-            )
+                tables_one, raw_one = call_gemini_phieu_coc(
+
+                    image_path, api_key, self.model_var.get().strip(),
+
+                    excel_columns=excel_col_names
+
+                )
+
+                all_tables.extend(tables_one or [])
+                raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
+
+            tables = all_tables
+            raw = "\n\n".join(raw_parts)
 
             def _normalize_phieu_coc_dates(tables_data):
 
@@ -15952,6 +16582,10 @@ del "%~f0" >nul 2>nul
                 return normalized_tables
 
             tables = _normalize_phieu_coc_dates(tables)
+            tables = merge_ocr_tables_for_continuous_read(tables)
+            for table in tables:
+                if isinstance(table, dict):
+                    table["_source_image_count"] = len(image_paths)
 
 
 
@@ -16025,7 +16659,7 @@ del "%~f0" >nul 2>nul
 
             self._set_status(
 
-                f"Đã đọc phiếu cọc: {data_rows} dòng × {len(data_cols)} cột. "
+                f"Đã đọc phiếu cọc: {len(image_paths)} ảnh, {data_rows} dòng × {len(data_cols)} cột. "
 
                 "Kiểm tra preview rồi bấm 'Điền tiếp vào Excel'.",
 
@@ -16040,6 +16674,7 @@ del "%~f0" >nul 2>nul
             info_lines = ["KẾT QUẢ ĐỌC PHIẾU CỌC\n", "=" * 50 + "\n"]
 
             info_lines.append(f"Cột Excel ({len(excel_col_names)}): " + " | ".join(excel_col_names) + "\n\n")
+            info_lines.append(f"Số ảnh đã đọc: {len(image_paths)}\n\n")
 
             for t in tables:
 
@@ -16072,12 +16707,13 @@ del "%~f0" >nul 2>nul
             self.excel_info.delete("1.0", "end")
 
             self.excel_info.insert("1.0", "".join(info_lines))
+            self._refresh_daily_summary_panel(tables)
 
             self._record_history(
 
                 "ocr_done",
 
-                file_path=self.image_path,
+                file_path=image_paths[0],
 
                 rows=total_rows,
 
@@ -16092,6 +16728,7 @@ del "%~f0" >nul 2>nul
                     "best_table_index": best_idx,
 
                     "tables_data": tables,
+                    "image_count": len(image_paths),
 
                     "tables": [
 
@@ -16777,26 +17414,36 @@ del "%~f0" >nul 2>nul
 
     def choose_image(self):
 
-        p = filedialog.askopenfilename(filetypes=[("Image", "*.png;*.jpg;*.jpeg;*.bmp;*.webp"), ("All", "*.*")])
+        paths = filedialog.askopenfilenames(
+            title="Chọn ảnh OCR",
+            filetypes=[
+                ("Image", "*.png;*.jpg;*.jpeg;*.bmp;*.webp;*.gif;*.tif;*.tiff"),
+                ("All", "*.*"),
+            ],
+        )
 
-        if not p:
+        if not paths:
 
             return
 
-        self.current_workflow_id = new_workflow_id()
-
-        self.current_workflow_label = Path(p).name
+        existing_paths = list(getattr(self, "image_paths", None) or [])
+        self.current_workflow_id = self.current_workflow_id or new_workflow_id()
         self.current_doc_kind = None
 
         self._reset_current_preview_state()
-        snapshot_path = self._save_history_image_snapshot(p, self.current_workflow_id)
-        self.set_image_path(snapshot_path, "Đã chọn ảnh: ")
+
+        snapshot_paths = [self._save_history_image_snapshot(p, self.current_workflow_id) for p in paths]
+        if existing_paths:
+            self.append_image_paths(snapshot_paths, "Đã thêm ảnh: ")
+        else:
+            self.current_workflow_id = new_workflow_id()
+            self.set_image_paths(snapshot_paths, "Đã chọn ảnh: ")
 
         self._record_history(
 
             "image_selected",
 
-            file_path=snapshot_path,
+            file_path=snapshot_paths[0],
 
             message="Chọn ảnh để OCR",
 
@@ -16804,27 +17451,452 @@ del "%~f0" >nul 2>nul
 
             workflow_label=self.current_workflow_label,
 
+            extra={"image_count": len(snapshot_paths)},
         )
 
 
+    def _preview_thumbnail_size(self):
 
-    def set_image_path(self, path, status_prefix="Đã chọn ảnh: "):
-        p = str(path)
-        self.image_path = p
-        self.current_workflow_id = self.current_workflow_id or new_workflow_id()
-        if not str(self.current_workflow_label or "").strip():
-            self.current_workflow_label = Path(p).name
-        
+        w = 260 if not (self.tiny_ui or self.micro_ui) else 220
+
+        h = max(170, int(self.image_drop_h))
+
+        return (w, h)
+
+
+    def _clear_preview_image(self, message=None):
+
+        self._original_image = None
+        self.tk_img = None
+        if hasattr(self, "img_label") and self.img_label is not None:
+            self.img_label.config(image="", text=message or "Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg")
+        if hasattr(self, "preview_counter_var") and self.preview_counter_var is not None:
+            self.preview_counter_var.set("")
         try:
-            self._original_image = Image.open(p)
+            if hasattr(self, "preview_prev_btn"):
+                self.preview_prev_btn.configure(state="disabled")
+            if hasattr(self, "preview_next_btn"):
+                self.preview_next_btn.configure(state="disabled")
+        except Exception:
+            pass
+
+
+    def _load_preview_image(self, path):
+
+        if not path:
+
+            self._clear_preview_image()
+
+            return False
+
+        try:
+
+            self._original_image = Image.open(path)
             im = self._original_image.copy()
-            im.thumbnail((260, 360))
+            im.thumbnail(self._preview_thumbnail_size())
             self.tk_img = ImageTk.PhotoImage(im)
             self.img_label.config(image=self.tk_img, text="")
+            return True
+
         except Exception as e:
+
+            self._clear_preview_image("Không tải được ảnh\n\nHãy kiểm tra file ảnh.")
             self._set_status(f"Lỗi tải ảnh: {e}", "error")
-            
-        self._set_status(status_prefix + p)
+            return False
+
+
+    def _update_preview_counter(self):
+
+        paths = list(getattr(self, "image_paths", None) or [])
+
+        if not paths:
+
+            self.preview_image_index = 0
+
+            if hasattr(self, "preview_counter_var") and self.preview_counter_var is not None:
+                self.preview_counter_var.set("")
+
+            return
+
+        idx = getattr(self, "preview_image_index", 0) or 0
+
+        idx = max(0, min(int(idx), len(paths) - 1))
+
+        self.preview_image_index = idx
+
+        if hasattr(self, "preview_counter_var") and self.preview_counter_var is not None:
+            self.preview_counter_var.set(f"Ảnh đang xem: {idx + 1}/{len(paths)}")
+
+        try:
+            if hasattr(self, "preview_prev_btn"):
+                self.preview_prev_btn.configure(state=("normal" if idx > 0 else "disabled"))
+            if hasattr(self, "preview_next_btn"):
+                self.preview_next_btn.configure(state=("normal" if idx < len(paths) - 1 else "disabled"))
+        except Exception:
+            pass
+
+
+    def _show_preview_image_index(self, index):
+
+        paths = list(getattr(self, "image_paths", None) or [])
+
+        if not paths:
+
+            self._clear_preview_image()
+
+            return
+
+        idx = max(0, min(int(index), len(paths) - 1))
+
+        self.preview_image_index = idx
+
+        self.image_path = paths[idx]
+
+        self._load_preview_image(self.image_path)
+
+        self._update_preview_counter()
+
+
+    def move_preview_image(self, delta):
+
+        paths = list(getattr(self, "image_paths", None) or [])
+
+        if not paths:
+
+            return
+
+        self._show_preview_image_index((getattr(self, "preview_image_index", 0) or 0) + delta)
+
+
+    def get_current_preview_image_path(self):
+
+        paths = list(getattr(self, "image_paths", None) or [])
+
+        if not paths:
+
+            return None
+
+        idx = getattr(self, "preview_image_index", 0) or 0
+
+        if idx < 0 or idx >= len(paths):
+
+            idx = 0
+
+        return paths[idx]
+
+
+    def open_current_preview_image(self, event=None):
+
+        path = self.get_current_preview_image_path()
+
+        if not path:
+
+            return "break"
+
+        self.open_image_viewer(path)
+
+        return "break"
+
+
+    def set_image_path(self, path, status_prefix="Đã chọn ảnh: "):
+
+        self.set_image_paths([path], status_prefix=status_prefix)
+
+
+    def set_image_paths(self, paths, status_prefix="Đã chọn ảnh: "):
+
+        clean_paths = [str(p) for p in (paths or []) if str(p or "").strip()]
+
+        self.image_paths = clean_paths
+        self.image_path = clean_paths[0] if clean_paths else None
+        self.current_workflow_id = self.current_workflow_id or new_workflow_id()
+
+        if clean_paths:
+            first_name = Path(clean_paths[0]).name
+            if len(clean_paths) > 1:
+                self.current_workflow_label = f"{first_name} (+{len(clean_paths) - 1} ảnh)"
+            else:
+                self.current_workflow_label = first_name
+        else:
+            self.current_workflow_label = ""
+
+        if clean_paths:
+            self._show_preview_image_index(0)
+        else:
+            self._clear_preview_image()
+
+        suffix = Path(clean_paths[0]).name if clean_paths else "không có ảnh"
+        if len(clean_paths) > 1:
+            suffix = f"{Path(clean_paths[0]).name} (+{len(clean_paths) - 1} ảnh)"
+
+        self._set_status(status_prefix + suffix)
+
+
+    def append_image_paths(self, paths, status_prefix="Đã thêm ảnh: "):
+
+        clean_paths = [str(p) for p in (paths or []) if str(p or "").strip()]
+
+        if not clean_paths:
+
+            return
+
+        current_paths = list(getattr(self, "image_paths", None) or [])
+
+        combined = current_paths + clean_paths
+
+        self.set_image_paths(combined, status_prefix=status_prefix)
+
+
+    def open_image_viewer(self, path):
+
+        paths = list(getattr(self, "image_paths", None) or [])
+
+        if not paths:
+
+            return
+
+        try:
+
+            start_index = paths.index(path)
+
+        except ValueError:
+
+            start_index = 0
+
+        state = getattr(self, "_viewer_state", None)
+
+        if state and state.get("win") is not None:
+
+            try:
+
+                if state["win"].winfo_exists():
+
+                    state["index"] = start_index
+
+                    state["win"].lift()
+
+                    state["win"].focus_force()
+
+                    if callable(getattr(self, "_viewer_set_index", None)):
+
+                        self._viewer_set_index(start_index)
+
+                    return
+
+            except Exception:
+
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Xem ảnh - {Path(path).name}")
+        win.configure(bg=UI_BG)
+        win.transient(self.root)
+
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        sw = max(640, int(self.root.winfo_screenwidth() * 0.8))
+        sh = max(480, int(self.root.winfo_screenheight() * 0.8))
+        win.geometry(f"{sw}x{sh}")
+
+        outer = tk.Frame(win, bg=UI_BG)
+        outer.pack(fill="both", expand=True, padx=12, pady=12)
+
+        title_var = tk.StringVar(value=Path(path).name)
+        tk.Label(
+            outer,
+            textvariable=title_var,
+            bg=UI_BG,
+            fg=UI_TEXT,
+            font=ui_font(12, bold=True),
+            anchor="w",
+        ).pack(fill="x", anchor="w")
+
+        canvas_frame = tk.Frame(outer, bg=UI_BG)
+        canvas_frame.pack(fill="both", expand=True, pady=(10, 0))
+
+        canvas = tk.Canvas(canvas_frame, bg="#ffffff", highlightthickness=1, highlightbackground=UI_BORDER)
+        x_scroll = ttk.Scrollbar(canvas_frame, orient="horizontal", command=canvas.xview)
+        y_scroll = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        canvas_frame.columnconfigure(0, weight=1)
+        canvas_frame.rowconfigure(0, weight=1)
+
+        prev_btn = tk.Button(
+            canvas,
+            text="‹",
+            bg="#ffffff",
+            fg=UI_TEXT,
+            activebackground="#e8f1ff",
+            activeforeground=UI_TEXT,
+            relief="flat",
+            bd=0,
+            font=ui_font(20, bold=True),
+            cursor="hand2",
+            width=2,
+            height=1,
+        )
+        next_btn = tk.Button(
+            canvas,
+            text="›",
+            bg="#ffffff",
+            fg=UI_TEXT,
+            activebackground="#e8f1ff",
+            activeforeground=UI_TEXT,
+            relief="flat",
+            bd=0,
+            font=ui_font(20, bold=True),
+            cursor="hand2",
+            width=2,
+            height=1,
+        )
+        prev_btn_id = canvas.create_window(28, 0, window=prev_btn, anchor="center", state="hidden")
+        next_btn_id = canvas.create_window(0, 0, window=next_btn, anchor="center", state="hidden")
+        image_id = canvas.create_image(0, 0, anchor="center")
+        canvas.image = None
+
+        state = {
+            "win": win,
+            "canvas": canvas,
+            "image_id": image_id,
+            "title_var": title_var,
+            "prev_btn_id": prev_btn_id,
+            "next_btn_id": next_btn_id,
+            "paths": paths,
+            "index": start_index,
+            "sw": sw,
+            "sh": sh,
+        }
+        self._viewer_state = state
+
+        def _sync_image_position(_event=None):
+            try:
+                canvas.update_idletasks()
+                cw = max(1, canvas.winfo_width())
+                ch = max(1, canvas.winfo_height())
+                current = getattr(canvas, "image", None)
+                iw = max(1, current.width() if current else 1)
+                ih = max(1, current.height() if current else 1)
+                canvas.coords(image_id, max(cw / 2, iw / 2), max(ch / 2, ih / 2))
+                canvas.coords(prev_btn_id, 28, ch / 2)
+                canvas.coords(next_btn_id, max(28, cw - 28), ch / 2)
+                canvas.configure(scrollregion=(0, 0, max(cw, iw), max(ch, ih)))
+            except Exception:
+                pass
+
+        def _load_current_image():
+            current_paths = list(state.get("paths") or [])
+            if not current_paths:
+                return
+            idx = max(0, min(int(state.get("index") or 0), len(current_paths) - 1))
+            state["index"] = idx
+            current_path = current_paths[idx]
+            try:
+                img = Image.open(current_path)
+            except Exception as e:
+                messagebox.showerror("Xem ảnh", f"Không mở được ảnh:\n{e}")
+                return
+            img_copy = img.copy()
+            max_w = max(800, int(state["sw"]) - 120)
+            max_h = max(600, int(state["sh"]) - 180)
+            img_copy.thumbnail((max_w, max_h))
+            photo = ImageTk.PhotoImage(img_copy)
+            canvas.image = photo
+            canvas.itemconfigure(image_id, image=photo)
+            title_var.set(f"{Path(current_path).name} ({idx + 1}/{len(current_paths)})")
+            self.preview_image_index = idx
+            self.image_path = current_path
+            self._update_preview_counter()
+            _sync_image_position()
+
+        def _move(delta):
+            current_paths = list(state.get("paths") or [])
+            if not current_paths:
+                return
+            state["index"] = (int(state.get("index") or 0) + delta) % len(current_paths)
+            _load_current_image()
+
+        state["hover_hide_job"] = None
+
+        def _viewer_pointer_inside():
+            try:
+                x, y = canvas.winfo_pointerxy()
+                widget = canvas.winfo_containing(x, y)
+                while widget is not None:
+                    if widget is canvas or widget is prev_btn or widget is next_btn:
+                        return True
+                    widget = getattr(widget, "master", None)
+            except Exception:
+                pass
+            return False
+
+        def _hover_on(_event=None):
+            try:
+                job = state.get("hover_hide_job")
+                if job:
+                    canvas.after_cancel(job)
+                    state["hover_hide_job"] = None
+            except Exception:
+                pass
+            canvas.itemconfigure(prev_btn_id, state="normal")
+            canvas.itemconfigure(next_btn_id, state="normal")
+
+        def _hover_off(_event=None):
+            def _hide_if_outside():
+                state["hover_hide_job"] = None
+                if not _viewer_pointer_inside():
+                    canvas.itemconfigure(prev_btn_id, state="hidden")
+                    canvas.itemconfigure(next_btn_id, state="hidden")
+
+            try:
+                job = state.get("hover_hide_job")
+                if job:
+                    canvas.after_cancel(job)
+                state["hover_hide_job"] = canvas.after(140, _hide_if_outside)
+            except Exception:
+                _hide_if_outside()
+
+        prev_btn.configure(command=lambda: _move(-1))
+        next_btn.configure(command=lambda: _move(1))
+        canvas.bind("<Configure>", _sync_image_position)
+        canvas.bind("<Enter>", _hover_on)
+        canvas.bind("<Leave>", _hover_off)
+        prev_btn.bind("<Enter>", _hover_on)
+        prev_btn.bind("<Leave>", _hover_off)
+        next_btn.bind("<Enter>", _hover_on)
+        next_btn.bind("<Leave>", _hover_off)
+
+        def _viewer_set_index(idx):
+            state["index"] = idx
+            _load_current_image()
+
+        self._viewer_set_index = _viewer_set_index
+        self._sync_viewer_layout = _sync_image_position
+
+        _load_current_image()
+        _hover_on()
+
+        def _close(_event=None):
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            try:
+                if getattr(self, "_viewer_state", None) and self._viewer_state.get("win") is win:
+                    self._viewer_state = None
+            except Exception:
+                pass
+            win.destroy()
+            return "break"
+
+        win.bind("<Escape>", _close)
+        tk.Button(outer, text="Đóng", command=_close, bg="#eef4ff", fg=UI_TEXT, relief="flat", padx=16, pady=6).pack(anchor="e", pady=(10, 0))
 
     def _reset_current_preview_state(self):
         self.tables = []
@@ -16842,6 +17914,14 @@ del "%~f0" >nul 2>nul
         try:
             if hasattr(self, "excel_info") and self.excel_info is not None:
                 self.excel_info.delete("1.0", "end")
+        except Exception:
+            pass
+        try:
+            self._clear_preview_image()
+        except Exception:
+            pass
+        try:
+            self._set_daily_summary_text([])
         except Exception:
             pass
         self.history_selected_entry = None
@@ -16866,6 +17946,8 @@ del "%~f0" >nul 2>nul
         self.current_workflow_date = None
         self.current_workflow_label = None
         self.current_doc_kind = None
+        self.image_paths = []
+        self.preview_image_index = 0
         self.excel_recent_selected_key = None
         self.history_selected_entry = None
 
@@ -16887,6 +17969,8 @@ del "%~f0" >nul 2>nul
                     image="",
                     text="Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg",
                 )
+            if hasattr(self, "preview_counter_var") and self.preview_counter_var is not None:
+                self.preview_counter_var.set("")
         except Exception:
             pass
 
@@ -16906,6 +17990,11 @@ del "%~f0" >nul 2>nul
             if hasattr(self, "excel_info") and self.excel_info is not None:
                 self.excel_info.delete("1.0", "end")
                 self.excel_info.insert("1.0", "Đã đặt lại. Chọn Excel và ảnh OCR để bắt đầu lại.\n")
+        except Exception:
+            pass
+
+        try:
+            self._set_daily_summary_text([])
         except Exception:
             pass
 
@@ -17026,7 +18115,10 @@ del "%~f0" >nul 2>nul
 
             self._reset_current_preview_state()
             snapshot_path = self._save_history_image_snapshot(source_path, self.current_workflow_id)
-            self.set_image_path(snapshot_path, "Đã dán ảnh từ clipboard: ")
+            if getattr(self, "image_paths", None):
+                self.append_image_paths([snapshot_path], "Đã dán ảnh từ clipboard: ")
+            else:
+                self.set_image_path(snapshot_path, "Đã dán ảnh từ clipboard: ")
 
             self._record_history(
 
@@ -17096,7 +18188,10 @@ del "%~f0" >nul 2>nul
 
             self._reset_current_preview_state()
             snapshot_path = self._save_history_image_snapshot(paste_path, self.current_workflow_id)
-            self.set_image_path(snapshot_path, "Đã dán ảnh từ clipboard: ")
+            if getattr(self, "image_paths", None):
+                self.append_image_paths([snapshot_path], "Đã dán ảnh từ clipboard: ")
+            else:
+                self.set_image_path(snapshot_path, "Đã dán ảnh từ clipboard: ")
 
             self._record_history(
 
@@ -17128,7 +18223,9 @@ del "%~f0" >nul 2>nul
 
     def run_gemini(self):
 
-        if not self.image_path:
+        image_paths = list(getattr(self, "image_paths", None) or ([] if not self.image_path else [self.image_path]))
+
+        if not image_paths:
 
             messagebox.showwarning("Thiếu ảnh", "Bạn chưa chọn ảnh.")
 
@@ -17146,7 +18243,7 @@ del "%~f0" >nul 2>nul
 
         self.save_key()
 
-        self._set_status("Đang đọc ảnh...", "warn")
+        self._set_status(f"Đang đọc ảnh... ({len(image_paths)} ảnh)", "warn")
 
         self.root.update()
 
@@ -17154,9 +18251,26 @@ del "%~f0" >nul 2>nul
 
         try:
 
-            tables, raw = call_gemini(self.image_path, api_key, self.model_var.get().strip())
+            all_tables = []
+            raw_parts = []
 
-            tables = postprocess_to_hop_coc_d1_d2(tables)
+            for idx, image_path in enumerate(image_paths, start=1):
+
+                self._set_status(f"Đang đọc ảnh {idx}/{len(image_paths)}...", "warn")
+                self.root.update()
+
+                tables_one, raw_one = call_gemini(image_path, api_key, self.model_var.get().strip())
+
+                tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
+
+                all_tables.extend(tables_one or [])
+                raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
+
+            tables = merge_ocr_tables_for_continuous_read(all_tables)
+            for table in tables:
+                if isinstance(table, dict):
+                    table["_source_image_count"] = len(image_paths)
+            raw = "\n\n".join(raw_parts)
 
             out = last_run_dir()
 
@@ -17173,6 +18287,7 @@ del "%~f0" >nul 2>nul
             self.tables = tables
 
             self.table_editor.set_tables(tables)
+            self._refresh_daily_summary_panel(tables)
 
             self.build_mapping()
             self.current_doc_kind = "bang_khoi_luong"
@@ -17181,13 +18296,13 @@ del "%~f0" >nul 2>nul
 
             total_rows = sum(len(t["rows"]) for t in tables)
 
-            self._set_status(f"Đọc xong: {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.", "success")
+            self._set_status(f"Đọc xong: {len(image_paths)} ảnh, {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.", "success")
 
             self._record_history(
 
                 "ocr_done",
 
-                file_path=self.image_path,
+                file_path=image_paths[0],
 
                 rows=total_rows,
 
@@ -17200,6 +18315,7 @@ del "%~f0" >nul 2>nul
                     "table_count": len(tables),
 
                     "tables_data": tables,
+                    "image_count": len(image_paths),
 
                     "tables": [
 
@@ -17243,7 +18359,7 @@ del "%~f0" >nul 2>nul
 
                 status="error",
 
-                file_path=self.image_path,
+                file_path=image_paths[0],
 
                 message="Lỗi khi OCR ảnh",
 
@@ -19027,7 +20143,157 @@ def postprocess_to_hop_coc_d1_d2(tables):
     return tables
 
 
+def merge_ocr_tables_for_continuous_read(tables):
 
+    """
+
+    Gộp các bảng OCR cùng cấu trúc thành một bảng liên tục để preview, mapping,
+
+    ghi Excel và tổng hợp ngày đều dùng đủ dữ liệu đã đọc.
+
+    """
+
+    if not tables:
+
+        return tables
+
+    def _clean_col(name):
+
+        try:
+
+            return norm(name)
+
+        except Exception:
+
+            return str(name or "").strip().lower()
+
+    def _signature(columns):
+
+        return tuple(_clean_col(c) for c in (columns or []))
+
+    def _is_stt_col(name):
+
+        n = _clean_col(name)
+
+        return n in {"stt", "no", "so thu tu", "tt", "no."} or n.startswith("stt ")
+
+    groups = []
+
+    passthrough = []
+
+    for table in tables or []:
+
+        if not isinstance(table, dict):
+
+            passthrough.append(table)
+
+            continue
+
+        cols = list(table.get("columns") or [])
+
+        rows = [list(r) if isinstance(r, (list, tuple)) else [r] for r in (table.get("rows") or [])]
+
+        if not cols or not rows:
+
+            passthrough.append(table)
+
+            continue
+
+        # Bảng key-value thường là phần thông tin phiếu, không phải dòng dữ liệu.
+
+        if len(cols) <= 2 and {_clean_col(c) for c in cols} <= {"truong", "gia tri", "field", "value"}:
+
+            passthrough.append(table)
+
+            continue
+
+        sig = _signature(cols)
+
+        found = None
+
+        for group in groups:
+
+            if group["signature"] == sig:
+
+                found = group
+
+                break
+
+        if found is None:
+
+            found = {
+
+                "signature": sig,
+
+                "columns": cols,
+
+                "rows": [],
+
+                "titles": [],
+
+            }
+
+            groups.append(found)
+
+        title = str(table.get("title") or "").strip()
+
+        if title:
+
+            found["titles"].append(title)
+
+        width = len(found["columns"])
+
+        for row in rows:
+
+            rr = list(row)
+
+            if len(rr) < width:
+
+                rr += [""] * (width - len(rr))
+
+            found["rows"].append(rr[:width])
+
+    merged = []
+
+    for group in groups:
+
+        cols = list(group["columns"])
+
+        rows = [list(r) for r in group["rows"]]
+
+        stt_idx = next((i for i, name in enumerate(cols) if _is_stt_col(name)), None)
+
+        if stt_idx is not None:
+
+            next_no = 1
+
+            for row in rows:
+
+                if any(str(v or "").strip() for i, v in enumerate(row) if i != stt_idx):
+
+                    row[stt_idx] = str(next_no)
+
+                    next_no += 1
+
+                else:
+
+                    row[stt_idx] = ""
+
+        title = "Bảng dữ liệu đã gộp"
+
+        if len(group["titles"]) == 1:
+
+            title = group["titles"][0]
+
+        elif group["titles"]:
+
+            title = f"Bảng dữ liệu đã gộp ({len(group['titles'])} phần)"
+
+        merged.append({"title": title, "columns": cols, "rows": rows})
+
+    merged.sort(key=lambda t: (len(t.get("columns") or []), len(t.get("rows") or [])), reverse=True)
+
+    return merged + passthrough
 
 
 def _v229_apply_rows_to_workbook(self, wb):
@@ -19187,18 +20453,6 @@ def _v229_apply_rows_to_workbook(self, wb):
             if excel_col == no_col:
 
                 continue
-
-            try:
-
-                if src_idx < len(source_cols) and is_no_header(source_cols[src_idx]):
-
-                    continue
-
-            except Exception:
-
-                pass
-
-
 
             # Nếu dòng mẫu đã copy công thức vào ô này thì giữ công thức
 
@@ -19782,16 +21036,6 @@ def _v23_apply_rows_to_workbook(self, wb):
 
             try:
 
-                if src_idx < len(source_cols) and is_no_header(source_cols[src_idx]):
-
-                    continue
-
-            except Exception:
-
-                pass
-
-            try:
-
                 if _v229_is_formula(ws.cell(dst_row, excel_col).value):
 
                     continue
@@ -19958,7 +21202,9 @@ def _v23_apply_rows_to_workbook(self, wb):
 
 def _v23_run_gemini(self):
 
-    if not self.image_path:
+    image_paths = list(getattr(self, "image_paths", None) or ([] if not self.image_path else [self.image_path]))
+
+    if not image_paths:
 
         messagebox.showwarning("Thiếu ảnh", "Bạn chưa chọn ảnh.")
 
@@ -19976,7 +21222,7 @@ def _v23_run_gemini(self):
 
     try:
 
-        self._set_status("Đang đọc bảng...", "warn")
+        self._set_status(f"Đang đọc bảng... ({len(image_paths)} ảnh)", "warn")
 
         self.root.update_idletasks()
 
@@ -19988,9 +21234,32 @@ def _v23_run_gemini(self):
 
     try:
 
-        tables, raw = call_gemini(self.image_path, api_key, self.model_var.get().strip())
+        all_tables = []
 
-        tables = postprocess_to_hop_coc_d1_d2(tables)
+        raw_parts = []
+
+        for idx, image_path in enumerate(image_paths, start=1):
+
+            self._set_status(f"Đang đọc ảnh {idx}/{len(image_paths)}...", "warn")
+
+            self.root.update_idletasks()
+
+            self.root.update()
+
+            tables_one, raw_one = call_gemini(image_path, api_key, self.model_var.get().strip())
+
+            tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
+
+            all_tables.extend(tables_one or [])
+
+            raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
+
+        tables = merge_ocr_tables_for_continuous_read(all_tables)
+        for table in tables:
+            if isinstance(table, dict):
+                table["_source_image_count"] = len(image_paths)
+
+        raw = "\n\n".join(raw_parts)
 
         out = last_run_dir()
 
@@ -20003,13 +21272,23 @@ def _v23_run_gemini(self):
         self.tables = tables
 
         self.table_editor.set_tables(tables)
+        self._refresh_daily_summary_panel(tables)
+
         self.current_doc_kind = "bang_khoi_luong"
 
         if self.excel_headers and tables:
 
             self.build_mapping()
 
-            self._set_status(f"Đọc xong: {len(tables)} bảng. Kiểm tra từng ô trong preview trước khi xuất.", "success")
+        total_rows = sum(len(t.get("rows", [])) for t in tables if isinstance(t, dict))
+
+        self._set_status(
+
+            f"Đọc xong: {len(image_paths)} ảnh, {len(tables)} bảng sau gộp, {total_rows} dòng. Kiểm tra preview trước khi xuất.",
+
+            "success",
+
+        )
 
     except Exception:
 
@@ -21058,16 +22337,6 @@ def _v231_apply_rows_to_workbook(self, wb):
             if excel_col is None or excel_col == no_col:
 
                 continue
-
-            try:
-
-                if src_idx < len(source_cols) and is_no_header(source_cols[src_idx]):
-
-                    continue
-
-            except Exception:
-
-                pass
 
             try:
 
