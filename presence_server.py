@@ -7,18 +7,56 @@ import argparse
 import json
 import sqlite3
 import threading
+import hashlib
+import os
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
 
+SERVER_OWNER_MACHINE_CODE = "762EE-25BD9-F030F-01131"
+
+
+def get_machine_code():
+    raw = f"{os.environ.get('COMPUTERNAME', '')}|{os.environ.get('USERNAME', '')}|{uuid.getnode()}"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest().upper()
+    return "-".join([digest[i:i + 5] for i in range(0, 20, 5)])
+
+
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 DEFAULT_DB = Path("presence_state.db")
+USER_EXE_NAME = "GK PilePro.exe"
 
 
 DB_LOCK = threading.Lock()
+
+
+def file_sha256(path: Path):
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def user_update_exe_path():
+    base = Path(sys_executable_dir()).resolve()
+    candidate = base / USER_EXE_NAME
+    if candidate.exists():
+        return candidate
+    fallback = Path(__file__).resolve().parent / "dist" / USER_EXE_NAME
+    return fallback if fallback.exists() else candidate
+
+
+def sys_executable_dir():
+    import sys
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def utc_now():
@@ -69,6 +107,21 @@ def init_db(db_path: Path):
                 first_seen_at TEXT DEFAULT '',
                 last_seen_at TEXT DEFAULT '',
                 payload_json TEXT DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approved_machines (
+                machine_code TEXT PRIMARY KEY,
+                approval_code TEXT DEFAULT '',
+                approval_version INTEGER DEFAULT 1,
+                approved_at TEXT DEFAULT '',
+                last_seen_at TEXT DEFAULT '',
+                user_name TEXT DEFAULT '',
+                role TEXT DEFAULT '',
+                app_kind TEXT DEFAULT '',
+                status TEXT DEFAULT ''
             )
             """
         )
@@ -134,6 +187,74 @@ def fetch_machines(db_path: Path):
     return [dict(r) for r in rows]
 
 
+def upsert_approved_machine(db_path: Path, payload: dict):
+    machine_code = str(payload.get("machine_code") or "").strip().upper()
+    if not machine_code:
+        return None
+    now = str(payload.get("approved_at") or utc_now()).strip() or utc_now()
+    record = {
+        "machine_code": machine_code,
+        "approval_code": str(payload.get("approval_code") or "").strip().upper(),
+        "approval_version": int(payload.get("approval_version") or 1),
+        "approved_at": now,
+        "last_seen_at": str(payload.get("last_seen_at") or now).strip() or now,
+        "user_name": str(payload.get("user_name") or "").strip(),
+        "role": str(payload.get("role") or "").strip(),
+        "app_kind": str(payload.get("app_kind") or "").strip(),
+        "status": str(payload.get("status") or "approved").strip(),
+    }
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO approved_machines (
+                machine_code, approval_code, approval_version, approved_at,
+                last_seen_at, user_name, role, app_kind, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(machine_code) DO UPDATE SET
+                approval_code=excluded.approval_code,
+                approval_version=excluded.approval_version,
+                approved_at=excluded.approved_at,
+                last_seen_at=excluded.last_seen_at,
+                user_name=excluded.user_name,
+                role=excluded.role,
+                app_kind=excluded.app_kind,
+                status=excluded.status
+            """,
+            (
+                record["machine_code"],
+                record["approval_code"],
+                record["approval_version"],
+                record["approved_at"],
+                record["last_seen_at"],
+                record["user_name"],
+                record["role"],
+                record["app_kind"],
+                record["status"],
+            ),
+        )
+        conn.commit()
+    return record
+
+
+def fetch_approved_machines(db_path: Path):
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT machine_code, approval_code, approval_version, approved_at, last_seen_at, user_name, role, app_kind, status FROM approved_machines ORDER BY approved_at DESC, last_seen_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_approved_machine(db_path: Path, machine_code: str):
+    machine_code = str(machine_code or "").strip().upper()
+    if not machine_code:
+        return False
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        cur = conn.execute("DELETE FROM approved_machines WHERE machine_code = ?", (machine_code,))
+        conn.commit()
+    return cur.rowcount > 0
+
+
 class PresenceHandler(BaseHTTPRequestHandler):
     server_version = "GKPresence/1.0"
 
@@ -145,6 +266,23 @@ class PresenceHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
+
+    def _send_file(self, path: Path):
+        if not path.exists() or not path.is_file():
+            return self._send_json({"ok": False, "error": "not_found"}, status=404)
+        try:
+            size = path.stat().st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", f'attachment; filename="{path.name}"')
+            self.send_header("Content-Length", str(size))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            with path.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    self.wfile.write(chunk)
+        except Exception:
+            return
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -160,7 +298,7 @@ class PresenceHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -172,6 +310,24 @@ class PresenceHandler(BaseHTTPRequestHandler):
             return self._send_json({"ok": True, "service": "presence"})
         if path == "/health":
             return self._send_json({"ok": True, "time": utc_now()})
+        if path == "/update-info":
+            exe_path = user_update_exe_path()
+            if not exe_path.exists():
+                return self._send_json({"ok": False, "error": "user_exe_not_found"}, status=404)
+            stat = exe_path.stat()
+            return self._send_json(
+                {
+                    "ok": True,
+                    "app": "GK PilePro",
+                    "filename": USER_EXE_NAME,
+                    "size": stat.st_size,
+                    "mtime": int(stat.st_mtime),
+                    "sha256": file_sha256(exe_path),
+                    "download_url": "/updates/user-exe",
+                }
+            )
+        if path == "/updates/user-exe":
+            return self._send_file(user_update_exe_path())
         if path == "/machines":
             machines = fetch_machines(server.db_path)
             now = datetime.now(timezone.utc)
@@ -183,6 +339,9 @@ class PresenceHandler(BaseHTTPRequestHandler):
                 item["online"] = active
                 item["status_text"] = "Đang hoạt động" if active else status_text(item.get("last_seen_at"), timeout_seconds)
             return self._send_json({"ok": True, "machines": machines, "timeout_seconds": timeout_seconds})
+        if path == "/approved-machines":
+            approved = fetch_approved_machines(server.db_path)
+            return self._send_json({"ok": True, "approved_machines": approved})
         if path.startswith("/machines/"):
             machine_code = path.split("/", 2)[2].strip().upper()
             machines = fetch_machines(server.db_path)
@@ -207,6 +366,29 @@ class PresenceHandler(BaseHTTPRequestHandler):
             if not record:
                 return self._send_json({"ok": False, "error": "machine_code_required"}, status=400)
             return self._send_json({"ok": True, "machine": record})
+        if path == "/approved-machines":
+            payload = self._read_json()
+            record = upsert_approved_machine(server.db_path, payload)
+            if not record:
+                return self._send_json({"ok": False, "error": "machine_code_required"}, status=400)
+            return self._send_json({"ok": True, "machine": record})
+        if path.startswith("/approved-machines/"):
+            machine_code = path.split("/", 2)[2].strip().upper()
+            deleted = delete_approved_machine(server.db_path, machine_code)
+            if not deleted:
+                return self._send_json({"ok": False, "error": "not_found"}, status=404)
+            return self._send_json({"ok": True, "machine_code": machine_code})
+        return self._send_json({"ok": False, "error": "not_found"}, status=404)
+
+    def do_DELETE(self):
+        server = self.server  # type: ignore[attr-defined]
+        path = urlparse(self.path).path.rstrip("/")
+        if path.startswith("/approved-machines/"):
+            machine_code = path.split("/", 2)[2].strip().upper()
+            deleted = delete_approved_machine(server.db_path, machine_code)
+            if not deleted:
+                return self._send_json({"ok": False, "error": "not_found"}, status=404)
+            return self._send_json({"ok": True, "machine_code": machine_code})
         return self._send_json({"ok": False, "error": "not_found"}, status=404)
 
 
@@ -225,11 +407,16 @@ def main():
     parser.add_argument("--timeout", type=int, default=20)
     args = parser.parse_args()
 
+    if get_machine_code() != SERVER_OWNER_MACHINE_CODE:
+        raise SystemExit("This presence server is locked to the owner machine.")
+
     db_path = Path(args.db).resolve()
     init_db(db_path)
 
-    server = PresenceHTTPServer((args.host, args.port), PresenceHandler, db_path=db_path, timeout_seconds=max(5, int(args.timeout)))
-    print(f"Presence server listening on http://{args.host}:{args.port}")
+    host = str(args.host or DEFAULT_HOST).strip()
+
+    server = PresenceHTTPServer((host, args.port), PresenceHandler, db_path=db_path, timeout_seconds=max(5, int(args.timeout)))
+    print(f"Presence server listening on http://{host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

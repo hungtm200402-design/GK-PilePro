@@ -14,7 +14,11 @@ import subprocess
 
 import uuid
 
+import socket
+
 import threading
+
+import tempfile
 
 from datetime import datetime
 
@@ -66,6 +70,8 @@ APP_ICON_ICO = Path("assets") / "tool_kl.ico"
 TEMPLATE_PRESETS = {"Bảng bất kỳ - tự nhận cột": {}}
 
 CANONICAL_TEMPLATE_COLUMNS = {}
+
+SERVER_OWNER_MACHINE_CODE = "762EE-25BD9-F030F-01131"
 
 
 
@@ -426,6 +432,8 @@ UI_SUCCESS = "#17803d"
 UI_SUCCESS_ACTIVE = "#126931"
 
 UI_WARN = "#b7791f"
+
+UI_ERROR = "#dc2626"
 
 UI_SCALE = 1.0
 
@@ -1575,6 +1583,10 @@ def get_machine_code():
     return "-".join([digest[i:i + 5] for i in range(0, 20, 5)])
 
 
+def is_server_owner_machine():
+    return get_machine_code() == SERVER_OWNER_MACHINE_CODE
+
+
 
 def make_approval_code(machine_code, version=None):
 
@@ -1717,28 +1729,28 @@ def invalidate_machine_approval_code(machine_code):
 def is_machine_approved():
 
     machine_code = get_machine_code()
-
     current_version = machine_approval_version(machine_code)
 
     try:
-
-        data = json.loads(approval_path().read_text(encoding="utf-8"))
-
-        saved_version = int(data.get("approval_version") or 1)
-
-        return (
-
-            data.get("machine_code") == machine_code
-
-            and saved_version >= current_version
-
-            and data.get("approval_code") == make_approval_code(machine_code, saved_version)
-
-        )
-
+        server_url = presence_server_url_from_env()
+        if not server_url or not check_presence_server_alive(server_url, timeout=0.5):
+            return False
+        approved_items = fetch_presence_approved_machines(server_url, timeout=3)
+        for item in approved_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("machine_code") or "").strip().upper() != machine_code:
+                continue
+            saved_version = int(item.get("approval_version") or 1)
+            saved_code = str(item.get("approval_code") or "").strip().upper()
+            return (
+                saved_version >= current_version
+                and saved_code == make_approval_code(machine_code, saved_version)
+            )
     except Exception:
-
         return False
+
+    return False
 
 
 
@@ -1806,19 +1818,45 @@ def save_machine_approval(approval_code):
 
 def load_admin_approved_machines():
 
+    local_items = []
     try:
-
         data = json.loads(admin_approved_machines_path().read_text(encoding="utf-8"))
-
         if isinstance(data, list):
-
-            return data
-
+            local_items = [item for item in data if isinstance(item, dict)]
     except Exception:
+        local_items = []
 
+    merged = {}
+    for item in local_items:
+        code = str(item.get("machine_code") or "").strip().upper()
+        if code:
+            merged[code] = dict(item)
+
+    try:
+        server_url = presence_server_url_from_env()
+        remote_items = fetch_presence_approved_machines(server_url, timeout=3)
+        for item in remote_items:
+            if not isinstance(item, dict):
+                continue
+            code = str(item.get("machine_code") or "").strip().upper()
+            if code:
+                merged[code] = dict(item)
+    except Exception:
         pass
 
-    return []
+    items = list(merged.values())
+    try:
+        items.sort(
+            key=lambda x: (
+                str(x.get("approved_at") or ""),
+                str(x.get("last_seen_at") or ""),
+                str(x.get("machine_code") or ""),
+            ),
+            reverse=True,
+        )
+    except Exception:
+        pass
+    return items
 
 
 
@@ -1894,6 +1932,24 @@ def remember_admin_approved_machine(machine_code, user_name=None):
 
     save_admin_approved_machines(items)
 
+    try:
+        server_url = presence_server_url_from_env()
+        if server_url:
+            _payload = {
+                "machine_code": machine_code,
+                "approval_code": approval_code,
+                "approval_version": approval_version,
+                "approved_at": now,
+                "last_seen_at": now,
+                "user_name": user_name,
+                "role": "",
+                "app_kind": "",
+                "status": "approved",
+            }
+            threading.Thread(target=lambda: send_presence_approved_machine(server_url, _payload, timeout=3), daemon=True).start()
+    except Exception:
+        pass
+
     return approval_code
 
 
@@ -1918,13 +1974,20 @@ def parse_machine_datetime(text):
     s = str(text or "").strip()
     if not s:
         return None
+    iso_candidate = s[:-1] + "+00:00" if s.endswith("Z") else s
+    try:
+        dt = datetime.fromisoformat(iso_candidate)
+        if dt.tzinfo is not None:
+            return dt.astimezone().replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             return datetime.strptime(s, fmt)
         except Exception:
             pass
     return None
-
 
 def format_machine_last_seen(text, now=None):
     dt = parse_machine_datetime(text)
@@ -1933,7 +1996,7 @@ def format_machine_last_seen(text, now=None):
     now = now or datetime.now()
     delta = now - dt
     seconds = max(0, int(delta.total_seconds()))
-    if seconds < 120:
+    if seconds < 60:
         return "Đang hoạt động"
     minutes = seconds // 60
     if minutes < 60:
@@ -1945,12 +2008,13 @@ def format_machine_last_seen(text, now=None):
     return f"Truy cập {days} ngày trước"
 
 
+
 def is_machine_active_recently(text, now=None):
     dt = parse_machine_datetime(text)
     if dt is None:
         return False
     now = now or datetime.now()
-    return (now - dt).total_seconds() < 120
+    return (now - dt).total_seconds() < 60
 
 
 
@@ -1963,6 +2027,13 @@ def delete_admin_approved_machine(machine_code):
     items = [x for x in load_admin_approved_machines() if x.get("machine_code") != machine_code]
 
     save_admin_approved_machines(items)
+
+    try:
+        server_url = presence_server_url_from_env()
+        if server_url:
+            delete_presence_approved_machine(server_url, machine_code, timeout=3)
+    except Exception:
+        pass
 
     try:
 
@@ -2012,6 +2083,114 @@ def import_local_approval_to_admin_list():
 
 
 
+
+
+def sync_presence_machines_to_admin_list(presence_rows):
+
+    """
+    Đồng bộ toàn bộ máy đang heartbeat từ presence server vào danh sách máy đã duyệt.
+    """
+
+    try:
+
+        rows = [r for r in (presence_rows or []) if isinstance(r, dict)]
+
+        if not rows:
+
+            return 0
+
+        items = load_admin_approved_machines()
+
+        index_by_code = {}
+
+        for idx, item in enumerate(items):
+
+            code = str(item.get("machine_code") or "").strip().upper()
+
+            if code:
+
+                index_by_code[code] = idx
+
+        changed = False
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        for row in rows:
+
+            machine_code = str(row.get("machine_code") or "").strip().upper()
+
+            if not machine_code:
+
+                continue
+
+            user_name = str(row.get("user_name") or "").strip()
+
+            if not user_name:
+
+                user_name = str(lookup_assigned_machine_user_name(machine_code) or "").strip()
+
+            last_seen_at = str(row.get("last_seen_at") or "").strip() or now
+
+            app_kind = str(row.get("app_kind") or "").strip()
+
+            role = str(row.get("role") or "").strip()
+
+            status = str(row.get("status") or "").strip() or "online"
+
+            if machine_code not in index_by_code:
+                continue
+
+            item = items[index_by_code[machine_code]]
+
+            if user_name and str(item.get("user_name") or "").strip() != user_name:
+
+                item["user_name"] = user_name
+
+                changed = True
+
+            if last_seen_at and str(item.get("last_seen_at") or "").strip() != last_seen_at:
+
+                item["last_seen_at"] = last_seen_at
+
+                changed = True
+
+            if app_kind and str(item.get("app_kind") or "").strip() != app_kind:
+
+                item["app_kind"] = app_kind
+
+                changed = True
+
+            if role and str(item.get("role") or "").strip() != role:
+
+                item["role"] = role
+
+                changed = True
+
+            if status and str(item.get("status") or "").strip() != status:
+
+                item["status"] = status
+
+                changed = True
+
+            if not str(item.get("approval_code") or "").strip():
+
+                approval_version = int(item.get("approval_version") or machine_approval_version(machine_code) or 1)
+
+                item["approval_code"] = make_approval_code(machine_code, approval_version)
+
+                item["approval_version"] = approval_version
+
+                changed = True
+
+        if changed:
+
+            save_admin_approved_machines(items)
+
+        return len(rows)
+
+    except Exception:
+
+        return 0
 
 
 def env_path():
@@ -2225,7 +2404,7 @@ def load_env_values():
 
             values["SCREEN_PROFILE"] = str(settings["SCREEN_PROFILE"])
 
-        if is_admin_build() and settings.get("PRESENCE_SERVER_URL"):
+        if settings.get("PRESENCE_SERVER_URL"):
 
             values["PRESENCE_SERVER_URL"] = str(settings["PRESENCE_SERVER_URL"]).strip() or values["PRESENCE_SERVER_URL"]
 
@@ -2233,13 +2412,17 @@ def load_env_values():
 
         pass
 
+    if not is_admin_build():
+
+        values["PRESENCE_SERVER_URL"] = DEFAULT_PRESENCE_SERVER_URL
+
     return values
 
 
 
 def save_env(api_key, model, screen_profile="auto", presence_server_url=None):
 
-    resolved_presence_server_url = normalize_presence_server_url(
+    resolved_presence_server_url = resolve_presence_server_url(
         presence_server_url if is_admin_build() else DEFAULT_PRESENCE_SERVER_URL
     ) or DEFAULT_PRESENCE_SERVER_URL
 
@@ -2293,12 +2476,51 @@ def normalize_presence_server_url(url):
     return value
 
 
-DEFAULT_PRESENCE_SERVER_URL = normalize_presence_server_url(os.getenv("PRESENCE_SERVER_URL_DEFAULT", "http://192.168.100.35:8765"))
+def _detect_local_ip_address():
+    sock = None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(0.2)
+        try:
+            sock.connect(("8.8.8.8", 80))
+        except Exception:
+            pass
+        ip = sock.getsockname()[0]
+        if ip and ip != "0.0.0.0":
+            return ip
+    except Exception:
+        pass
+    finally:
+        try:
+            if sock is not None:
+                sock.close()
+        except Exception:
+            pass
+    return "127.0.0.1"
+
+
+def resolve_presence_server_url(url):
+    base = normalize_presence_server_url(url)
+    if not base:
+        return ""
+    try:
+        parsed = urllib_parse.urlsplit(base)
+        host = (parsed.hostname or "").strip().lower()
+        if host in {"0.0.0.0", "127.0.0.1", "localhost", ""}:
+            resolved_host = _detect_local_ip_address()
+            port = f":{parsed.port}" if parsed.port else ""
+            return urllib_parse.urlunsplit((parsed.scheme or "http", f"{resolved_host}{port}", parsed.path or "", parsed.query or "", parsed.fragment or ""))
+    except Exception:
+        pass
+    return base
+
+
+DEFAULT_PRESENCE_SERVER_URL = normalize_presence_server_url(os.getenv("PRESENCE_SERVER_URL_DEFAULT", "http://192.168.1.137:8765"))
 
 
 def presence_server_url_from_env():
     env = load_env_values()
-    return normalize_presence_server_url(env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL)
+    return resolve_presence_server_url(env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL)
 
 
 def _presence_client_request_json(url, payload=None, timeout=3, method=None):
@@ -2310,6 +2532,75 @@ def _presence_client_request_json(url, payload=None, timeout=3, method=None):
     with urllib_request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read().decode("utf-8", errors="replace")
         return json.loads(raw) if raw else None
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def fetch_user_update_info(server_url, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return None
+    try:
+        data = _presence_client_request_json(f"{base}/update-info", timeout=timeout, method="GET")
+        return data if isinstance(data, dict) and data.get("ok") else None
+    except Exception:
+        return None
+
+
+def download_user_update(server_url, update_info, timeout=20, progress_callback=None):
+    base = normalize_presence_server_url(server_url)
+    download_url = str((update_info or {}).get("download_url") or "").strip()
+    expected_sha = str((update_info or {}).get("sha256") or "").strip().lower()
+    if not base or not download_url or not expected_sha:
+        return None
+    url = urllib_parse.urljoin(base.rstrip("/") + "/", download_url.lstrip("/"))
+    out_dir = Path(tempfile.mkdtemp(prefix="gk_pilepro_update_"))
+    out_path = out_dir / "GK PilePro.exe"
+    try:
+        with urllib_request.urlopen(url, timeout=timeout) as resp, out_path.open("wb") as f:
+            total = int(resp.headers.get("Content-Length") or 0)
+            downloaded = 0
+            chunk_size = 65536  # 64 KB
+            _cb_counter = 0
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                _cb_counter += 1
+                # Throttle: update UI every 4 chunks (~256 KB) to avoid flooding event loop
+                if progress_callback and _cb_counter % 4 == 0:
+                    try:
+                        progress_callback(downloaded, total)
+                    except Exception:
+                        pass
+            # Final callback with complete download size
+            if progress_callback:
+                try:
+                    progress_callback(downloaded, total)
+                except Exception:
+                    pass
+        actual_sha = file_sha256(out_path).lower()
+        if actual_sha != expected_sha:
+            try:
+                shutil.rmtree(out_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return None
+        return out_path
+    except Exception:
+        try:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        except Exception:
+            pass
+        return None
 
 
 def send_presence_heartbeat(server_url, payload, timeout=3):
@@ -2349,6 +2640,46 @@ def fetch_presence_machines(server_url, timeout=3):
     except Exception:
         pass
     return []
+
+
+def fetch_presence_approved_machines(server_url, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return []
+    try:
+        data = _presence_client_request_json(f"{base}/approved-machines", timeout=timeout, method="GET")
+        if isinstance(data, dict):
+            items = data.get("approved_machines")
+            if isinstance(items, list):
+                return items
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def send_presence_approved_machine(server_url, payload, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return False
+    try:
+        _presence_client_request_json(f"{base}/approved-machines", payload=payload, timeout=timeout, method="POST")
+        return True
+    except Exception:
+        return False
+
+
+def delete_presence_approved_machine(server_url, machine_code, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    machine_code = str(machine_code or "").strip().upper()
+    if not base or not machine_code:
+        return False
+    try:
+        _presence_client_request_json(f"{base}/approved-machines/{urllib_parse.quote(machine_code)}", timeout=timeout, method="DELETE")
+        return True
+    except Exception:
+        return False
 
 
 
@@ -8442,7 +8773,7 @@ class App:
 
         self.screen_profile_var = tk.StringVar(value=env.get("SCREEN_PROFILE") or "auto")
 
-        self.presence_server_var = tk.StringVar(value=env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL)
+        self.presence_server_var = tk.StringVar(value=resolve_presence_server_url(env.get("PRESENCE_SERVER_URL") or DEFAULT_PRESENCE_SERVER_URL))
 
         self._setup_responsive_metrics()
 
@@ -8531,6 +8862,20 @@ class App:
         self._presence_server_db_path = app_data_path("presence_state.db")
         self._presence_server_pid_path = app_data_path("presence_server.pid")
         self._presence_server_runtime_lock = threading.Lock()
+        self._user_minimized = False
+        self._presence_server_down_dialog_shown = False
+        self._presence_server_check_interval_ms = 150
+        self._update_check_inflight = False
+        self._update_installing = False
+
+        if not is_admin_build():
+            try:
+                self._presence_server_online = check_presence_server_alive(
+                    getattr(self, "presence_server_var", tk.StringVar(value="")).get(),
+                    timeout=0.2,
+                )
+            except Exception:
+                self._presence_server_online = False
 
         self.member_locked = (not is_admin_build()) and (not is_machine_approved())
 
@@ -8550,6 +8895,13 @@ class App:
 
         self._apply_user_visibility()
 
+        if not is_admin_build() and self._presence_server_online is not True:
+            try:
+                self._presence_server_down_notified = True
+                self.root.after(0, self._notify_presence_server_down)
+            except Exception:
+                pass
+
         self.root.bind_all("<Control-v>", self.paste_image_from_clipboard)
 
         self.root.bind_all("<Control-V>", self.paste_image_from_clipboard)
@@ -8560,8 +8912,18 @@ class App:
         self.root.after(1500, self._machine_presence_ping_loop)
         self.root.after(1800, self._presence_cache_poll_loop)
         self.root.after(0, self._presence_server_monitor_loop)
+        self.root.after(900, self._user_update_check_loop)
         if is_admin_build():
             self.root.after(250, self._ensure_presence_server_on_start)
+            try:
+                self.root.protocol("WM_DELETE_WINDOW", self._on_admin_window_close)
+            except Exception:
+                pass
+        try:
+            self.root.bind("<Unmap>", self._track_window_state)
+            self.root.bind("<Map>", self._clear_user_minimized_state)
+        except Exception:
+            pass
 
 
 
@@ -8569,7 +8931,7 @@ class App:
 
         try:
 
-            self.status.config(text="Dang tai lai ung dung...")
+            self._set_status("Dang tai lai ung dung...", "warn")
 
         except Exception:
 
@@ -8578,6 +8940,45 @@ class App:
         self.root.after(80, self._restart_process)
 
         return "break"
+
+
+    def _set_status(self, text, tone=None):
+
+        try:
+
+            message = str(text or "")
+
+            if tone is None:
+
+                lowered = message.lower()
+
+                if any(key in lowered for key in ("lỗi", "không", "bảo trì", "đang tắt", "đã tắt", "chưa", "khong")):
+
+                    tone = "error"
+
+                elif any(key in lowered for key in ("đang", "dang", "chờ", "cho")):
+
+                    tone = "warn"
+
+                else:
+
+                    tone = "success"
+
+            color = {
+
+                "error": UI_ERROR,
+
+                "warn": UI_WARN,
+
+                "success": UI_SUCCESS,
+
+            }.get(tone, UI_SUCCESS)
+
+            self.status.config(text=message, fg=color)
+
+        except Exception:
+
+            pass
 
 
 
@@ -8600,6 +9001,23 @@ class App:
             messagebox.showerror("Khong tai lai duoc", traceback.format_exc())
 
             return
+
+    def _on_admin_window_close(self):
+
+        if is_admin_build():
+            # Đóng app admin không tắt server; chỉ nút "Tắt server" mới làm việc đó.
+            try:
+                self._set_status("Đóng ứng dụng admin, server vẫn tiếp tục chạy.", "success")
+            except Exception:
+                pass
+
+        try:
+
+            self.root.destroy()
+
+        except Exception:
+
+            pass
 
     def _set_presence_machine_cache(self, rows):
 
@@ -8703,10 +9121,27 @@ class App:
 
             return False
 
+    def _terminate_all_presence_server_processes(self):
+
+        try:
+            subprocess.run(
+                ["taskkill", "/IM", "presence_server.exe", "/T", "/F"],
+                capture_output=True,
+            )
+        except Exception:
+            pass
+
     def _ensure_presence_server_on_start(self):
 
         if not is_admin_build():
 
+            return
+
+        if not is_server_owner_machine():
+            try:
+                self._set_status("May nay khong phai may chu so huu server.", "error")
+            except Exception:
+                pass
             return
 
         try:
@@ -8715,7 +9150,7 @@ class App:
 
                 try:
 
-                    self.status.config(text="Server trạng thái máy đang chạy.")
+                    self._set_status("Server trạng thái máy đang chạy.", "success")
 
                 except Exception:
 
@@ -8727,7 +9162,7 @@ class App:
 
             try:
 
-                self.status.config(text=msg)
+                self._set_status(msg)
 
             except Exception:
 
@@ -8753,6 +9188,9 @@ class App:
 
             return False, "Chỉ bản admin mới được điều khiển server."
 
+        if not is_server_owner_machine():
+            return False, "May nay khong duoc phep khoi dong server."
+
         with self._presence_server_runtime_lock:
 
             if self._presence_server_is_running():
@@ -8769,18 +9207,32 @@ class App:
                     pass
 
                 if getattr(sys, "frozen", False):
-                    cmd = [
-                        sys.executable,
-                        "--presence-server",
-                        "--host",
-                        "0.0.0.0",
-                        "--port",
-                        "8765",
-                        "--db",
-                        str(db_path),
-                        "--timeout",
-                        "20",
-                    ]
+                    server_exe = app_dir() / "presence_server.exe"
+                    if server_exe.exists():
+                        cmd = [
+                            str(server_exe),
+                            "--host",
+                            "0.0.0.0",
+                            "--port",
+                            "8765",
+                            "--db",
+                            str(db_path),
+                            "--timeout",
+                            "20",
+                        ]
+                    else:
+                        cmd = [
+                            sys.executable,
+                            "--presence-server",
+                            "--host",
+                            "0.0.0.0",
+                            "--port",
+                            "8765",
+                            "--db",
+                            str(db_path),
+                            "--timeout",
+                            "20",
+                        ]
                 else:
                     cmd = [
                         sys.executable,
@@ -8800,19 +9252,31 @@ class App:
                 for flag_name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
                     creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
 
+                child_env = os.environ.copy()
+                # Launch the server in a clean PyInstaller environment so the
+                # admin onefile process can exit without keeping its _MEI
+                # temporary directory pinned by inherited runtime state.
+                for key in list(child_env.keys()):
+                    if key.startswith("_PYI") or key.startswith("PYINSTALLER"):
+                        child_env.pop(key, None)
+                child_env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+
                 proc = subprocess.Popen(
                     cmd,
-                    cwd=str(Path(__file__).resolve().parent),
+                    cwd=str(app_dir()),
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     stdin=subprocess.DEVNULL,
+                    env=child_env,
                     creationflags=creationflags,
                 )
 
                 self._presence_server_process = proc
                 self._write_presence_server_pid(proc.pid)
+                self._presence_server_down_notified = False
+                self._presence_server_down_dialog_shown = False
                 try:
-                    self.status.config(text="Server trạng thái máy đang chạy.")
+                    self._set_status("Server trạng thái máy đang chạy.", "success")
                 except Exception:
                     pass
                 return True, "Đã khởi động server."
@@ -8833,10 +9297,12 @@ class App:
 
             proc = getattr(self, "_presence_server_process", None)
             pid = None
+            had_known_process = False
             if proc is not None:
                 try:
                     if proc.poll() is None:
                         pid = proc.pid
+                        had_known_process = True
                     else:
                         proc = None
                 except Exception:
@@ -8844,38 +9310,38 @@ class App:
 
             if proc is None:
                 pid = self._read_presence_server_pid()
-                if pid is None or not self._is_pid_alive(pid):
-                    self._presence_server_process = None
-                    self._clear_presence_server_pid()
-                    return True, "Server đang tắt."
+                had_known_process = pid is not None and self._is_pid_alive(pid)
 
             try:
 
                 if proc is not None:
                     proc.terminate()
                     try:
-                        proc.wait(timeout=5)
+                        proc.wait(timeout=2)
                     except Exception:
                         pass
-                elif pid is not None:
+                if pid is not None:
                     subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True)
 
             except Exception:
 
                 pass
 
+            self._terminate_all_presence_server_processes()
             self._presence_server_process = None
             self._clear_presence_server_pid()
+            self._presence_server_down_notified = True
+            self._presence_server_down_dialog_shown = True
 
             try:
 
-                self.status.config(text="Server trạng thái máy đã tắt.")
+                self._set_status("Server trạng thái máy đã tắt.", "error")
 
             except Exception:
 
                 pass
 
-            return True, "Đã tắt server."
+            return True, "Đã tắt server." if had_known_process else "Server đang bảo trì."
 
     def _apply_user_visibility(self):
 
@@ -8889,13 +9355,16 @@ class App:
 
             if can_show:
 
+                if getattr(self, "_user_minimized", False):
+                    return
+
+                self._user_minimized = False
                 self.root.deiconify()
 
                 self.root.lift()
 
                 try:
-
-                    self.status.config(text="Máy đã kết nối server trạng thái.")
+                    self._set_status("Máy đã kết nối server trạng thái.", "success")
 
                 except Exception:
 
@@ -8904,20 +9373,36 @@ class App:
             else:
 
                 self.root.withdraw()
+                self._user_minimized = False
 
         except Exception:
 
             pass
 
+    def _track_window_state(self, _event=None):
+        try:
+            if self.root.state() == "iconic":
+                self._user_minimized = True
+        except Exception:
+            pass
+
+    def _clear_user_minimized_state(self, _event=None):
+        self._user_minimized = False
+
     def _notify_presence_server_down(self):
 
-        if is_admin_build() or self.member_locked:
+        if is_admin_build():
 
             return
 
+        if getattr(self, "_presence_server_down_dialog_shown", False):
+            return
+
+        self._presence_server_down_dialog_shown = True
+
         try:
 
-            self.status.config(text="Server trạng thái máy đang tắt.")
+            self._set_status("Server trạng thái máy đang bảo trì.", "error")
 
         except Exception:
 
@@ -8926,13 +9411,37 @@ class App:
         try:
 
             messagebox.showwarning(
-                "Server đang tắt",
-                "Server trạng thái máy đang tắt.\n\nVui lòng chờ admin mở lại server để tiếp tục sử dụng ứng dụng.",
+                "Server đang bảo trì",
+                "Server đang bảo trì.\n\nVui lòng chờ admin mở lại server để tiếp tục sử dụng ứng dụng.",
             )
 
         except Exception:
 
             pass
+
+        try:
+            self.root.after(700, self.root.destroy)
+        except Exception:
+            try:
+                self.root.destroy()
+            except Exception:
+                pass
+
+    def _exit_due_to_presence_server_down(self):
+
+        if is_admin_build():
+
+            return
+
+        try:
+
+            self._set_status("Server trạng thái máy đang bảo trì. Ứng dụng sẽ đóng.", "error")
+
+        except Exception:
+
+            pass
+
+        # Kept for compatibility; actual destroy is scheduled in _notify_presence_server_down().
 
 
 
@@ -11528,7 +12037,7 @@ class App:
 
         try:
 
-            self.status.config(text=f"Đã lưu mẫu mapping: {name}")
+            self._set_status(f"Đã lưu mẫu mapping: {name}", "success")
 
         except Exception:
 
@@ -11601,7 +12110,7 @@ class App:
 
         try:
 
-            self.status.config(text=f"Đã áp dụng mẫu mapping: {template.get('name') or ''}")
+            self._set_status(f"Đã áp dụng mẫu mapping: {template.get('name') or ''}", "success")
 
         except Exception:
 
@@ -11864,7 +12373,7 @@ class App:
 
         self.excel_recent_selected_key = self._excel_file_key(self.excel_path)
 
-        self.status.config(text="Đã đọc toàn bộ file Excel và tự chọn sheet phù hợp.")
+        self._set_status("Đã đọc toàn bộ file Excel và tự chọn sheet phù hợp.", "success")
 
         if not self.current_workflow_id:
 
@@ -11885,6 +12394,10 @@ class App:
             if not approved:
 
                 self.member_locked = True
+
+                if self._presence_server_online is not True:
+                    self._notify_presence_server_down()
+                    return
 
                 try:
 
@@ -11918,7 +12431,7 @@ class App:
 
                             pass
 
-                    self.status.config(text="Máy đã được duyệt.")
+                    self._set_status("Máy đã được duyệt.", "success")
 
                 except Exception:
 
@@ -11942,7 +12455,7 @@ class App:
         try:
 
             if not self.member_locked and self._presence_server_online is not False:
-                server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+                server_url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
                 if server_url and not self._presence_ping_inflight:
                     self._presence_ping_inflight = True
 
@@ -11982,9 +12495,9 @@ class App:
 
         try:
 
-            if not is_admin_build() and not self.member_locked:
+            if not is_admin_build():
 
-                server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+                server_url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
 
                 if server_url and not self._presence_server_check_inflight:
 
@@ -11996,7 +12509,7 @@ class App:
 
                         try:
 
-                            online = check_presence_server_alive(server_url, timeout=1)
+                            online = check_presence_server_alive(server_url, timeout=0.2)
 
                         finally:
 
@@ -12022,8 +12535,18 @@ class App:
                                 else:
 
                                     self._presence_server_down_notified = False
+                                    self._presence_server_down_dialog_shown = False
 
                             self._apply_user_visibility()
+
+                            if not online and not self._presence_server_down_dialog_shown:
+
+                                self._presence_server_down_notified = True
+
+                                try:
+                                    self.root.after(0, self._notify_presence_server_down)
+                                except Exception:
+                                    pass
 
                     threading.Thread(target=worker, daemon=True).start()
 
@@ -12033,17 +12556,256 @@ class App:
 
         try:
 
-            self.root.after(1000, self._presence_server_monitor_loop)
+            self.root.after(self._presence_server_check_interval_ms, self._presence_server_monitor_loop)
 
         except Exception:
 
             pass
 
+    def _show_update_progress_dialog(self):
+        """Show a floating progress window in the bottom-right corner when downloading an update."""
+        try:
+            if getattr(self, "_update_progress_dialog", None):
+                try:
+                    self._update_progress_dialog.destroy()
+                except Exception:
+                    pass
+            dlg = tk.Toplevel(self.root)
+            dlg.title("")
+            dlg.overrideredirect(True)
+            dlg.attributes("-topmost", True)
+            dlg.configure(bg=UI_BORDER)
+            w, h = scale_px(330), scale_px(90)
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = sw - w - scale_px(20)
+            y = sh - h - scale_px(56)
+            dlg.geometry(f"{w}x{h}+{x}+{y}")
+            inner = tk.Frame(dlg, bg=UI_SURFACE, padx=scale_px(14), pady=scale_px(10))
+            inner.pack(fill="both", expand=True, padx=1, pady=1)
+            tk.Label(
+                inner, text="\u1f504  \u0110ang t\u1ea3i b\u1ea3n c\u1eadp nh\u1eadt...",
+                font=ui_font(10, bold=True), bg=UI_SURFACE, fg=UI_TEXT, anchor="w"
+            ).pack(fill="x")
+            pb = ttk.Progressbar(inner, mode="indeterminate", length=scale_px(292))
+            pb.pack(fill="x", pady=(scale_px(6), 0))
+            pb.start(12)
+            info_lbl = tk.Label(
+                inner, text="\u0110ang k\u1ebft n\u1ed1i t\u1edbi m\u00e1y ch\u1ee7...",
+                font=ui_font(9), bg=UI_SURFACE, fg=UI_MUTED, anchor="w"
+            )
+            info_lbl.pack(fill="x", pady=(scale_px(3), 0))
+            dlg._pb = pb
+            dlg._info_lbl = info_lbl
+            dlg._pb_determinate = False
+            self._update_progress_dialog = dlg
+        except Exception:
+            self._update_progress_dialog = None
+
+    def _update_update_progress(self, downloaded, total):
+        """Update the progress bar. Must be called on the main (tkinter) thread."""
+        try:
+            dlg = getattr(self, "_update_progress_dialog", None)
+            if not dlg:
+                return
+            pb = dlg._pb
+            info_lbl = dlg._info_lbl
+            mb_done = downloaded / 1024 / 1024
+            if total > 0:
+                pct = min(100, int(downloaded * 100 / total))
+                mb_total = total / 1024 / 1024
+                if not dlg._pb_determinate:
+                    pb.stop()
+                    pb.config(mode="determinate", maximum=100)
+                    dlg._pb_determinate = True
+                pb.config(value=pct)
+                info_lbl.config(text=f"{mb_done:.1f} / {mb_total:.1f} MB  \u2014  {pct}%")
+            else:
+                info_lbl.config(text=f"\u0110\u00e3 t\u1ea3i {mb_done:.1f} MB...")
+        except Exception:
+            pass
+
+    def _close_update_progress_dialog(self):
+        """Destroy the floating update progress window."""
+        try:
+            dlg = getattr(self, "_update_progress_dialog", None)
+            if dlg:
+                dlg.destroy()
+        except Exception:
+            pass
+        self._update_progress_dialog = None
+
+    def _user_update_check_loop(self):
+
+        try:
+
+            if (
+                not is_admin_build()
+                and getattr(sys, "frozen", False)
+                and not self._update_installing
+                and not self._update_check_inflight
+                and self._presence_server_online is True
+            ):
+
+                server_url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+
+                if server_url:
+
+                    self._update_check_inflight = True
+
+                    def worker():
+
+                        update_info = None
+                        update_path = None
+
+                        try:
+
+                            update_info = fetch_user_update_info(server_url, timeout=3)
+
+                            if update_info:
+
+                                remote_sha = str(update_info.get("sha256") or "").strip().lower()
+                                local_sha = file_sha256(sys.executable).lower()
+
+                                if remote_sha and remote_sha != local_sha:
+
+                                    # Show download progress dialog
+                                    try:
+                                        self.root.after(0, self._show_update_progress_dialog)
+                                    except Exception:
+                                        pass
+
+                                    def _on_progress(downloaded, total):
+                                        try:
+                                            self.root.after(0, lambda d=downloaded, t=total: self._update_update_progress(d, t))
+                                        except Exception:
+                                            pass
+
+                                    update_path = download_user_update(server_url, update_info, progress_callback=_on_progress)
+
+                        except Exception:
+
+                            update_path = None
+
+                        finally:
+
+                            self._update_check_inflight = False
+
+                            if update_path:
+
+                                try:
+                                    self.root.after(0, lambda p=update_path: self._install_user_update(p))
+                                except Exception:
+                                    pass
+
+                            else:
+
+                                # Close progress dialog if download failed or was not needed
+                                try:
+                                    self.root.after(0, self._close_update_progress_dialog)
+                                except Exception:
+                                    pass
+
+                    threading.Thread(target=worker, daemon=True).start()
+
+        except Exception:
+
+            pass
+
+        try:
+
+            self.root.after(60000, self._user_update_check_loop)
+
+        except Exception:
+
+            pass
+
+    def _install_user_update(self, update_path):
+
+        if is_admin_build() or self._update_installing:
+
+            # Close any lingering progress dialog
+            self._close_update_progress_dialog()
+
+            return
+
+        self._update_installing = True
+
+        # Close the download progress dialog before showing the install message
+        self._close_update_progress_dialog()
+
+        try:
+
+            messagebox.showinfo(
+                "Cập nhật ứng dụng",
+                "Đã có bản cập nhật mới.\n\nỨng dụng sẽ tự cập nhật và mở lại ngay.",
+            )
+
+        except Exception:
+
+            pass
+
+        try:
+
+            current_exe = Path(sys.executable).resolve()
+            update_path = Path(update_path).resolve()
+            bat_path = update_path.parent / "install_update.bat"
+            pid = os.getpid()
+            bat = f"""@echo off
+set "SRC={update_path}"
+set "DST={current_exe}"
+set "PID={pid}"
+:wait
+tasklist /FI "PID eq %PID%" | find "%PID%" >nul
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto wait
+)
+copy /Y "%SRC%" "%DST%" >nul
+start "" "%DST%"
+del "%SRC%" >nul 2>nul
+del "%~f0" >nul 2>nul
+"""
+            bat_path.write_text(bat, encoding="utf-8")
+            creationflags = 0
+            for flag_name in ("CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
+                creationflags |= int(getattr(subprocess, flag_name, 0) or 0)
+            subprocess.Popen(
+                ["cmd", "/c", str(bat_path)],
+                cwd=str(current_exe.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
+            )
+
+        except Exception as exc:
+
+            self._update_installing = False
+
+            try:
+
+                messagebox.showerror("Không cập nhật được", f"Không thể tự cập nhật ứng dụng:\n{exc}")
+
+            except Exception:
+
+                pass
+
+            return
+
+        try:
+
+            self.root.destroy()
+
+        except Exception:
+
+            os._exit(0)
+
     def _presence_cache_poll_loop(self):
 
         try:
 
-            server_url = normalize_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+            server_url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
 
             if server_url and not self._presence_poll_inflight:
 
@@ -12172,20 +12934,20 @@ class App:
 
 
         body = tk.Frame(win, bg=UI_SURFACE, padx=22, pady=18)
-
         body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=1)
 
-        tk.Label(body, text="Máy này chưa được duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
+        read_box = tk.Frame(body, bg="#fbfdff", highlightthickness=1, highlightbackground=UI_BORDER, padx=14, pady=12)
+        read_box.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
-        tk.Label(body, text="Gửi mã máy bên dưới cho Admin để nhận mã duyệt.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(4, 12))
+        tk.Label(read_box, text="Phần đọc mã", bg="#fbfdff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(read_box, text="Gửi mã máy bên dưới cho Admin để nhận mã duyệt.", bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 10))
 
-
-
-        tk.Label(body, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(read_box, text="Mã máy", bg="#fbfdff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         machine_var = tk.StringVar(value=machine_code)
 
-        machine_entry = tk.Entry(body, textvariable=machine_var, width=34, relief="solid", bd=1, font=ui_font(11))
+        machine_entry = tk.Entry(read_box, textvariable=machine_var, width=34, relief="solid", bd=1, font=ui_font(11))
 
         machine_entry.pack(fill="x", pady=(4, 10))
 
@@ -12193,21 +12955,26 @@ class App:
 
 
 
-        tk.Label(body, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(read_box, text="Mã duyệt", bg="#fbfdff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
 
         code_var = tk.StringVar()
 
-        code_entry = tk.Entry(body, textvariable=code_var, width=34, relief="solid", bd=1, font=ui_font(11))
+        code_entry = tk.Entry(read_box, textvariable=code_var, width=34, relief="solid", bd=1, font=ui_font(11))
 
-        code_entry.pack(fill="x", pady=(4, 12))
+        code_entry.pack(fill="x", pady=(4, 0))
 
         code_entry.focus_set()
+
+        member_box = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER, padx=14, pady=12)
+        member_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        tk.Label(member_box, text="Khối thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+        tk.Label(member_box, textvariable=self.user_role_var, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(3, 0))
 
 
 
         actions = tk.Frame(body, bg=UI_SURFACE)
-
-        actions.pack(fill="x")
+        actions.grid(row=2, column=0, sticky="ew")
 
 
 
@@ -12219,7 +12986,7 @@ class App:
 
             try:
 
-                self.status.config(text="Đã copy mã máy.")
+                self._set_status("Đã copy mã máy.", "success")
 
             except Exception:
 
@@ -12228,6 +12995,17 @@ class App:
 
 
         def approve():
+
+            if self._presence_server_online is not True:
+                try:
+                    self._set_status("Server trạng thái máy đang bảo trì.", "error")
+                except Exception:
+                    pass
+                messagebox.showerror(
+                    "Server đang bảo trì",
+                    "Không thể duyệt máy khi server đang bảo trì.",
+                )
+                return
 
             if save_machine_approval(code_var.get()):
 
@@ -12247,7 +13025,7 @@ class App:
 
                     self.root.lift()
 
-                    self.status.config(text="Máy đã được duyệt.")
+                    self._set_status("Máy đã được duyệt.", "success")
 
                     self.root.update_idletasks()
 
@@ -12269,6 +13047,7 @@ class App:
 
 
 
+        self._fit_dialog_to_screen(win, 560, 360, min_w=560, min_h=360, max_ratio=0.50, lock_size=True)
         self._center_dialog_on_screen(win)
 
         try:
@@ -12749,19 +13528,19 @@ class App:
                 if self._presence_server_is_running():
                     server_status_var.set("Server: đang chạy")
                 else:
-                    server_status_var.set("Server: đang tắt")
+                    server_status_var.set("Server: đang bảo trì")
 
             def start_server():
                 ok, msg = self._start_presence_server()
                 refresh_server_status_label()
-                self.status.config(text=msg)
+                self._set_status(msg)
                 if not ok:
                     messagebox.showerror("Không khởi động được server", msg)
 
             def stop_server():
                 ok, msg = self._stop_presence_server()
                 refresh_server_status_label()
-                self.status.config(text=msg)
+                self._set_status(msg)
                 if not ok:
                     messagebox.showerror("Không tắt được server", msg)
 
@@ -12815,7 +13594,7 @@ class App:
             else:
                 save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
             try:
-                self.status.config(text="Đã lưu cấu hình hiển thị.")
+                self._set_status("Đã lưu cấu hình hiển thị.", "success")
             except Exception:
                 pass
             return_to_previous_page()
@@ -12905,619 +13684,481 @@ class App:
 
 
     def open_admin_approval_panel(self):
-
         if self.admin_approval_panel is not None:
-
             try:
-
                 self.admin_approval_panel.lift()
-
                 self.admin_approval_panel.focus_set()
-
             except Exception:
-
                 pass
-
             return
 
-
-
         panel = tk.Frame(self.root, bg=UI_BG)
-
         panel.place(relx=0, rely=0, relwidth=1, relheight=1)
-
         self.admin_approval_panel = panel
 
+        refresh_job = {"id": None}
 
-
-        screen_w = getattr(self, "screen_w", self.root.winfo_screenwidth())
-
-        screen_h = getattr(self, "screen_h", self.root.winfo_screenheight())
-
-        shell_w = min(max(760, int(screen_w * 0.78)), 1120, max(720, screen_w - 64))
-
-        shell_h = min(max(600, int(screen_h * 0.82)), 760, max(560, screen_h - 64))
-
-        form_w = min(620, shell_w - 56)
-
-        shell = tk.Frame(panel, bg=UI_SURFACE, highlightthickness=1, highlightbackground="#dbe5f0")
-
-        shell.place(relx=0.5, rely=0.5, anchor="center", width=shell_w, height=shell_h)
-
-        body = tk.Frame(shell, bg=UI_SURFACE, padx=22, pady=18)
-
-        body.pack(fill="both", expand=True)
-
-
-
-        def close_panel():
-
+        def close_panel(*args):
             try:
-
                 if refresh_job["id"] is not None:
                     try:
                         panel.after_cancel(refresh_job["id"])
                     except Exception:
                         pass
-
                 panel.destroy()
-
             finally:
-
                 self.admin_approval_panel = None
 
+        sidebar_w = getattr(self, "sidebar_w", scale_px(190)) if hasattr(self, 'sidebar_w') else 190
+        sidebar = tk.Frame(panel, width=sidebar_w, bg="#f8fbff", highlightthickness=1, highlightbackground="#e7edf6")
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
 
+        brand = tk.Frame(sidebar, bg="#f8fbff")
+        brand.pack(fill="x", pady=(0, 24))
+        try:
+            if hasattr(self, 'app_logo_img') and self.app_logo_img is not None:
+                tk.Label(brand, image=self.app_logo_img, bg="#f8fbff").pack(anchor="center", pady=(14, 0))
+        except Exception:
+            pass
 
-        tk.Label(body, text="Duyệt máy thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w")
+        nav_items = [
+            ("home", "⌂", "Trang chủ", True),
+            ("excel", "▦", "Excel", False),
+            ("history", "◷", "Lịch sử", False),
+            ("mapping", "▤", "Mẫu mapping", False),
+            ("settings", "⚙", "Cài đặt", False),
+            ("help", "?", "Trợ giúp", False),
+            ("about", "i", "Giới thiệu", False),
+        ]
 
-        tk.Label(body, text="Nhập mã máy thành viên gửi, sau đó gửi lại mã duyệt cho họ.", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(11)).pack(anchor="w", pady=(4, 12))
+        for page_id, icon, text, active in nav_items:
+            if active:
+                bg = UI_PRIMARY
+                fg = "#ffffff"
+            else:
+                bg = "#f8fbff"
+                fg = "#667085"
+            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=0, cursor="hand2")
+            row.pack(fill="x", padx=8, pady=2)
+            inner = tk.Frame(row, bg=bg, padx=10, pady=8, cursor="hand2")
+            inner.pack(fill="both", expand=True)
+            tk.Label(inner, text=icon, font=ui_font(12), bg=bg, fg=fg, width=2, anchor="center", cursor="hand2").pack(side="left", padx=(0, 6))
+            lbl = tk.Label(inner, text=text, font=ui_font(10, bold=active), bg=bg, fg=fg, anchor="w", cursor="hand2")
+            lbl.pack(side="left", fill="x", expand=True)
+            for widget in (row, inner, lbl):
+                widget.bind("<Button-1>", lambda e: close_panel())
 
+        # Sidebar bottom section
+        member_info = tk.Frame(sidebar, bg="#f8fbff")
+        member_info.pack(side="bottom", fill="x", pady=(0, 16))
+        tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg="#f8fbff", fg=UI_TEXT).pack(anchor="center")
+        tk.Label(member_info, text="Admin", font=ui_font(9), bg="#f8fbff", fg=UI_MUTED).pack(anchor="center", pady=(2, 10))
+        active_btn = tk.Frame(member_info, bg="#fff7ed", highlightthickness=1, highlightbackground="#fed7aa")
+        active_btn.pack(pady=4, padx=12, fill="x")
+        tk.Label(active_btn, text="Duyệt máy ✓", font=ui_font(9, bold=True), bg="#fff7ed", fg="#ea580c").pack(pady=6)
 
+        # Stats box in sidebar (quick glance)
+        stat_total_var = tk.StringVar(value="Đang tải...")
+        stat_time_var = tk.StringVar(value="Cập nhật: --:--:--")
+        stats_box = tk.Frame(sidebar, bg="#eef6ff", highlightthickness=1, highlightbackground="#c7ddf7")
+        stats_box.pack(side="bottom", fill="x", padx=8, pady=(0, 8))
+        tk.Label(stats_box, textvariable=stat_total_var, bg="#eef6ff", fg="#16a34a", font=ui_font(9, bold=True), anchor="w").pack(padx=10, pady=(8, 0), anchor="w")
+        tk.Label(stats_box, textvariable=stat_time_var, bg="#eef6ff", fg="#64748b", font=ui_font(8), anchor="w").pack(padx=10, pady=(2, 8), anchor="w")
 
-        form_area = tk.Frame(body, bg=UI_SURFACE, width=form_w)
+        # ─── Right Panel: Tổng quan hệ thống ───
+        right_panel = tk.Frame(panel, bg=UI_BG, width=220)
+        right_panel.pack(side="right", fill="y", padx=(0, 20), pady=20)
+        right_panel.pack_propagate(False)
 
-        form_area.pack(anchor="w")
+        right_card = tk.Frame(right_panel, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
+        right_card.pack(fill="x")
 
+        tk.Label(right_card, text="Tổng quan hệ thống", bg="#ffffff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w", padx=16, pady=(18, 14))
 
+        stat_active_var = tk.StringVar(value="0")
+        stat_pending_var = tk.StringVar(value="0")
+        stat_blocked_var = tk.StringVar(value="0")
+        stat_total_num_var = tk.StringVar(value="0")
 
-        tk.Label(form_area, text="Mã máy", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
+        def _add_stat(parent, icon, title, val_var, icon_fg, icon_bg, val_fg):
+            row = tk.Frame(parent, bg="#ffffff")
+            row.pack(fill="x", padx=16, pady=8)
+            ic = tk.Label(row, text=icon, font=ui_font(14), bg=icon_bg, fg=icon_fg, width=2, height=1)
+            ic.pack(side="left", padx=(0, 12))
+            tf = tk.Frame(row, bg="#ffffff")
+            tf.pack(side="left", fill="x", expand=True)
+            tk.Label(tf, text=title, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w")
+            tk.Label(tf, textvariable=val_var, bg="#ffffff", fg=val_fg, font=ui_font(14, bold=True)).pack(anchor="w")
 
+        _add_stat(right_card, "📄", "Máy đã duyệt", stat_total_num_var, "#2563eb", "#eff6ff", "#2563eb")
+        _add_stat(right_card, "🛡", "Đang hoạt động", stat_active_var, "#16a34a", "#f0fdf4", "#16a34a")
+        _add_stat(right_card, "⏳", "Chờ duyệt", stat_pending_var, "#d97706", "#fffbeb", "#d97706")
+        _add_stat(right_card, "🚫", "Đã chặn", stat_blocked_var, "#dc2626", "#fef2f2", "#dc2626")
+
+        time_frame = tk.Frame(right_card, bg="#ffffff")
+        time_frame.pack(fill="x", padx=16, pady=(16, 16))
+        tk.Label(time_frame, textvariable=stat_time_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(8)).pack(side="left")
+        refresh_icon = tk.Label(time_frame, text="↻", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(12, bold=True), cursor="hand2")
+        refresh_icon.pack(side="right")
+
+        # ─── Main Content ───
+        main_content = tk.Frame(panel, bg=UI_BG)
+        main_content.pack(side="left", fill="both", expand=True, padx=(20, 12), pady=20)
+
+        header_frame = tk.Frame(main_content, bg=UI_BG)
+        header_frame.pack(fill="x", pady=(0, 20))
+        
+        title_row = tk.Frame(header_frame, bg=UI_BG)
+        title_row.pack(fill="x")
+        tk.Label(title_row, text="👥", bg=UI_BG, fg=UI_PRIMARY, font=ui_font(16)).pack(side="left", padx=(0, 8))
+        tk.Label(title_row, text="Duyệt máy thành viên", bg=UI_BG, fg=UI_TEXT, font=ui_font(16, bold=True)).pack(side="left")
+        
+        tk.Label(header_frame, text="Nhập mã máy do thành viên cung cấp để tạo mã duyệt cho họ.", bg=UI_BG, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(4, 0), padx=(36, 0))
+
+        form_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
+        form_box.pack(fill="x", pady=(0, 16))
+        
+        tk.Label(form_box, text="🔑  Tạo mã duyệt mới", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(11, bold=True)).pack(anchor="w", padx=20, pady=(16, 0))
+        tk.Frame(form_box, bg=UI_BORDER, height=1).pack(fill="x", padx=20, pady=(12, 14))
+
+        form_grid = tk.Frame(form_box, bg="#ffffff")
+        form_grid.pack(fill="x", padx=20)
+
+        col1 = tk.Frame(form_grid, bg="#ffffff")
+        col1.pack(side="left", fill="x", expand=True, padx=(0, 16))
+        tk.Label(col1, text="Mã máy", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         machine_var = tk.StringVar()
+        machine_entry = tk.Entry(col1, textvariable=machine_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
+        machine_entry.pack(fill="x", pady=(6, 12), ipady=7)
+        machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp")
+        machine_entry.bind("<FocusIn>", lambda e: (machine_entry.delete(0, 'end'), machine_entry.configure(fg=UI_TEXT)) if machine_var.get().startswith("⊙") else None)
+        machine_entry.bind("<FocusOut>", lambda e: (machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp"), machine_entry.configure(fg="#94a3b8")) if not machine_var.get() else None)
 
-        machine_entry = tk.Entry(form_area, textvariable=machine_var, width=58, relief="solid", bd=1, font=ui_font(11))
-
-        machine_entry.pack(anchor="w", pady=(4, 10))
-
-
-
-        tk.Label(form_area, text="Tên người", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
-
+        col2 = tk.Frame(form_grid, bg="#ffffff")
+        col2.pack(side="left", fill="x", expand=True)
+        tk.Label(col2, text="Tên người (tuỳ chọn)", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         name_var = tk.StringVar()
+        name_entry = tk.Entry(col2, textvariable=name_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
+        name_entry.pack(fill="x", pady=(6, 12), ipady=7)
+        name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)")
+        name_entry.bind("<FocusIn>", lambda e: (name_entry.delete(0, 'end'), name_entry.configure(fg=UI_TEXT)) if name_var.get().startswith("👤") else None)
+        name_entry.bind("<FocusOut>", lambda e: (name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)"), name_entry.configure(fg="#94a3b8")) if not name_var.get() else None)
 
-        name_entry = tk.Entry(form_area, textvariable=name_var, width=58, relief="solid", bd=1, font=ui_font(11))
-
-        name_entry.pack(anchor="w", pady=(4, 10))
-
-
-
-        tk.Label(form_area, text="Mã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
-
+        tk.Label(form_box, text="Mã duyệt", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w", padx=20)
         approval_var = tk.StringVar()
-
-        approval_entry = tk.Entry(form_area, textvariable=approval_var, width=58, relief="solid", bd=1, font=ui_font(11))
-
-        approval_entry.pack(anchor="w", pady=(4, 12))
-
+        approval_entry = tk.Entry(form_box, textvariable=approval_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground="#E5EAF3")
+        approval_entry.pack(fill="x", padx=20, pady=(6, 16), ipady=6)
+        approval_entry.insert(0, "Mã duyệt sẽ được tạo tự động")
         approval_entry.configure(state="readonly")
 
         last_generated_code = {"value": ""}
 
+        actions = tk.Frame(form_box, bg="#ffffff")
+        actions.pack(fill="x", padx=20, pady=(0, 20))
 
+        list_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#E5EAF3")
+        list_box.pack(fill="both", expand=True)
 
-        actions = tk.Frame(form_area, bg=UI_SURFACE)
+        list_header = tk.Frame(list_box, bg="#ffffff")
+        list_header.pack(fill="x", padx=20, pady=(16, 12))
 
-        actions.pack(fill="x")
-
-
-
-        list_header = tk.Frame(body, bg=UI_SURFACE)
-
-        list_header.pack(fill="x", pady=(18, 6))
-
-        list_title_box = tk.Frame(list_header, bg=UI_SURFACE)
+        list_title_box = tk.Frame(list_header, bg="#ffffff")
         list_title_box.pack(side="left")
 
-        tk.Label(list_title_box, text="Danh sách máy đã duyệt", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
-
+        tk.Label(list_title_box, text="📄 Danh sách máy đã duyệt", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(11, bold=True)).pack(anchor="w")
         summary_var = tk.StringVar(value="Đang tải...")
-        tk.Label(list_title_box, textvariable=summary_var, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
+        tk.Label(list_title_box, textvariable=summary_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w", pady=(2, 0))
 
-
-
-        search_bar = tk.Frame(body, bg=UI_SURFACE)
-
-        search_bar.pack(fill="x", pady=(0, 8))
-
+        search_bar = tk.Frame(list_box, bg="#ffffff")
+        search_bar.pack(fill="x", padx=20, pady=(0, 12))
         search_var = tk.StringVar()
-
-        search_entry = tk.Entry(search_bar, textvariable=search_var, width=34, relief="solid", bd=1, font=ui_font(11))
-
-        search_entry.pack(side="left", fill="x", expand=True)
+        search_entry = tk.Entry(search_bar, textvariable=search_var, relief="flat", bd=0, font=ui_font(10), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
+        search_entry.pack(side="left", fill="x", expand=True, ipady=7)
+        search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...")
+        search_entry.bind("<FocusIn>", lambda e: (search_entry.delete(0, 'end'), search_entry.configure(fg=UI_TEXT)) if search_var.get().startswith("🔍") else None)
+        search_entry.bind("<FocusOut>", lambda e: (search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt..."), search_entry.configure(fg="#94a3b8")) if not search_var.get() else None)
 
         form_inputs = {machine_entry, name_entry, approval_entry, search_entry}
 
+        list_frame = tk.Frame(list_box, bg="#ffffff")
+        list_frame.pack(fill="both", expand=True, padx=20)
 
+        style = ttk.Style()
+        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=44, borderwidth=0, font=ui_font(10))
+        style.configure("Custom.Treeview.Heading", font=ui_font(9, bold=True), background="#f1f5f9", foreground="#64748b", relief="flat", borderwidth=0)
+        style.map("Custom.Treeview.Heading", background=[("active", "#e2e8f0")])
+        style.layout("Custom.Treeview", [('Custom.Treeview.treearea', {'sticky': 'nswe'})])
 
-        list_frame = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
-
-        list_frame.pack(fill="both", expand=True)
-
-        approved_tree = ttk.Treeview(
-
-            list_frame,
-
-            columns=("machine", "user", "code", "time", "status"),
-
-            show="headings",
-
-            height=8,
-
-        )
-
-        approved_tree.heading("machine", text="Mã máy")
-
+        approved_tree = ttk.Treeview(list_frame, style="Custom.Treeview", columns=("machine", "user", "code", "time", "status", "action"), show="headings", height=8)
+        approved_tree.heading("machine", text="  Mã máy")
         approved_tree.heading("user", text="Tên người")
-
         approved_tree.heading("code", text="Mã duyệt")
-
         approved_tree.heading("time", text="Thời gian duyệt")
         approved_tree.heading("status", text="Trạng thái")
+        approved_tree.heading("action", text="Thao tác")
 
-        approved_tree.column("machine", width=210, anchor="center")
-
-        approved_tree.column("user", width=140, anchor="center")
-
-        approved_tree.column("code", width=150, anchor="center")
-
+        approved_tree.column("machine", width=200, anchor="w")
+        approved_tree.column("user", width=100, anchor="center")
+        approved_tree.column("code", width=160, anchor="center")
         approved_tree.column("time", width=150, anchor="center")
-        approved_tree.column("status", width=170, anchor="w")
+        approved_tree.column("status", width=130, anchor="center")
+        approved_tree.column("action", width=60, anchor="center")
 
-        approved_tree.tag_configure("online", foreground="#16a34a")
-        approved_tree.tag_configure("away", foreground="#d97706")
-        approved_tree.tag_configure("old", foreground="#6b7280")
+        approved_tree.tag_configure("online", foreground="#16a34a", background="#ffffff")
+        approved_tree.tag_configure("away", foreground="#d97706", background="#ffffff")
+        approved_tree.tag_configure("old", foreground="#6b7280", background="#ffffff")
+        approved_tree.tag_configure("stripe", background="#f8fafc")
 
         approved_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=approved_tree.yview)
-
         approved_tree.configure(yscrollcommand=approved_scroll.set)
-
         approved_tree.grid(row=0, column=0, sticky="nsew")
-
         approved_scroll.grid(row=0, column=1, sticky="ns")
-
         list_frame.rowconfigure(0, weight=1)
-
         list_frame.columnconfigure(0, weight=1)
 
-
-
-        list_actions = tk.Frame(body, bg=UI_SURFACE)
-
-        list_actions.pack(fill="x", pady=(8, 0))
-
-        refresh_job = {"id": None}
-
-
+        list_actions = tk.Frame(list_box, bg="#ffffff")
+        list_actions.pack(fill="x", padx=20, pady=(16, 20))
 
         def filter_rows(rows, query):
-
             query = str(query or "").strip()
-
-            if not query:
-
+            if not query or query.startswith("Tìm kiếm") or query.startswith(" Tìm kiếm") or query.startswith("🔍"):
                 return list(rows)
-
             query_norm = norm(query)
-
             filtered = []
-
             for row in rows:
-
-                haystack = " ".join(
-
-                    [
-
-                        str(row.get("machine_code", "")),
-
-                        str(row.get("user_name", "")),
-
-                        str(row.get("approval_code", "")),
-
-                        str(row.get("approved_at", "")),
-                        str(row.get("last_seen_at", "")),
-
-                    ]
-
-                )
-
+                haystack = " ".join([str(row.get("machine_code", "")), str(row.get("user_name", "")), str(row.get("approval_code", "")), str(row.get("approved_at", "")), str(row.get("last_seen_at", ""))])
                 if query_norm in norm(haystack):
-
                     filtered.append(row)
-
             return filtered
 
-
-
         def _is_editing_approval_form():
-
             try:
-
                 focused = self.root.focus_get()
-
             except Exception:
-
                 focused = None
-
             if focused in form_inputs:
-
                 return True
-
             try:
-
                 return bool(focused and any(str(focused).startswith(str(widget)) for widget in form_inputs))
-
             except Exception:
-
                 return False
 
-
         def refresh_list(select_machine=None, fill_selection=True, auto=False):
-
             if auto and _is_editing_approval_form():
-
                 try:
-
                     if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
-
                         if refresh_job["id"] is not None:
-
                             try:
-
                                 self.admin_approval_panel.after_cancel(refresh_job["id"])
-
                             except Exception:
-
                                 pass
-
-                        refresh_job["id"] = self.admin_approval_panel.after(
-                            1500,
-                            lambda: refresh_list(select_machine=select_machine, fill_selection=False, auto=True),
-                        )
-
+                        refresh_job["id"] = self.admin_approval_panel.after(1500, lambda: refresh_list(select_machine=select_machine, fill_selection=False, auto=True))
                 except Exception:
+                    pass
+                return
 
+            # Capture search text on main thread (ignore placeholder)
+            raw_q = search_var.get()
+            query = "" if raw_q.startswith("🔍") or raw_q.startswith("⊙") or raw_q.startswith(" Tìm kiếm") else raw_q
+
+            def _data_worker():
+                try:
+                    import_local_approval_to_admin_list()
+                    srv = self._get_presence_machine_cache()
+                    sync_presence_machines_to_admin_list(srv)
+                    all_r = load_admin_approved_machines()
+                    filt = filter_rows(all_r, query)
+                    smap = {}
+                    for item in srv:
+                        if not isinstance(item, dict):
+                            continue
+                        mk = str(item.get("machine_code") or "").strip().upper()
+                        if mk:
+                            smap[mk] = item
+                    # Schedule UI update on main thread
+                    try:
+                        if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
+                            self.admin_approval_panel.after(0, lambda: _apply_ui(all_r, filt, smap, select_machine, fill_selection))
+                    except Exception:
+                        pass
+                except Exception:
                     pass
 
-                return
+            def _apply_ui(all_rows, rows, server_map, sel_machine, do_fill):
+                try:
+                    existing_iids = set(approved_tree.get_children())
+                    new_iids = set()
 
-            import_local_approval_to_admin_list()
+                    for i, row in enumerate(rows):
+                        machine = row.get("machine_code", "")
+                        if not machine:
+                            continue
+                        new_iids.add(machine)
+                        live = server_map.get(str(machine).strip().upper(), {})
+                        last_seen = live.get("last_seen_at") or row.get("last_seen_at") or row.get("approved_at") or ""
+                        status_text = format_machine_last_seen(last_seen)
+                        if is_machine_active_recently(last_seen):
+                            status_tag = "online"
+                            status_text = "● Đang hoạt động"
+                        else:
+                            dt = parse_machine_datetime(last_seen)
+                            if dt is None:
+                                status_tag = "old"
+                            else:
+                                age_min = max(0, int((datetime.now() - dt).total_seconds() // 60))
+                                status_tag = "away" if age_min < 180 else "old"
+                        tags = (status_tag, "stripe" if i % 2 == 1 else "")
+                        values = ("  " + machine, str(row.get("user_name", "") or "").strip(), row.get("approval_code", ""), row.get("approved_at", ""), status_text, "⋮")
+                        if machine in existing_iids:
+                            approved_tree.item(machine, values=values, tags=tags)
+                        else:
+                            approved_tree.insert("", "end", iid=machine, values=values, tags=tags)
 
-            rows = filter_rows(load_admin_approved_machines(), search_var.get())
-            server_rows = self._get_presence_machine_cache()
-            server_map = {}
-            for item in server_rows:
-                if not isinstance(item, dict):
-                    continue
-                machine_key = str(item.get("machine_code") or "").strip().upper()
-                if machine_key:
-                    server_map[machine_key] = item
+                    for old_iid in existing_iids - new_iids:
+                        approved_tree.delete(old_iid)
 
-            for item in approved_tree.get_children():
+                    total_count = len(all_rows)
+                    online_count = sum(1 for r in all_rows if is_machine_active_recently(
+                        (server_map.get(str(r.get("machine_code", "")).strip().upper(), {}) or {}).get("last_seen_at")
+                        or r.get("last_seen_at") or r.get("approved_at") or ""
+                    ))
+                    summary_var.set(f"Đã duyệt: {total_count} máy | Đang hoạt động: {online_count} máy")
+                    stat_total_var.set(f"✓ Đã tải {total_count} dòng.")
+                    stat_total_num_var.set(str(total_count))
+                    stat_active_var.set(str(online_count))
+                    stat_pending_var.set("0")
+                    stat_blocked_var.set("0")
+                    stat_time_var.set(f"Cập nhật: {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}")
 
-                approved_tree.delete(item)
+                    target = str(sel_machine or "").strip().upper()
+                    children = approved_tree.get_children()
+                    selected_id = target if target and approved_tree.exists(target) else (children[0] if children else "")
+                    if selected_id:
+                        approved_tree.focus(selected_id)
+                        approved_tree.see(selected_id)
+                        if do_fill:
+                            approved_tree.selection_set(selected_id)
+                            fill_from_selected()
+                        else:
+                            approved_tree.selection_remove(approved_tree.selection())
+                except Exception:
+                    pass
 
-            for row in rows:
+                # Schedule next auto-refresh
+                try:
+                    if refresh_job["id"] is not None:
+                        self.admin_approval_panel.after_cancel(refresh_job["id"])
+                except Exception:
+                    pass
+                try:
+                    if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
+                        refresh_job["id"] = self.admin_approval_panel.after(5000, lambda: refresh_list(select_machine=sel_machine, fill_selection=False, auto=True))
+                except Exception:
+                    refresh_job["id"] = None
 
-                machine = row.get("machine_code", "")
-                live = server_map.get(str(machine).strip().upper(), {})
-                last_seen = live.get("last_seen_at") or row.get("last_seen_at") or row.get("approved_at") or ""
-                status_text = format_machine_last_seen(last_seen)
-                if is_machine_active_recently(last_seen):
-                    status_tag = "online"
-                else:
-                    dt = parse_machine_datetime(last_seen)
-                    if dt is None:
-                        status_tag = "old"
-                    else:
-                        age_min = max(0, int((datetime.now() - dt).total_seconds() // 60))
-                        status_tag = "away" if age_min < 180 else "old"
-
-                approved_tree.insert(
-
-                    "",
-
-                    "end",
-
-                    iid=machine,
-
-                    values=(
-
-                        machine,
-
-                        str(row.get("user_name", "") or "").strip(),
-
-                        row.get("approval_code", ""),
-
-                        row.get("approved_at", ""),
-                        status_text,
-
-                    ),
-                    tags=(status_tag,),
-
-                )
-
-            total_count = len(rows)
-            online_count = sum(1 for row in rows if is_machine_active_recently(
-                (server_map.get(str(row.get("machine_code", "")).strip().upper(), {}) or {}).get("last_seen_at")
-                or row.get("last_seen_at")
-                or row.get("approved_at")
-                or ""
-            ))
-            summary_var.set(f"Đã duyệt: {total_count} máy | Đang hoạt động: {online_count} máy")
-
-            target = str(select_machine or "").strip().upper()
-
-            children = approved_tree.get_children()
-
-            selected_id = target if target and approved_tree.exists(target) else (children[0] if children else "")
-
-            if selected_id:
-
-                approved_tree.focus(selected_id)
-
-                approved_tree.see(selected_id)
-
-                if fill_selection:
-
-                    approved_tree.selection_set(selected_id)
-
-                    fill_from_selected()
-
-                else:
-
-                    approved_tree.selection_remove(approved_tree.selection())
-
-            self.status.config(text=f"Đã tải {len(rows)} dòng.")
-
-            try:
-                if refresh_job["id"] is not None:
-                    self.admin_approval_panel.after_cancel(refresh_job["id"])
-            except Exception:
-                pass
-            try:
-                if getattr(self, "admin_approval_panel", None) is not None and self.admin_approval_panel.winfo_exists():
-                    refresh_job["id"] = self.admin_approval_panel.after(
-                        5000,
-                        lambda: refresh_list(select_machine=select_machine, fill_selection=False, auto=True),
-                    )
-            except Exception:
-                refresh_job["id"] = None
-
-
+            threading.Thread(target=_data_worker, daemon=True).start()
 
         def search_rows():
-
             refresh_list()
-
             search_entry.focus_set()
-
-
 
         def clear_search():
-
             search_var.set("")
-
+            search_entry.delete(0, 'end')
+            search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...")
+            search_entry.configure(fg="#94a3b8")
             refresh_list()
 
-            search_entry.focus_set()
-
-
-
         def fill_from_selected(_event=None):
-
             selected = approved_tree.selection()
-
             if not selected:
-
                 return
-
             values = approved_tree.item(selected[0], "values")
-
             if values:
-
-                machine_var.set(values[0])
-
+                machine_var.set(str(values[0]).strip())
                 name_var.set(values[1] if len(values) > 1 else "")
-
                 approval_entry.configure(state="normal")
-
                 approval_var.set(values[2] if len(values) > 2 else "")
-
                 approval_entry.configure(state="readonly")
 
-
-
         def clear_approval_form():
-
             approved_tree.selection_remove(approved_tree.selection())
-
             machine_var.set("")
-
             name_var.set("")
-
             approval_entry.configure(state="normal")
-
             approval_var.set("")
-
             approval_entry.configure(state="readonly")
-
             machine_entry.focus_set()
-
-
 
         approved_tree.bind("<<TreeviewSelect>>", fill_from_selected)
-
         search_entry.bind("<Return>", lambda _e: search_rows())
 
-
-
         def generate():
-
             machine = str(machine_var.get() or "").strip().upper()
-
             user_name = str(name_var.get() or "").strip()
-
             code = remember_admin_approved_machine(machine, user_name)
-
             if not code:
-
                 messagebox.showwarning("Thiếu mã máy", "Bạn chưa nhập mã máy cần duyệt.")
-
                 return
-
             self.root.clipboard_clear()
-
             self.root.clipboard_append(code)
-
             last_generated_code["value"] = code
-
             approval_entry.configure(state="normal")
-
             approval_var.set(code)
-
             approval_entry.configure(state="readonly")
-
             refresh_list(select_machine=machine, fill_selection=False)
-
             machine_var.set("")
-
             name_var.set("")
-
             machine_entry.focus_set()
 
-            self.status.config(text="Đã tạo và copy mã duyệt. Nhập máy tiếp theo.")
-
-
-
         def copy_code():
-
             code_to_copy = approval_var.get() or last_generated_code["value"]
-
             if not code_to_copy:
-
                 generate()
-
                 code_to_copy = approval_var.get() or last_generated_code["value"]
-
             if not code_to_copy:
-
                 return
-
             self.root.clipboard_clear()
-
             self.root.clipboard_append(code_to_copy)
 
-            self.status.config(text="Đã copy mã duyệt.")
-
-
-
         def delete_selected():
-
             selected = approved_tree.selection()
-
             if not selected:
-
                 messagebox.showinfo("Chưa chọn máy", "Chọn một máy trong danh sách trước khi xóa.")
-
                 return
-
             machine = str(selected[0])
-
-            if not messagebox.askyesno(
-
-                "Xóa máy đã duyệt",
-
-                f"Xóa máy này khỏi danh sách đã duyệt?\nMã duyệt cũ trên máy đó sẽ không dùng lại được.\n\n{machine}",
-
-            ):
-
+            if not messagebox.askyesno("Xóa máy đã duyệt", f"Xóa máy này khỏi danh sách đã duyệt?\nMã duyệt cũ trên máy đó sẽ không dùng lại được.\n\n{machine}"):
                 return
-
             delete_admin_approved_machine(machine)
-
             refresh_list(fill_selection=False)
-
             clear_approval_form()
 
-            self.status.config(text="Đã xóa máy và làm hết hiệu lực mã duyệt cũ.")
-
-
-
-        ui_button(list_header, "Xóa máy", delete_selected, width=10, variant="warn").pack(side="right")
-
-
-
         def open_list_menu(event):
-
             row_id = approved_tree.identify_row(event.y)
-
             if row_id:
-
                 approved_tree.selection_set(row_id)
-
                 fill_from_selected()
-
             menu = tk.Menu(self.root, tearoff=0)
-
             menu.add_command(label="Xóa máy này", command=delete_selected)
-
             menu.tk_popup(event.x_root, event.y_root)
 
-
-
         approved_tree.bind("<Delete>", lambda _e: delete_selected())
-
         approved_tree.bind("<Button-3>", open_list_menu)
 
+        ui_button(actions, "+ Tạo mã duyệt", generate, width=13, variant="primary").pack(side="left", padx=(0, 8))
+        ui_button(actions, "❐ Copy mã", copy_code, width=10, variant="soft").pack(side="left")
+        ui_button(actions, "✕ Đóng", close_panel, width=9).pack(side="right")
 
+        ui_button(search_bar, "🔍 Tìm", search_rows, width=8, variant="primary").pack(side="left", padx=(8, 0))
+        ui_button(search_bar, "🔽 Bộ lọc", search_rows, width=8, variant="soft").pack(side="left", padx=(8, 0))
+        ui_button(search_bar, "🗑 Xóa máy", delete_selected, width=10, variant="warn").pack(side="right")
 
-        ui_button(actions, "Tạo mã duyệt", generate, width=13, variant="primary").pack(side="left", padx=(0, 8))
-
-        ui_button(actions, "Copy mã", copy_code, width=10, variant="soft").pack(side="left")
-
-        ui_button(actions, "Đóng", close_panel, width=9).pack(side="right")
-
-        ui_button(list_actions, "Xóa máy đã chọn", delete_selected, width=15, variant="warn").pack(side="left")
-
-        ui_button(search_bar, "Tìm", search_rows, width=8, variant="soft").pack(side="left", padx=(8, 0))
-
-        ui_button(search_bar, "Bỏ lọc", clear_search, width=10).pack(side="left", padx=(8, 0))
-
-        ui_button(list_actions, "Tải lại danh sách", clear_search, width=14, variant="soft").pack(side="left", padx=(8, 0))
+        ui_button(list_actions, "🗑 Xóa máy đã chọn", delete_selected, width=16, variant="warn").pack(side="left")
+        ui_button(list_actions, "↻ Tải lại danh sách", clear_search, width=16, variant="soft").pack(side="left", padx=(8, 0))
 
         refresh_list(fill_selection=False)
-
-        machine_var.set("")
-
-        name_var.set("")
-
-        approval_entry.configure(state="normal")
-
-        approval_var.set("")
-
-        approval_entry.configure(state="readonly")
-
-        machine_entry.focus_set()
-
+        clear_approval_form()
 
 
     def _setup_responsive_metrics(self):
@@ -14245,6 +14886,22 @@ class App:
 
 
 
+        status_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#e7edf6")
+        status_card.pack(fill="x", pady=(6, 0))
+        status_inner = tk.Frame(status_card, bg="#ffffff", padx=5, pady=5)
+        status_inner.pack(fill="both", expand=True)
+        self.status = tk.Label(
+            status_inner,
+            text="● Sẵn sàng",
+            anchor="center",
+            fg=UI_SUCCESS,
+            bg="#ffffff",
+            font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 9, bold=True),
+            wraplength=max(88, self.sidebar_w - 62),
+            justify="center",
+        )
+        self.status.pack(fill="both", expand=True)
+
         sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=8 if (self.tiny_ui or self.micro_ui) else 12)
 
         sidebar_spacer.pack(fill="x")
@@ -14258,40 +14915,60 @@ class App:
 
         user_inner = tk.Frame(user_box, bg=UI_SURFACE)
 
-        user_inner.pack(anchor="n", fill="both", expand=True)
+        user_inner.pack(fill="both", expand=True)
+
+        member_content = tk.Frame(user_inner, bg=UI_SURFACE)
+
+        member_content.place(relx=0.5, rely=0.5, anchor="center")
 
         if self.tiny_ui or self.micro_ui:
             self.sidebar_member_role_label = tk.Label(
-                user_inner,
+                member_content,
                 textvariable=self.user_role_var,
                 font=ui_font(10, bold=True),
                 bg=UI_SURFACE,
                 fg=UI_TEXT,
                 justify="center",
-                wraplength=132,
+                wraplength=max(100, self.sidebar_w - 44),
             )
             self.sidebar_member_role_label.pack(anchor="center")
 
             self.sidebar_member_name_label = tk.Label(
-                user_inner,
+                member_content,
                 text=self.user_name,
                 font=ui_font(9),
                 bg=UI_SURFACE,
                 fg=UI_TEXT,
                 justify="center",
-                wraplength=132,
+                wraplength=max(100, self.sidebar_w - 44),
             )
             self.sidebar_member_name_label.pack(anchor="center", pady=(2, 0))
         else:
-            tk.Label(user_inner, textvariable=self.user_role_var, font=ui_font(11, bold=True), bg=UI_SURFACE, fg=UI_TEXT, justify="center").pack(anchor="center")
+            tk.Label(
+                member_content,
+                textvariable=self.user_role_var,
+                font=ui_font(11, bold=True),
+                bg=UI_SURFACE,
+                fg=UI_TEXT,
+                justify="center",
+                wraplength=max(110, self.sidebar_w - 44),
+            ).pack(anchor="center")
 
-            tk.Label(user_inner, text=self.user_name, font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED, justify="center").pack(anchor="center", pady=(2, 0))
+            tk.Label(
+                member_content,
+                text=self.user_name,
+                font=ui_font(10),
+                bg=UI_SURFACE,
+                fg=UI_MUTED,
+                justify="center",
+                wraplength=max(110, self.sidebar_w - 44),
+            ).pack(anchor="center", pady=(4, 0))
 
         if is_admin_build():
 
-            admin_btn_row = tk.Frame(user_inner, bg=UI_SURFACE)
+            admin_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
 
-            admin_btn_row.pack(anchor="center", pady=(0 if (self.tiny_ui or self.micro_ui) else 1, 0))
+            admin_btn_row.pack(anchor="center", pady=(6 if (self.tiny_ui or self.micro_ui) else 8, 0))
 
             ui_button(
                 admin_btn_row,
@@ -14300,24 +14977,6 @@ class App:
                 width=10 if (self.tiny_ui or self.micro_ui) else 11,
                 variant="warn",
             ).pack(anchor="center")
-
-        status_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#e7edf6")
-        status_card.pack(fill="x", pady=(6, 0))
-        status_inner = tk.Frame(status_card, bg="#ffffff", padx=8, pady=6)
-        status_inner.pack(fill="both", expand=True)
-        self.status = tk.Label(
-            status_inner,
-            text="● Sẵn sàng",
-            anchor="center",
-            fg=UI_SUCCESS,
-            bg="#ffffff",
-            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10, bold=True),
-            wraplength=max(120, self.sidebar_w - 26),
-            justify="center",
-        )
-        self.status.pack(fill="x")
-
-
 
         main = tk.Frame(shell, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
 
@@ -15161,7 +15820,7 @@ class App:
             getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get(),
         )
 
-        self.status.config(text="Đã lưu cài đặt vào file .env")
+        self._set_status("Đã lưu cài đặt vào file .env", "success")
 
 
 
@@ -15219,13 +15878,15 @@ class App:
 
         excel_col_names = [name for _, name in self.excel_headers]
 
-        self.status.config(
+        self._set_status(
 
-            text=f"Đang đọc phiếu cọc... ({len(excel_col_names)} cột Excel: "
+            f"Đang đọc phiếu cọc... ({len(excel_col_names)} cột Excel: "
 
-                 + ", ".join(excel_col_names[:5])
+            + ", ".join(excel_col_names[:5])
 
-                 + ("..." if len(excel_col_names) > 5 else "") + ")"
+            + ("..." if len(excel_col_names) > 5 else "") + ")",
+
+            "warn",
 
         )
 
@@ -15362,11 +16023,13 @@ class App:
 
 
 
-            self.status.config(
+            self._set_status(
 
-                text=f"Đã đọc phiếu cọc: {data_rows} dòng × {len(data_cols)} cột. "
+                f"Đã đọc phiếu cọc: {data_rows} dòng × {len(data_cols)} cột. "
 
-                     "Kiểm tra preview rồi bấm 'Điền tiếp vào Excel'."
+                "Kiểm tra preview rồi bấm 'Điền tiếp vào Excel'.",
+
+                "success",
 
             )
 
@@ -15466,7 +16129,7 @@ class App:
 
             messagebox.showerror("Lỗi đọc phiếu cọc", "Có lỗi. Xem last_run_v12/last_error_phieu_coc.txt")
 
-            self.status.config(text="Lỗi đọc phiếu cọc.")
+            self._set_status("Lỗi đọc phiếu cọc.", "error")
 
 
 
@@ -15550,7 +16213,7 @@ class App:
 
             self.excel_info.insert("1.0", "".join(lines))
 
-            self.status.config(text="Đã đọc từng sheet trong file Excel.")
+            self._set_status("Đã đọc từng sheet trong file Excel.", "success")
 
         except Exception:
 
@@ -15562,7 +16225,7 @@ class App:
 
             messagebox.showerror("Lỗi đọc từng sheet", "Có lỗi. Xem last_run_v12/last_error_each_sheet.txt")
 
-            self.status.config(text="Lỗi đọc từng sheet.")
+            self._set_status("Lỗi đọc từng sheet.", "error")
 
 
 
@@ -15644,7 +16307,7 @@ class App:
 
             self.excel_info.insert("1.0", "".join(lines))
 
-            self.status.config(text="Đã đọc công thức và cách làm Excel.")
+            self._set_status("Đã đọc công thức và cách làm Excel.", "success")
 
         except Exception:
 
@@ -15656,7 +16319,7 @@ class App:
 
             messagebox.showerror("Lỗi đọc công thức", "Có lỗi. Xem last_run_v12/last_error_formula_logic.txt")
 
-            self.status.config(text="Lỗi đọc công thức Excel.")
+            self._set_status("Lỗi đọc công thức Excel.", "error")
 
 
 
@@ -15874,7 +16537,7 @@ class App:
 
             self._display_profiles(profiles, "Đã đọc toàn bộ workbook hiện tại")
 
-            self.status.config(text="Đã đọc toàn bộ workbook.")
+            self._set_status("Đã đọc toàn bộ workbook.", "success")
 
         except Exception:
 
@@ -15886,7 +16549,7 @@ class App:
 
             messagebox.showerror("Lỗi đọc workbook", "Có lỗi. Xem last_run_v12/last_error_scan_workbook.txt")
 
-            self.status.config(text="Lỗi đọc workbook.")
+            self._set_status("Lỗi đọc workbook.", "error")
 
 
 
@@ -15948,7 +16611,7 @@ class App:
 
         self._display_profiles(all_profiles, f"Đã quét {len(paths)} file Excel trong thư mục")
 
-        self.status.config(text=f"Đã quét {len(paths)} file Excel. Log: last_run_v12/all_excel_profiles.json")
+        self._set_status(f"Đã quét {len(paths)} file Excel. Log: last_run_v12/all_excel_profiles.json", "success")
 
 
 
@@ -15974,7 +16637,7 @@ class App:
 
             messagebox.showerror("Lỗi mở Excel", "Có lỗi khi đọc Excel. Xem last_run_v12/last_error_open_excel.txt")
 
-            self.status.config(text="Lỗi mở Excel.")
+            self._set_status("Lỗi mở Excel.", "error")
 
 
 
@@ -16108,7 +16771,7 @@ class App:
 
             self.excel_info.insert("1.0", "Lỗi đọc thông tin Excel. Xem last_run_v12/last_error_excel_info.txt\n")
 
-            self.status.config(text="Lỗi đọc thông tin Excel.")
+            self._set_status("Lỗi đọc thông tin Excel.", "error")
 
 
 
@@ -16159,9 +16822,9 @@ class App:
             self.tk_img = ImageTk.PhotoImage(im)
             self.img_label.config(image=self.tk_img, text="")
         except Exception as e:
-            self.status.config(text=f"Lỗi tải ảnh: {e}")
+            self._set_status(f"Lỗi tải ảnh: {e}", "error")
             
-        self.status.config(text=status_prefix + p)
+        self._set_status(status_prefix + p)
 
     def _reset_current_preview_state(self):
         self.tables = []
@@ -16256,7 +16919,7 @@ class App:
         except Exception:
             pass
 
-        self.status.config(text="Đã đặt lại Excel, ảnh OCR, preview và mapping.")
+        self._set_status("Đã đặt lại Excel, ảnh OCR, preview và mapping.", "success")
 
     def _save_history_image_snapshot(self, source_path, workflow_id=None):
         try:
@@ -16399,7 +17062,7 @@ class App:
 
                     return None
 
-                self.status.config(text="Clipboard đang là text. Hãy copy ảnh bằng Ctrl+C rồi bấm Ctrl+V để dán ảnh.")
+                self._set_status("Clipboard đang là text. Hãy copy ảnh bằng Ctrl+C rồi bấm Ctrl+V để dán ảnh.", "warn")
 
             else:
 
@@ -16483,7 +17146,7 @@ class App:
 
         self.save_key()
 
-        self.status.config(text="Đang đọc ảnh...")
+        self._set_status("Đang đọc ảnh...", "warn")
 
         self.root.update()
 
@@ -16518,7 +17181,7 @@ class App:
 
             total_rows = sum(len(t["rows"]) for t in tables)
 
-            self.status.config(text=f"Đọc xong: {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.")
+            self._set_status(f"Đọc xong: {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.", "success")
 
             self._record_history(
 
@@ -16572,7 +17235,7 @@ class App:
 
             messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
 
-            self.status.config(text="Lỗi đọc ảnh")
+            self._set_status("Lỗi đọc ảnh", "error")
 
             self._record_history(
 
@@ -16614,7 +17277,7 @@ class App:
 
         self.mapping_editor.set_mapping(table["columns"], self.excel_headers, auto)
 
-        self.status.config(text="Đã auto map từ bảng trong ảnh sang cột của file Excel.")
+        self._set_status("Đã auto map từ bảng trong ảnh sang cột của file Excel.", "success")
 
 
 
@@ -17062,7 +17725,7 @@ class App:
 
 
 
-            self.status.config(text=f"Đã tạo file xem trước: {preview_path}")
+            self._set_status(f"Đã tạo file xem trước: {preview_path}", "success")
 
             messagebox.showinfo(
 
@@ -17094,7 +17757,7 @@ class App:
 
             messagebox.showerror("Lỗi xem trước", "Có lỗi. Xem last_run_v12/last_error_preview.txt")
 
-            self.status.config(text="Lỗi xem trước Excel.")
+            self._set_status("Lỗi xem trước Excel.", "error")
 
 
 
@@ -17198,7 +17861,7 @@ class App:
 
 
 
-            self.status.config(text=f"Đã điền {info['rows_added']} dòng vào sheet {info['sheet']}, bắt đầu từ dòng {info['start_fill_row']}.")
+            self._set_status(f"Đã điền {info['rows_added']} dòng vào sheet {info['sheet']}, bắt đầu từ dòng {info['start_fill_row']}.", "success")
 
             messagebox.showinfo(
 
@@ -17227,7 +17890,7 @@ class App:
 
             messagebox.showerror("Lỗi điền Excel", "Có lỗi. Xem last_run_v12/last_error_fill.txt")
 
-            self.status.config(text="Lỗi điền Excel.")
+            self._set_status("Lỗi điền Excel.", "error")
 
             self._record_history(
 
@@ -18735,7 +19398,7 @@ def _v229_preview_excel(self):
 
 
 
-        self.status.config(text=f"Đã tạo file xem trước: {preview_path}")
+        self._set_status(f"Đã tạo file xem trước: {preview_path}", "success")
 
         messagebox.showinfo(
 
@@ -18767,7 +19430,7 @@ def _v229_preview_excel(self):
 
         messagebox.showerror("Lỗi xem trước", "Có lỗi. Xem last_run_v12/last_error_preview.txt")
 
-        self.status.config(text="Lỗi xem trước Excel.")
+        self._set_status("Lỗi xem trước Excel.", "error")
 
 
 
@@ -19313,7 +19976,7 @@ def _v23_run_gemini(self):
 
     try:
 
-        self.status.config(text="Đang đọc bảng...")
+        self._set_status("Đang đọc bảng...", "warn")
 
         self.root.update_idletasks()
 
@@ -19346,7 +20009,7 @@ def _v23_run_gemini(self):
 
             self.build_mapping()
 
-        self.status.config(text=f"Đọc xong: {len(tables)} bảng. Kiểm tra từng ô trong preview trước khi xuất.")
+            self._set_status(f"Đọc xong: {len(tables)} bảng. Kiểm tra từng ô trong preview trước khi xuất.", "success")
 
     except Exception:
 
@@ -19358,7 +20021,7 @@ def _v23_run_gemini(self):
 
         messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
 
-        self.status.config(text="Lỗi đọc ảnh.")
+        self._set_status("Lỗi đọc ảnh.", "error")
 
 
 
@@ -20607,6 +21270,12 @@ def main():
             pass
 
         root = tk.Tk()
+
+        if not is_admin_build():
+            try:
+                root.withdraw()
+            except Exception:
+                pass
 
         App(root)
 
