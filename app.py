@@ -437,7 +437,7 @@ UI_ERROR = "#dc2626"
 
 UI_SCALE = 1.0
 UI_FONT_BONUS = 0
-UI_FONT_MIN_SIZE = 11
+UI_FONT_MIN_SIZE = 12
 UI_READABILITY_MODE = False
 UI_FONT_FAMILY = "Segoe UI"
 UI_FONT_FAMILY_BOLD = "Segoe UI Semibold"
@@ -459,7 +459,7 @@ def ui_font(size=None, bold=False):
     try:
 
         requested = size if size is not None else 12
-        if UI_READABILITY_MODE and requested <= 11:
+        if requested <= 11:
             requested += UI_FONT_BONUS
         base = max(UI_FONT_MIN_SIZE, scale_px(requested))
 
@@ -543,7 +543,7 @@ class RoundedButton(tk.Canvas):
 
         try:
 
-            self.create_round_rect(1, 1, self.pixel_width - 1, self.pixel_height - 1, radius=max(5, scale_px(8)), fill=fill, outline=self.border_color)
+            self.create_round_rect(1, 1, self.pixel_width - 1, self.pixel_height - 1, radius=max(10, scale_px(14)), fill=fill, outline=self.border_color)
 
         except Exception:
 
@@ -6123,6 +6123,53 @@ def build_static_jacking_daily_summary_lines(tables):
                 best_score = score
         return best_idx, best_score
 
+    def _header_score(name, aliases, bonus_words=()):
+
+        n = norm(name)
+        score = 0
+        for alias in aliases:
+            if alias in n:
+                score += 10 + min(6, len(alias) // 4)
+        for word in bonus_words:
+            if word in n:
+                score += 4
+        return score
+
+    def _find_smart_col(cols, rows, aliases, scorer, avoid=None, bonus_words=(), min_score=5):
+
+        avoid = set(avoid or [])
+        best_idx = None
+        best_score = 0
+        for idx, col in enumerate(cols):
+            if idx in avoid:
+                continue
+            score = _header_score(col, aliases, bonus_words=bonus_words)
+            for row in rows[:20]:
+                if idx < len(row):
+                    score += scorer(row[idx])
+            if score > best_score:
+                best_idx = idx
+                best_score = score
+        if best_idx is not None and best_score >= min_score:
+            return best_idx
+        return None
+
+    def _infer_date_from_table(candidate, rows):
+
+        probes = [
+            candidate.get("title"),
+            candidate.get("name"),
+            candidate.get("sheet"),
+            candidate.get("caption"),
+        ]
+        for row in rows[:8]:
+            probes.extend(row[: min(len(row), 8)])
+        for value in probes:
+            date_value = _normalize_summary_date(value)
+            if date_value:
+                return date_value
+        return ""
+
     grouped = {}
     matched_tables = 0
     source_image_count = 0
@@ -6139,9 +6186,35 @@ def build_static_jacking_daily_summary_lines(tables):
 
             continue
 
-        date_idx = _find_col(cols, ("ngay ep", "ngay", "date", "jacking date"))
-        pile_idx = _find_col(cols, ("ten tim coc", "ten coc", "pile name", "pile no", "ten tim", "tim coc", "pile"))
-        depth_idx = _find_col(cols, ("chieu sau ep thuc te", "chieu sau thuc te", "chieu sau ep", "chieu sau", "do sau ep thuc te", "do sau ep", "pressing depth", "actual depth", "ep thuc te", "ep coc thuc te", "depth"))
+        date_aliases = ("ngay ep", "ngay thi cong", "ngay thi cong ep", "ngay", "date", "jacking date")
+        pile_aliases = ("ten tim coc", "ten coc", "ma coc", "so hieu coc", "pile name", "pile no", "ten tim", "tim coc", "tim", "pile")
+        depth_aliases = (
+            "chieu sau ep thuc te",
+            "chieu sau thuc te",
+            "chieu sau ep tt",
+            "sau ep thuc te",
+            "do sau thuc te",
+            "do sau ep thuc te",
+            "chieu sau ep",
+            "do sau ep",
+            "chieu sau",
+            "pressing depth actual",
+            "actual pressing depth",
+            "actual depth",
+            "ep thuc te",
+            "depth",
+        )
+
+        date_idx = _find_smart_col(cols, rows, date_aliases, _score_date_cell, bonus_words=("ngay", "date"))
+        pile_idx = _find_smart_col(cols, rows, pile_aliases, _score_pile_cell, avoid={date_idx} - {None}, bonus_words=("tim", "coc", "pile"))
+        depth_idx = _find_smart_col(
+            cols,
+            rows,
+            depth_aliases,
+            _score_depth_cell,
+            avoid={date_idx, pile_idx} - {None},
+            bonus_words=("thuc te", "chieu sau", "do sau", "depth", "ep"),
+        )
 
         if date_idx is None:
             date_idx, _ = _find_by_data_score(rows, len(cols), _score_date_cell)
@@ -6175,11 +6248,11 @@ def build_static_jacking_daily_summary_lines(tables):
 
                 continue
 
-            date_value = _normalize_summary_date(row[date_idx])
+            date_value = _normalize_summary_date(row[date_idx]) if date_idx < len(row) else ""
 
             if not date_value:
 
-                date_value = "Không rõ ngày"
+                date_value = _infer_date_from_table(candidate, rows) or "Không rõ ngày"
 
             depth_num = _static_jacking_to_float(row[depth_idx])
 
@@ -6222,7 +6295,7 @@ def build_static_jacking_daily_summary_lines(tables):
 
             depth_text = str(round(total_depth, 3)).rstrip("0").rstrip(".")
 
-        summary_lines.append(f"{date_value}: {bucket['tim']} tim - chiều sâu ép thực tế {depth_text} m")
+        summary_lines.append(f"{date_value}: {bucket['tim']} tim - {depth_text} m")
 
     return summary_lines
 
@@ -9258,6 +9331,8 @@ class App:
         self.history_page = None
 
         self.mapping_page = None
+
+        self.settings_panel = None
 
         self.mapping_templates_inner = None
 
@@ -13512,20 +13587,68 @@ del "%~f0" >nul 2>nul
 
 
 
+    def _rebuild_ui_after_settings_change(self, return_page="home"):
+        try:
+            for child in list(self.root.winfo_children()):
+                child.destroy()
+        except Exception:
+            pass
+
+        self.nav_widgets = {}
+        self.home_page = None
+        self.excel_page = None
+        self.history_page = None
+        self.mapping_page = None
+        self.mapping_templates_inner = None
+        self.admin_approval_panel = None
+        self.settings_panel = None
+
+        self._setup_responsive_metrics()
+        self.build_ui()
+
+        if return_page not in {"home", "excel", "history", "mapping"}:
+            return_page = "home"
+        try:
+            self.show_page(return_page)
+        except Exception:
+            self.show_home_page()
+        try:
+            self._set_status("Đã áp dụng cấu hình hiển thị.", "success")
+        except Exception:
+            pass
+
+
     def show_settings_dialog(self, event=None):
         return_page = getattr(self, "_dialog_return_page", None)
         if return_page not in {"home", "excel", "history", "mapping"}:
             return_page = getattr(self, "current_page", "home")
         settings_is_admin = is_admin_build()
-        win = tk.Toplevel(self.root)
-        win.title("Hiển thị")
-        win.configure(bg="#1f2128")
-        win.resizable(True, True)
-        try:
-            win.transient(self.root)
-        except Exception:
-            pass
-        win.grab_set()
+
+        if getattr(self, "settings_panel", None) is not None:
+            try:
+                self.settings_panel.lift()
+                self.settings_panel.focus_set()
+            except Exception:
+                pass
+            return "break"
+
+        win = tk.Frame(self.root, bg="#1f2128")
+        win.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.settings_panel = win
+
+        def _noop(*_args, **_kwargs):
+            return None
+
+        win.title = _noop
+        win.resizable = _noop
+        win.transient = _noop
+        win.grab_set = _noop
+        win.geometry = _noop
+        win.minsize = _noop
+        win.maxsize = _noop
+        win.protocol = _noop
+        win.wait_window = _noop
+        win.bind("<Destroy>", lambda e: setattr(self, "settings_panel", None) if e.widget is win else None, add="+")
 
         screen_w = int(getattr(self, "screen_w", 0) or win.winfo_screenwidth() or 1366)
         screen_h = int(getattr(self, "screen_h", 0) or win.winfo_screenheight() or 768)
@@ -13995,7 +14118,7 @@ del "%~f0" >nul 2>nul
             note = tk.Frame(api_card, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
             note.pack(fill="x")
             tk.Label(note, text="Lưu ý", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
-            tk.Label(note, text="Lưu để áp dụng cả cấu hình hiển thị lẫn API, sau đó ứng dụng sẽ khởi động lại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
+            tk.Label(note, text="Lưu để áp dụng ngay cấu hình hiển thị, API và server trong cửa sổ hiện tại.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
         else:
             show_page("display")
 
@@ -14035,20 +14158,15 @@ del "%~f0" >nul 2>nul
                 save_env(self.api_key_var.get(), self.model_var.get(), profile_key, self.presence_server_var.get())
             else:
                 save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
-            try:
-                self._set_status("Đã lưu cấu hình hiển thị.", "success")
-            except Exception:
-                pass
-            return_to_previous_page()
             self._dialog_return_page = None
             win.destroy()
-            self.refresh_ui()
+            self._rebuild_ui_after_settings_change(return_page)
 
         win.protocol("WM_DELETE_WINDOW", lambda: (return_to_previous_page(), setattr(self, "_dialog_return_page", None), win.destroy()))
 
         cancel_btn = dark_button(footer, "Hủy", lambda: (return_to_previous_page(), setattr(self, "_dialog_return_page", None), win.destroy()), width=12)
         cancel_btn.pack(side="right")
-        save_btn = dark_button(footer, "Lưu & khởi động lại", save, width=21, accent_button=True)
+        save_btn = dark_button(footer, "Lưu & áp dụng ngay", save, width=21, accent_button=True)
         save_btn.pack(side="right", padx=(0, 10))
 
         show_page("display")
@@ -14151,13 +14269,13 @@ del "%~f0" >nul 2>nul
             finally:
                 self.admin_approval_panel = None
 
-        sidebar_w = scale_px(254)
+        sidebar_w = 232
         sidebar = tk.Frame(panel, width=sidebar_w, bg="#f8fbff", highlightthickness=1, highlightbackground="#dbe6f3")
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
         brand = tk.Frame(sidebar, bg="#f8fbff")
-        brand.pack(fill="x", pady=(0, 22))
+        brand.pack(fill="x", pady=(0, 16))
         try:
             if hasattr(self, 'app_logo_img') and self.app_logo_img is not None:
                 tk.Label(brand, image=self.app_logo_img, bg="#f8fbff").pack(anchor="center", pady=(14, 0))
@@ -14179,8 +14297,8 @@ del "%~f0" >nul 2>nul
             fg = UI_PRIMARY if active else "#475569"
             border = UI_PRIMARY if active else "#dbe6f3"
             row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=border, cursor="hand2")
-            row.pack(fill="x", padx=20, pady=4)
-            inner = tk.Frame(row, bg=bg, padx=14, pady=11, cursor="hand2")
+            row.pack(fill="x", padx=16, pady=2)
+            inner = tk.Frame(row, bg=bg, padx=12, pady=7, cursor="hand2")
             inner.pack(fill="both", expand=True)
             tk.Label(inner, text=icon, font=ui_font(12), bg=bg, fg=fg, width=2, anchor="center", cursor="hand2").pack(side="left", padx=(0, 9))
             lbl = tk.Label(inner, text=text, font=ui_font(11, bold=active), bg=bg, fg=fg, anchor="w", cursor="hand2")
@@ -14188,14 +14306,19 @@ del "%~f0" >nul 2>nul
             for widget in (row, inner, lbl):
                 widget.bind("<Button-1>", lambda e: close_panel())
 
-        # Sidebar bottom section
-        member_info = tk.Frame(sidebar, bg="#f8fbff")
-        member_info.pack(side="bottom", fill="x", pady=(0, 16))
-        tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg="#f8fbff", fg=UI_TEXT).pack(anchor="center")
-        tk.Label(member_info, text="Admin", font=ui_font(9), bg="#f8fbff", fg=UI_MUTED).pack(anchor="center", pady=(2, 10))
-        active_btn = tk.Frame(member_info, bg="#fff7ed", highlightthickness=1, highlightbackground="#f59e0b")
-        active_btn.pack(pady=4, padx=20, fill="x")
-        tk.Label(active_btn, text="Duyệt máy     🛡", font=ui_font(10, bold=True), bg="#fff7ed", fg="#ea580c").pack(pady=10)
+        # Sidebar bottom section - keep the admin block fixed and visually identical.
+        member_info = tk.Frame(
+            sidebar,
+            bg="#ffffff",
+            padx=10,
+            pady=12,
+            highlightthickness=1,
+            highlightbackground="#e6edf5",
+        )
+        member_info.pack(side="bottom", fill="x", padx=12, pady=(0, 14))
+        tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg="#ffffff", fg=UI_TEXT).pack(anchor="center")
+        tk.Label(member_info, text="Admin", font=ui_font(9), bg="#ffffff", fg=UI_MUTED).pack(anchor="center", pady=(4, 10))
+        ui_button(member_info, "Duyệt máy", lambda: None, width=14, variant="warn").pack(anchor="center")
 
         # Stats box in sidebar (quick glance)
         stat_total_var = tk.StringVar(value="Đang tải...")
@@ -14210,103 +14333,213 @@ del "%~f0" >nul 2>nul
         stat_blocked_var = tk.StringVar(value="0")
         stat_total_num_var = tk.StringVar(value="0")
 
-        # ─── Main Content ───
+        # Main content mirrors the 24-inch admin approval workspace.
         main_content = tk.Frame(panel, bg=UI_BG)
-        main_content.pack(side="left", fill="both", expand=True, padx=(12, 18), pady=12)
+        main_content.pack(side="left", fill="both", expand=True, padx=(14, 16), pady=12)
 
         header_frame = tk.Frame(main_content, bg=UI_BG)
-        header_frame.pack(fill="x", pady=(18, 24))
+        header_frame.pack(fill="x", pady=(0, 10))
         
         title_row = tk.Frame(header_frame, bg=UI_BG)
         title_row.pack(fill="x")
-        icon_box = tk.Frame(title_row, bg="#eef6ff", width=68, height=68)
-        icon_box.pack(side="left", padx=(20, 18))
+        icon_box = tk.Frame(title_row, bg="#eef6ff", width=46, height=46)
+        icon_box.pack(side="left", padx=(0, 12))
         icon_box.pack_propagate(False)
-        tk.Label(icon_box, text="👥", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(24)).pack(expand=True)
-        tk.Label(title_row, text="Duyệt máy thành viên", bg=UI_BG, fg="#0f172a", font=ui_font(20, bold=True)).pack(side="left")
+        tk.Label(icon_box, text="👥", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(18)).pack(expand=True)
+        tk.Label(title_row, text="Duyệt máy thành viên", bg=UI_BG, fg="#0f172a", font=ui_font(16, bold=True)).pack(side="left")
         
-        tk.Label(header_frame, text="Nhập mã máy do thành viên cung cấp để tạo mã duyệt cho họ.", bg=UI_BG, fg="#64748b", font=ui_font(11)).pack(anchor="w", pady=(4, 0), padx=(108, 0))
+        tk.Label(header_frame, text="Nhập mã máy do thành viên cung cấp để tạo mã duyệt cho họ.", bg=UI_BG, fg=UI_TEXT, font=ui_font(10)).pack(anchor="w", pady=(2, 0), padx=(58, 0))
 
-        form_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#bfdbfe")
-        form_box.pack(fill="x", pady=(0, 16))
+        approval_body = tk.Frame(main_content, bg=UI_BG)
+        approval_body.pack(fill="both", expand=True)
+
+        left_area = tk.Frame(approval_body, bg=UI_BG)
+        left_area.pack(side="left", fill="both", expand=True)
+
+        overview_panel = tk.Frame(
+            approval_body,
+            width=282,
+            bg="#ffffff",
+            highlightthickness=1,
+            highlightbackground="#dbe6f3",
+            padx=16,
+            pady=16,
+        )
+        overview_panel.pack(side="right", fill="y", padx=(14, 0))
+        overview_panel.pack_propagate(False)
+
+        tk.Label(overview_panel, text="Tổng quan hệ thống", bg="#ffffff", fg=UI_TEXT, font=ui_font(12, bold=True)).pack(anchor="w", pady=(0, 14))
+
+        def make_stat_tile(parent, icon, label, var, color, bg):
+            tile = tk.Frame(parent, bg="#ffffff")
+            tile.pack(fill="x", pady=(0, 10))
+            badge = tk.Canvas(tile, bg="#ffffff", width=46, height=46, bd=0, highlightthickness=0)
+            badge.pack(side="left", padx=(0, 12))
+            badge.create_round_rect = lambda x1, y1, x2, y2, radius=10, **kwargs: badge.create_polygon(
+                [
+                    x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+                    x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+                    x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+                ],
+                smooth=True,
+                splinesteps=24,
+                **kwargs,
+            )
+            badge.create_round_rect(1, 1, 45, 45, radius=12, fill=bg, outline=bg)
+            badge.create_text(23, 23, text=icon, fill=color, font=ui_font(15, bold=True))
+            text_box = tk.Frame(tile, bg="#ffffff")
+            text_box.pack(side="left", fill="x", expand=True)
+            tk.Label(text_box, text=label, bg="#ffffff", fg=UI_TEXT, font=ui_font(10)).pack(anchor="w")
+            tk.Label(text_box, textvariable=var, bg="#ffffff", fg=color, font=ui_font(17, bold=True)).pack(anchor="w")
+            sep = tk.Frame(parent, bg="#eef2f7", height=1)
+            sep.pack(fill="x", pady=(0, 10))
+
+        make_stat_tile(overview_panel, "▣", "Máy đã duyệt", stat_total_num_var, UI_PRIMARY, "#eaf2ff")
+        make_stat_tile(overview_panel, "⌾", "Đang hoạt động", stat_active_var, UI_SUCCESS, "#dcfce7")
+        make_stat_tile(overview_panel, "▢", "Chờ duyệt", stat_pending_var, "#f59e0b", "#fff7ed")
+        make_stat_tile(overview_panel, "⊘", "Đã chặn", stat_blocked_var, UI_ERROR, "#fee2e2")
+        tk.Label(
+            overview_panel,
+            textvariable=stat_time_var,
+            bg="#ffffff",
+            fg=UI_TEXT,
+            font=ui_font(8),
+            anchor="w",
+            justify="left",
+            wraplength=248,
+        ).pack(side="bottom", fill="x")
+
+        def admin_button(parent, text, command, width=12, variant="default"):
+            palette = {
+                "default": ("#ffffff", UI_TEXT, "#e5edf7", "#f8fbff"),
+                "primary": (UI_PRIMARY, "#ffffff", UI_PRIMARY, UI_PRIMARY_ACTIVE),
+                "soft": ("#f8fbff", UI_PRIMARY, "#bcd2ee", "#eef6ff"),
+                "warn": ("#fff7ed", "#ea580c", "#f59e0b", "#fff0ce"),
+                "danger": ("#fff5f5", UI_ERROR, "#fecaca", "#fee2e2"),
+            }
+            bg, fg, border, active_bg = palette.get(variant, palette["default"])
+            pixel_w = max(76, int(width * 9.8) + 20)
+            pixel_h = 34
+            canvas = tk.Canvas(parent, width=pixel_w, height=pixel_h, bg=parent.cget("bg"), bd=0, highlightthickness=0, cursor="hand2")
+
+            def draw(fill):
+                canvas.delete("all")
+                r = 14
+                canvas.create_polygon(
+                    [
+                        1 + r, 1, pixel_w - 1 - r, 1, pixel_w - 1, 1, pixel_w - 1, 1 + r,
+                        pixel_w - 1, pixel_h - 1 - r, pixel_w - 1, pixel_h - 1,
+                        pixel_w - 1 - r, pixel_h - 1, 1 + r, pixel_h - 1, 1, pixel_h - 1,
+                        1, pixel_h - 1 - r, 1, 1 + r, 1, 1,
+                    ],
+                    smooth=True,
+                    splinesteps=24,
+                    fill=fill,
+                    outline=border,
+                )
+                canvas.create_text(pixel_w // 2, pixel_h // 2, text=text, fill=fg, font=ui_font(10, bold=variant in {"primary", "danger"}))
+
+            def click(_event=None):
+                try:
+                    command()
+                except TypeError:
+                    command(_event)
+                return "break"
+
+            canvas.bind("<Button-1>", click)
+            canvas.bind("<Enter>", lambda _e: draw(active_bg))
+            canvas.bind("<Leave>", lambda _e: draw(bg))
+            draw(bg)
+            return canvas
+
+        form_box = tk.Frame(left_area, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+        form_box.pack(fill="x", pady=(0, 10))
         
         form_title = tk.Frame(form_box, bg="#ffffff")
-        form_title.pack(fill="x", padx=20, pady=(20, 14))
-        mini_icon = tk.Frame(form_title, bg="#eef6ff", width=36, height=36)
-        mini_icon.pack(side="left", padx=(0, 12))
+        form_title.pack(fill="x", padx=16, pady=(12, 8))
+        mini_icon = tk.Frame(form_title, bg="#eef6ff", width=28, height=28)
+        mini_icon.pack(side="left", padx=(0, 10))
         mini_icon.pack_propagate(False)
-        tk.Label(mini_icon, text="🔑", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(14)).pack(expand=True)
-        tk.Label(form_title, text="Tạo mã duyệt mới", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(13, bold=True)).pack(side="left")
+        tk.Label(mini_icon, text="🔑", bg="#eef6ff", fg=UI_PRIMARY, font=ui_font(12)).pack(expand=True)
+        tk.Label(form_title, text="Tạo mã duyệt mới", bg="#ffffff", fg=UI_PRIMARY, font=ui_font(12, bold=True)).pack(side="left")
 
         form_grid = tk.Frame(form_box, bg="#ffffff")
-        form_grid.pack(fill="x", padx=20)
+        form_grid.pack(fill="x", padx=16)
 
         col1 = tk.Frame(form_grid, bg="#ffffff")
         col1.pack(side="left", fill="x", expand=True, padx=(0, 16))
         tk.Label(col1, text="Mã máy", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         machine_var = tk.StringVar()
-        machine_entry = tk.Entry(col1, textvariable=machine_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        machine_entry.pack(fill="x", pady=(8, 18), ipady=10)
+        machine_shell = RoundedMappingEntry(col1, textvariable=machine_var, bg_color="#f8fafc", border_color=UI_BORDER, width=360, height=30, radius=8, font=ui_font(11))
+        machine_shell.pack(fill="x", pady=(5, 9))
+        machine_entry = machine_shell.entry
+        machine_entry.configure(fg=UI_TEXT)
         machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp")
-        machine_entry.bind("<FocusIn>", lambda e: (machine_entry.delete(0, 'end'), machine_entry.configure(fg=UI_TEXT)) if machine_var.get().startswith("⊙") else None)
-        machine_entry.bind("<FocusOut>", lambda e: (machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp"), machine_entry.configure(fg="#94a3b8")) if not machine_var.get() else None)
+        machine_entry.bind("<FocusIn>", lambda e: machine_entry.delete(0, 'end') if machine_var.get().startswith("⊙") else None)
+        machine_entry.bind("<FocusOut>", lambda e: machine_entry.insert(0, "⊙  Nhập mã máy do thành viên cung cấp") if not machine_var.get() else None)
 
         col2 = tk.Frame(form_grid, bg="#ffffff")
         col2.pack(side="left", fill="x", expand=True)
         tk.Label(col2, text="Tên người (tuỳ chọn)", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
         name_var = tk.StringVar()
-        name_entry = tk.Entry(col2, textvariable=name_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        name_entry.pack(fill="x", pady=(8, 18), ipady=10)
+        name_shell = RoundedMappingEntry(col2, textvariable=name_var, bg_color="#f8fafc", border_color=UI_BORDER, width=360, height=30, radius=8, font=ui_font(11))
+        name_shell.pack(fill="x", pady=(5, 9))
+        name_entry = name_shell.entry
+        name_entry.configure(fg=UI_TEXT)
         name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)")
-        name_entry.bind("<FocusIn>", lambda e: (name_entry.delete(0, 'end'), name_entry.configure(fg=UI_TEXT)) if name_var.get().startswith("👤") else None)
-        name_entry.bind("<FocusOut>", lambda e: (name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)"), name_entry.configure(fg="#94a3b8")) if not name_var.get() else None)
+        name_entry.bind("<FocusIn>", lambda e: name_entry.delete(0, 'end') if name_var.get().startswith("👤") else None)
+        name_entry.bind("<FocusOut>", lambda e: name_entry.insert(0, "👤  Nhập tên người sử dụng (không bắt buộc)") if not name_var.get() else None)
 
-        tk.Label(form_box, text="Mã duyệt", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w", padx=20)
+        tk.Label(form_box, text="Mã duyệt", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w", padx=16)
         approval_var = tk.StringVar()
-        approval_entry = tk.Entry(form_box, textvariable=approval_var, relief="flat", bd=0, font=ui_font(11), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground="#E5EAF3")
-        approval_entry.pack(fill="x", padx=20, pady=(8, 20), ipady=10)
+        approval_shell = RoundedMappingEntry(form_box, textvariable=approval_var, bg_color="#f8fafc", border_color="#E5EAF3", width=740, height=30, radius=8, font=ui_font(11))
+        approval_shell.pack(fill="x", padx=16, pady=(5, 10))
+        approval_entry = approval_shell.entry
+        approval_entry.configure(fg=UI_TEXT)
         approval_entry.insert(0, "Mã duyệt sẽ được tạo tự động")
         approval_entry.configure(state="readonly")
 
         last_generated_code = {"value": ""}
 
         actions = tk.Frame(form_box, bg="#ffffff")
-        actions.pack(fill="x", padx=20, pady=(0, 22))
+        actions.pack(fill="x", padx=16, pady=(0, 12))
 
-        list_box = tk.Frame(main_content, bg="#ffffff", highlightthickness=1, highlightbackground="#d5e5fb")
+        list_box = tk.Frame(left_area, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
         list_box.pack(fill="both", expand=True)
 
         list_header = tk.Frame(list_box, bg="#ffffff")
-        list_header.pack(fill="x", padx=20, pady=(16, 12))
+        list_header.pack(fill="x", padx=16, pady=(12, 8))
 
         list_title_box = tk.Frame(list_header, bg="#ffffff")
         list_title_box.pack(side="left")
 
-        tk.Label(list_title_box, text="▣  Danh sách máy đã duyệt", bg="#ffffff", fg="#0f172a", font=ui_font(13, bold=True)).pack(anchor="w")
+        tk.Label(list_title_box, text="▣  Danh sách máy đã duyệt", bg="#ffffff", fg="#0f172a", font=ui_font(12, bold=True)).pack(anchor="w")
         summary_var = tk.StringVar(value="Đang tải...")
-        tk.Label(list_title_box, textvariable=summary_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w", pady=(2, 0))
+        tk.Label(list_title_box, textvariable=summary_var, bg="#ffffff", fg=UI_TEXT, font=ui_font(9)).pack(anchor="w", pady=(2, 0))
 
         search_bar = tk.Frame(list_box, bg="#ffffff")
-        search_bar.pack(fill="x", padx=20, pady=(0, 12))
+        search_bar.pack(fill="x", padx=16, pady=(0, 8))
         search_var = tk.StringVar()
-        search_entry = tk.Entry(search_bar, textvariable=search_var, relief="flat", bd=0, font=ui_font(10), fg="#94a3b8", bg="#f8fafc", highlightthickness=1, highlightbackground=UI_BORDER, highlightcolor=UI_PRIMARY)
-        search_entry.pack(side="left", fill="x", expand=True, ipady=10)
+        search_shell = RoundedMappingEntry(search_bar, textvariable=search_var, bg_color="#f8fafc", border_color=UI_BORDER, width=520, height=30, radius=8, font=ui_font(10))
+        search_shell.pack(side="left", fill="x", expand=True)
+        search_entry = search_shell.entry
+        search_entry.configure(fg=UI_TEXT)
         search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...")
-        search_entry.bind("<FocusIn>", lambda e: (search_entry.delete(0, 'end'), search_entry.configure(fg=UI_TEXT)) if search_var.get().startswith("🔍") else None)
-        search_entry.bind("<FocusOut>", lambda e: (search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt..."), search_entry.configure(fg="#94a3b8")) if not search_var.get() else None)
+        search_entry.bind("<FocusIn>", lambda e: search_entry.delete(0, 'end') if search_var.get().startswith("🔍") else None)
+        search_entry.bind("<FocusOut>", lambda e: search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...") if not search_var.get() else None)
 
         form_inputs = {machine_entry, name_entry, approval_entry, search_entry}
 
         list_frame = tk.Frame(list_box, bg="#ffffff")
-        list_frame.pack(fill="both", expand=True, padx=20)
+        list_frame.pack(fill="both", expand=True, padx=16)
 
         style = ttk.Style()
-        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=58, borderwidth=0, font=ui_font(11))
-        style.configure("Custom.Treeview.Heading", font=ui_font(11, bold=True), background="#eff6ff", foreground="#0f172a", relief="flat", borderwidth=0)
+        style.configure("Custom.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=40, borderwidth=0, font=ui_font(10))
+        style.configure("Custom.Treeview.Heading", font=ui_font(10, bold=True), background="#eff6ff", foreground="#0f172a", relief="flat", borderwidth=0)
         style.map("Custom.Treeview.Heading", background=[("active", "#e2e8f0")])
         style.layout("Custom.Treeview", [('Custom.Treeview.treearea', {'sticky': 'nswe'})])
 
-        approved_tree = ttk.Treeview(list_frame, style="Custom.Treeview", columns=("select", "machine", "user", "code", "time", "status", "action"), show="headings", height=8)
+        approved_tree = ttk.Treeview(list_frame, style="Custom.Treeview", columns=("select", "machine", "user", "code", "time", "status", "action"), show="headings", height=4)
         approved_tree.heading("select", text="☐")
         approved_tree.heading("machine", text="  Mã máy")
         approved_tree.heading("user", text="Tên người")
@@ -14316,16 +14549,16 @@ del "%~f0" >nul 2>nul
         approved_tree.heading("action", text="Thao tác")
 
         approved_tree.column("select", width=44, minwidth=44, anchor="center", stretch=False)
-        approved_tree.column("machine", width=260, anchor="w")
-        approved_tree.column("user", width=160, anchor="w")
-        approved_tree.column("code", width=210, anchor="w")
-        approved_tree.column("time", width=210, anchor="w")
-        approved_tree.column("status", width=170, anchor="center")
-        approved_tree.column("action", width=80, anchor="center")
+        approved_tree.column("machine", width=235, anchor="center")
+        approved_tree.column("user", width=140, anchor="center")
+        approved_tree.column("code", width=190, anchor="center")
+        approved_tree.column("time", width=180, anchor="center")
+        approved_tree.column("status", width=150, anchor="center")
+        approved_tree.column("action", width=92, anchor="center")
 
-        approved_tree.tag_configure("online", foreground="#16a34a", background="#ffffff")
-        approved_tree.tag_configure("away", foreground="#d97706", background="#ffffff")
-        approved_tree.tag_configure("old", foreground="#6b7280", background="#ffffff")
+        approved_tree.tag_configure("online", foreground=UI_SUCCESS, background="#ffffff")
+        approved_tree.tag_configure("away", foreground="#f59e0b", background="#ffffff")
+        approved_tree.tag_configure("old", foreground=UI_ERROR, background="#ffffff")
         approved_tree.tag_configure("stripe", background="#f8fafc")
 
         approved_scroll = ttk.Scrollbar(list_frame, orient="vertical", command=approved_tree.yview)
@@ -14336,7 +14569,7 @@ del "%~f0" >nul 2>nul
         list_frame.columnconfigure(0, weight=1)
 
         list_actions = tk.Frame(list_box, bg="#ffffff")
-        list_actions.pack(fill="x", padx=20, pady=(16, 20))
+        list_actions.pack(fill="x", padx=16, pady=(8, 10))
 
         def filter_rows(rows, query):
             query = str(query or "").strip()
@@ -14423,11 +14656,17 @@ del "%~f0" >nul 2>nul
                             dt = parse_machine_datetime(last_seen)
                             if dt is None:
                                 status_tag = "old"
+                                status_text = "● Không rõ"
                             else:
                                 age_min = max(0, int((datetime.now() - dt).total_seconds() // 60))
-                                status_tag = "away" if age_min < 180 else "old"
+                                if age_min < 180:
+                                    status_tag = "away"
+                                    status_text = "● Vừa rời"
+                                else:
+                                    status_tag = "old"
+                                    status_text = "● Không hoạt động"
                         tags = (status_tag, "stripe" if i % 2 == 1 else "")
-                        values = ("☐", "  🖥  " + machine, str(row.get("user_name", "") or "").strip(), row.get("approval_code", ""), row.get("approved_at", ""), status_text, "⋮")
+                        values = ("☐", "▣  " + machine, str(row.get("user_name", "") or "").strip(), row.get("approval_code", ""), row.get("approved_at", ""), status_text, "Thao tác")
                         if machine in existing_iids:
                             approved_tree.item(machine, values=values, tags=tags)
                         else:
@@ -14485,7 +14724,7 @@ del "%~f0" >nul 2>nul
             search_var.set("")
             search_entry.delete(0, 'end')
             search_entry.insert(0, "🔍  Tìm kiếm theo mã máy, tên người hoặc mã duyệt...")
-            search_entry.configure(fg="#94a3b8")
+            search_entry.configure(fg=UI_TEXT)
             refresh_list()
 
         def fill_from_selected(_event=None):
@@ -14496,9 +14735,12 @@ del "%~f0" >nul 2>nul
             if values:
                 machine_text = re.sub(r"^[^\w]*", "", str(values[1] if len(values) > 1 else "")).replace("🖥", "").strip()
                 machine_var.set(machine_text)
+                machine_entry.configure(fg=UI_TEXT)
                 name_var.set(values[2] if len(values) > 2 else "")
+                name_entry.configure(fg=UI_TEXT)
                 approval_entry.configure(state="normal")
                 approval_var.set(values[3] if len(values) > 3 else "")
+                approval_entry.configure(fg=UI_TEXT)
                 approval_entry.configure(state="readonly")
 
         def clear_approval_form():
@@ -14545,6 +14787,24 @@ del "%~f0" >nul 2>nul
             self.root.clipboard_clear()
             self.root.clipboard_append(code_to_copy)
 
+        def copy_selected_machine():
+            selected = approved_tree.selection()
+            if not selected:
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(selected[0]))
+
+        def copy_selected_code():
+            selected = approved_tree.selection()
+            if not selected:
+                return
+            values = approved_tree.item(selected[0], "values")
+            code = str(values[3] if len(values) > 3 else "").strip()
+            if not code:
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(code)
+
         def delete_selected():
             selected = approved_tree.selection()
             if not selected:
@@ -14561,24 +14821,44 @@ del "%~f0" >nul 2>nul
             row_id = approved_tree.identify_row(event.y)
             if row_id:
                 approved_tree.selection_set(row_id)
+                approved_tree.focus(row_id)
                 fill_from_selected()
             menu = tk.Menu(self.root, tearoff=0)
+            menu.add_command(label="Copy mã máy", command=copy_selected_machine)
+            menu.add_command(label="Copy mã duyệt", command=copy_selected_code)
+            menu.add_separator()
             menu.add_command(label="Xóa máy này", command=delete_selected)
+            menu.add_separator()
+            menu.add_command(label="Tải lại danh sách", command=clear_search)
             menu.tk_popup(event.x_root, event.y_root)
+
+        def handle_tree_click(event):
+            region = approved_tree.identify("region", event.x, event.y)
+            row_id = approved_tree.identify_row(event.y)
+            col_id = approved_tree.identify_column(event.x)
+            if row_id:
+                approved_tree.selection_set(row_id)
+                approved_tree.focus(row_id)
+                fill_from_selected()
+            if region == "cell" and col_id == "#7":
+                open_list_menu(event)
+                return "break"
+            return None
 
         approved_tree.bind("<Delete>", lambda _e: delete_selected())
         approved_tree.bind("<Button-3>", open_list_menu)
+        approved_tree.bind("<Button-1>", handle_tree_click)
 
-        ui_button(actions, "⊙  Tạo mã duyệt", generate, width=15, variant="primary").pack(side="left", padx=(0, 12))
-        ui_button(actions, "▣  Copy mã", copy_code, width=12, variant="soft").pack(side="left")
-        ui_button(actions, "×  Đóng", close_panel, width=10).pack(side="right")
+        admin_button(actions, "+  Tạo mã duyệt", generate, width=14, variant="primary").pack(side="left", padx=(0, 10))
+        admin_button(actions, "▣  Copy mã", copy_code, width=11, variant="soft").pack(side="left")
+        admin_button(actions, "×  Đóng", close_panel, width=9).pack(side="right")
 
-        ui_button(search_bar, "⌕  Tìm", search_rows, width=11, variant="soft").pack(side="left", padx=(20, 0))
-        ui_button(search_bar, "▽  Bộ lọc", search_rows, width=11, variant="default").pack(side="left", padx=(20, 0))
-        ui_button(search_bar, "🗑  Xóa máy", delete_selected, width=12, variant="warn").pack(side="left", padx=(20, 0))
+        admin_button(search_bar, "⌕  Tìm", search_rows, width=8, variant="soft").pack(side="left", padx=(10, 0))
+        admin_button(search_bar, "▽  Bộ lọc", search_rows, width=9, variant="default").pack(side="left", padx=(8, 0))
+        admin_button(search_bar, "🗑  Xóa máy", delete_selected, width=10, variant="danger").pack(side="left", padx=(8, 0))
 
-        ui_button(list_actions, "🗑 Xóa máy đã chọn", delete_selected, width=16, variant="warn").pack(side="left")
-        ui_button(list_actions, "↻ Tải lại danh sách", clear_search, width=16, variant="soft").pack(side="left", padx=(8, 0))
+        admin_button(list_actions, "🗑 Xóa máy đã chọn", delete_selected, width=15, variant="danger").pack(side="left")
+        admin_button(list_actions, "↻ Tải lại danh sách", clear_search, width=15, variant="soft").pack(side="left", padx=(8, 0))
 
         refresh_list(fill_selection=False)
         clear_approval_form()
@@ -14651,8 +14931,7 @@ del "%~f0" >nul 2>nul
         self.short_ui = sh <= 820
         self.dense_ui = sw <= 1600 or sh <= 900
         self.micro_ui = sw <= 1366 or sh <= 768
-        # Keep the root layout fixed; only inner content regions may scroll.
-        self.main_content_scroll = False
+        self.main_content_scroll = bool(sw <= 1600 or sh <= 900)
 
         try:
             global UI_SCALE, UI_FONT_BONUS, UI_FONT_MIN_SIZE, UI_READABILITY_MODE
@@ -14665,14 +14944,14 @@ del "%~f0" >nul 2>nul
                     UI_SCALE = max(1.0, min(1.20, round(actual_dpi / 96.0, 2)))
             else:
                 UI_SCALE = max(1.00, min(1.20, round(dpi_for_scale / 240.0, 2)))
-            UI_READABILITY_MODE = bool(sw <= 1600 or sh <= 900)
-            UI_FONT_BONUS = 1 if UI_READABILITY_MODE else 0
-            UI_FONT_MIN_SIZE = 11 if UI_READABILITY_MODE else 10
+            UI_READABILITY_MODE = True
+            UI_FONT_BONUS = 1
+            UI_FONT_MIN_SIZE = 12
         except Exception:
             UI_SCALE = 1.0
-            UI_FONT_BONUS = 0
-            UI_FONT_MIN_SIZE = 11
-            UI_READABILITY_MODE = False
+            UI_FONT_BONUS = 1
+            UI_FONT_MIN_SIZE = 12
+            UI_READABILITY_MODE = True
 
         try:
             self.root.tk.call("tk", "scaling", UI_SCALE)
@@ -14713,8 +14992,8 @@ del "%~f0" >nul 2>nul
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(6)
             self.workspace_mins = (scale_px(100), scale_px(410), scale_px(235))
-            self.image_drop_h = scale_px(128)
-            self.mapping_canvas_h = scale_px(170)
+            self.image_drop_h = scale_px(118)
+            self.mapping_canvas_h = scale_px(150)
             self.logo_max = (scale_px(90), scale_px(82))
         elif self.tiny_ui:
             self.sidebar_w = scale_px(170)
@@ -14723,8 +15002,8 @@ del "%~f0" >nul 2>nul
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(7)
             self.workspace_mins = (scale_px(110), scale_px(400), scale_px(255))
-            self.image_drop_h = scale_px(140)
-            self.mapping_canvas_h = scale_px(185)
+            self.image_drop_h = scale_px(126)
+            self.mapping_canvas_h = scale_px(162)
             self.logo_max = (scale_px(96), scale_px(88))
         elif self.dense_ui:
             self.sidebar_w = scale_px(180)
@@ -14733,8 +15012,8 @@ del "%~f0" >nul 2>nul
             self.card_padx = scale_px(10)
             self.card_pady = scale_px(8)
             self.workspace_mins = (scale_px(125), scale_px(470), scale_px(285))
-            self.image_drop_h = scale_px(155)
-            self.mapping_canvas_h = scale_px(210)
+            self.image_drop_h = scale_px(138)
+            self.mapping_canvas_h = scale_px(176)
             self.logo_max = (scale_px(118), scale_px(108))
         elif self.compact_ui:
             self.sidebar_w = scale_px(190)
@@ -14743,8 +15022,8 @@ del "%~f0" >nul 2>nul
             self.card_padx = scale_px(11)
             self.card_pady = scale_px(9)
             self.workspace_mins = (scale_px(140), scale_px(500), scale_px(320))
-            self.image_drop_h = scale_px(170)
-            self.mapping_canvas_h = scale_px(240)
+            self.image_drop_h = scale_px(150)
+            self.mapping_canvas_h = scale_px(190)
             self.logo_max = (scale_px(130), scale_px(120))
         else:
             self.sidebar_w = scale_px(190)
@@ -14753,8 +15032,8 @@ del "%~f0" >nul 2>nul
             self.card_padx = scale_px(14)
             self.card_pady = scale_px(12)
             self.workspace_mins = (scale_px(165), scale_px(640), scale_px(390))
-            self.image_drop_h = scale_px(185)
-            self.mapping_canvas_h = scale_px(260)
+            self.image_drop_h = scale_px(158)
+            self.mapping_canvas_h = scale_px(198)
             self.logo_max = (scale_px(156), scale_px(144))
 
 
@@ -15357,7 +15636,7 @@ del "%~f0" >nul 2>nul
 
         user_box.configure(bg="#ffffff")
 
-        user_box.pack(fill="x", pady=(6, 0))
+        user_box.pack(fill="x", pady=(8 if is_admin_build() else 6, 0))
         user_box.pack_propagate(False)
 
         user_inner = tk.Frame(user_box, bg=UI_SURFACE)
@@ -15642,7 +15921,7 @@ del "%~f0" >nul 2>nul
 
         self.template_combo.pack(side="left")
 
-        if self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
+        if self.main_content_scroll or self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
             home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
             home_body_shell.pack(fill="both", expand=True)
 
@@ -15687,11 +15966,11 @@ del "%~f0" >nul 2>nul
             home_body_content = tk.Frame(self.home_page, bg=UI_BG)
             home_body_content.pack(fill="both", expand=True)
 
-
-
         workspace = tk.Frame(home_body_content, bg=UI_BG)
 
         workspace.pack(fill="both", expand=True)
+
+        workflow = workspace
 
         left_min, center_min, right_min = self.workspace_mins
 
@@ -15708,10 +15987,13 @@ del "%~f0" >nul 2>nul
         left_col = tk.Frame(workspace, bg=UI_BG)
 
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        left_col.grid_columnconfigure(0, weight=1)
+        left_col.grid_rowconfigure(0, weight=1, uniform="left_cards")
+        left_col.grid_rowconfigure(1, weight=1, uniform="left_cards")
 
         image_card = card(left_col)
 
-        image_card.pack(fill="both", expand=True)
+        image_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
         section_title(image_card, "ẢNH OCR")
 
@@ -15724,14 +16006,19 @@ del "%~f0" >nul 2>nul
             pady=8,
             height=self.image_drop_h,
         )
-        upload_box.pack(fill="x", expand=False, pady=(8, 0))
+        upload_box.pack(fill="both", expand=True, pady=(8, 0))
         upload_box.pack_propagate(False)
+        upload_box.grid_columnconfigure(0, weight=1)
+        upload_box.grid_rowconfigure(0, weight=1)
+        upload_box.grid_rowconfigure(1, weight=0)
 
         preview_shell = tk.Frame(upload_box, bg="#fbfdff")
-        preview_shell.pack(fill="x", expand=False)
+        preview_shell.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
+        preview_shell.grid_columnconfigure(0, weight=1)
+        preview_shell.grid_rowconfigure(0, weight=1)
 
-        preview_w = 260 if not (self.tiny_ui or self.micro_ui) else 220
-        preview_h = max(170, int(self.image_drop_h))
+        preview_w = 250 if not (self.tiny_ui or self.micro_ui) else 210
+        preview_h = max(96, int(self.image_drop_h) - scale_px(58))
 
         self.preview_frame = tk.Frame(
             preview_shell,
@@ -15741,15 +16028,15 @@ del "%~f0" >nul 2>nul
             width=preview_w,
             height=preview_h,
         )
-        self.preview_frame.pack(side="left")
+        self.preview_frame.grid(row=0, column=0, sticky="nsew")
         self.preview_frame.pack_propagate(False)
 
         self.img_label = tk.Label(
             self.preview_frame,
-            text="Kéo thả ảnh OCR vào đây\n\nHỗ trợ: .jpg, .png, .jpeg",
+            text="Tải ảnh",
             bg="#f8fbff",
-            fg=UI_MUTED,
-            font=ui_font(11),
+            fg=UI_TEXT,
+            font=ui_font(12, bold=True),
             justify="center",
             cursor="hand2",
         )
@@ -15841,21 +16128,25 @@ del "%~f0" >nul 2>nul
         self.preview_next_btn.bind("<Leave>", _preview_leave)
 
         self.preview_counter_var = tk.StringVar(value="")
-        tk.Label(
+        self.preview_counter_label = tk.Label(
             upload_box,
             textvariable=self.preview_counter_var,
             bg="#fbfdff",
             fg=UI_MUTED,
             font=ui_font(10),
-        ).pack(anchor="center", pady=(8, 0))
+        )
 
-        ui_button(upload_box, "Chọn ảnh / Tải lên", self.choose_image, width=18, variant="primary").pack(pady=(8, 0))
+        ui_button(upload_box, "Chọn ảnh / Tải lên", self.choose_image, width=18, variant="primary").grid(
+            row=1,
+            column=0,
+            pady=(0, 2),
+        )
 
 
 
         info = card(left_col)
 
-        info.pack(fill="x", pady=(10, 0))
+        info.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
         section_title(info, "THÔNG TIN EXCEL")
 
@@ -15863,7 +16154,7 @@ del "%~f0" >nul 2>nul
 
             info,
 
-            height=4 if self.micro_ui else (5 if self.short_ui else 9),
+            height=6 if self.micro_ui else (8 if self.short_ui or self.dense_ui else 10),
 
             wrap="word",
 
@@ -15920,7 +16211,7 @@ del "%~f0" >nul 2>nul
 
         self.daily_summary_text = tk.Text(
             summary_card,
-            height=5 if self.micro_ui else (6 if self.short_ui else 7),
+            height=3 if self.micro_ui else (4 if self.short_ui or self.dense_ui else 5),
             wrap="word",
             bg="#fbfdff",
             fg=UI_TEXT,
@@ -15942,48 +16233,6 @@ del "%~f0" >nul 2>nul
 
 
 
-        workflow = card(
-            home_body_content,
-            padx=10 if (self.tiny_ui or self.micro_ui) else (12 if self.compact_ui else 18),
-            pady=6 if (self.tiny_ui or self.micro_ui) else (8 if self.compact_ui else 14),
-        )
-
-        workflow.pack(fill="x", pady=(6 if (self.tiny_ui or self.micro_ui) else (8 if self.compact_ui else 12), 0))
-
-        tk.Label(workflow, text="QUY TRÌNH XỬ LÝ", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(anchor="w")
-
-        steps = tk.Frame(workflow, bg=UI_SURFACE)
-
-        steps.pack(fill="x", pady=(8 if (self.tiny_ui or self.micro_ui) else 12, 0))
-
-        for i, (title, sub, color) in enumerate([
-
-            ("Chọn file / ảnh OCR", "Tải lên ảnh hoặc chọn file Excel", UI_PRIMARY),
-
-            ("Đọc & Trích xuất", "Hệ thống đọc và trích xuất dữ liệu", "#38bdf8"),
-
-            ("Kiểm tra & Sửa dữ liệu", "Xem trước và chỉnh sửa dữ liệu", "#14b8a6"),
-
-            ("Ánh xạ & Xác nhận", "Map cột và xác nhận dữ liệu", UI_SUCCESS),
-
-            ("Xuất ra Excel", "Xuất dữ liệu đã xử lý ra Excel", UI_PRIMARY),
-
-        ]):
-
-            item = tk.Frame(steps, bg=UI_SURFACE)
-
-            item.pack(side="left", fill="x", expand=True)
-
-            tk.Label(item, text=str(i + 1), bg="#eef4ff", fg=color, width=2 if (self.tiny_ui or self.micro_ui) else 3, height=1 if (self.tiny_ui or self.micro_ui) else 2, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(side="left", padx=(0, 8 if (self.tiny_ui or self.micro_ui) else 10))
-
-            text_box = tk.Frame(item, bg=UI_SURFACE)
-
-            text_box.pack(side="left", fill="x")
-
-            tk.Label(text_box, text=title, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True)).pack(anchor="w")
-
-            tk.Label(text_box, text=sub, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10)).pack(anchor="w", pady=(2, 0))
-
         self._sidebar_member_spacer = sidebar_spacer
         self._sidebar_member_box = user_box
         self._workflow_anchor_card = workflow
@@ -15991,6 +16240,16 @@ del "%~f0" >nul 2>nul
         def _sync_sidebar_member_anchor(_event=None):
             try:
                 spacer = getattr(self, "_sidebar_member_spacer", None)
+                if is_admin_build():
+                    try:
+                        if spacer is not None:
+                            spacer.configure(height=6)
+                        member_box = getattr(self, "_sidebar_member_box", None)
+                        if member_box is not None:
+                            member_box.configure(height=112 if (self.tiny_ui or self.micro_ui) else 122)
+                    except Exception:
+                        pass
+                    return
                 member_box = getattr(self, "_sidebar_member_box", None)
                 anchor = getattr(self, "_workflow_anchor_card", None)
                 if spacer is None or member_box is None or anchor is None:
