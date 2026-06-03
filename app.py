@@ -16384,8 +16384,10 @@ del "%~f0" >nul 2>nul
             notify_card.pack(fill="x", pady=(6, 0))
             notify_inner = tk.Frame(notify_card, bg="#ffffff", padx=8, pady=8, cursor="hand2")
             notify_inner.pack(fill="x")
-            tk.Label(notify_inner, text="!", bg="#fee2e2", fg=UI_ERROR, font=ui_font(10, bold=True), width=2).pack(side="left", padx=(0, 8))
-            tk.Label(notify_inner, text="Thông báo log", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True), anchor="w").pack(side="left", fill="x", expand=True)
+            notify_icon = tk.Label(notify_inner, text="!", bg="#fee2e2", fg=UI_ERROR, font=ui_font(10, bold=True), width=2, cursor="hand2")
+            notify_icon.pack(side="left", padx=(0, 8))
+            notify_label = tk.Label(notify_inner, text="Thông báo log", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True), anchor="w", cursor="hand2")
+            notify_label.pack(side="left", fill="x", expand=True)
             self.admin_log_count_badge = tk.Label(
                 notify_inner,
                 text="0",
@@ -16394,9 +16396,10 @@ del "%~f0" >nul 2>nul
                 font=ui_font(8, bold=True),
                 padx=7,
                 pady=2,
+                cursor="hand2",
             )
             self.admin_log_count_badge.pack(side="right")
-            for widget in (notify_card, notify_inner):
+            for widget in (notify_card, notify_inner, notify_icon, notify_label, self.admin_log_count_badge):
                 widget.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
             self.root.after(500, self._admin_log_badge_loop)
 
