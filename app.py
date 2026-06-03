@@ -15238,16 +15238,66 @@ del "%~f0" >nul 2>nul
             )
             top = tk.Toplevel(self.root)
             top.title("Chi tiết log lỗi")
-            top.configure(bg="#ffffff")
-            self._fit_dialog_to_screen(top, 820, 560, min_w=760, min_h=460, max_ratio=0.80, lock_size=False)
-            body = tk.Frame(top, bg="#ffffff", padx=14, pady=14)
+            top.configure(bg="#f3f6fb")
+            self._fit_dialog_to_screen(top, 860, 600, min_w=780, min_h=500, max_ratio=0.82, lock_size=False)
+            body = tk.Frame(top, bg="#f3f6fb", padx=18, pady=18)
             body.pack(fill="both", expand=True)
-            text = tk.Text(body, wrap="word", bg="#f8fafc", fg=UI_TEXT, relief="solid", bd=1, font=("Consolas", 10))
+
+            header = tk.Frame(body, bg="#f3f6fb")
+            header.pack(fill="x", pady=(0, 12))
+            title_box = tk.Frame(header, bg="#f3f6fb")
+            title_box.pack(side="left", fill="x", expand=True)
+            tk.Label(title_box, text="Chi tiết log lỗi", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
+            tk.Label(
+                title_box,
+                text="Thông tin user gửi về server Admin",
+                bg="#f3f6fb",
+                fg=UI_MUTED,
+                font=ui_font(10),
+            ).pack(anchor="w", pady=(2, 0))
+
+            meta_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3", padx=14, pady=12)
+            meta_card.pack(fill="x", pady=(0, 12))
+            meta_card.grid_columnconfigure(0, weight=1)
+            meta_card.grid_columnconfigure(1, weight=1)
+            meta_card.grid_columnconfigure(2, weight=1)
+
+            def meta_item(parent, row_idx, col_idx, label, value):
+                cell = tk.Frame(parent, bg="#ffffff")
+                cell.grid(row=row_idx, column=col_idx, sticky="ew", padx=(0 if col_idx == 0 else 14, 0), pady=(0 if row_idx == 0 else 10, 0))
+                tk.Label(cell, text=label, bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(anchor="w")
+                tk.Label(
+                    cell,
+                    text=str(value or "-"),
+                    bg="#ffffff",
+                    fg=UI_TEXT,
+                    font=ui_font(10, bold=True),
+                    anchor="w",
+                    justify="left",
+                    wraplength=230,
+                ).pack(anchor="w", pady=(2, 0))
+
+            meta_item(meta_card, 0, 0, "Thời gian", row.get("created_at", ""))
+            meta_item(meta_card, 0, 1, "Tên người", row.get("user_name", ""))
+            meta_item(meta_card, 0, 2, "Vai trò", row.get("role", ""))
+            meta_item(meta_card, 1, 0, "Mã máy", row.get("machine_code", ""))
+            meta_item(meta_card, 1, 1, "User Windows", row.get("windows_user", ""))
+            meta_item(meta_card, 1, 2, "Tên máy Windows", row.get("computer_name", ""))
+
+            log_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+            log_card.pack(fill="both", expand=True)
+            log_head = tk.Frame(log_card, bg="#ffffff", padx=14, pady=10)
+            log_head.pack(fill="x")
+            tk.Label(log_head, text="Nội dung log", bg="#ffffff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(side="left")
+            tk.Label(log_head, text=str(row.get("message") or ""), bg="#ffffff", fg=UI_MUTED, font=ui_font(9)).pack(side="right")
+            text_wrap = tk.Frame(log_card, bg="#eef2f7", padx=1, pady=1)
+            text_wrap.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+            text = tk.Text(text_wrap, wrap="word", bg="#0f172a", fg="#e5edf7", insertbackground="#e5edf7", relief="flat", bd=0, font=("Consolas", 10), padx=12, pady=10)
             text.pack(fill="both", expand=True)
-            text.insert("1.0", detail)
+            text.insert("1.0", str(row.get("log_text", "") or "Không có nội dung log."))
             text.configure(state="disabled")
-            actions_row = tk.Frame(body, bg="#ffffff")
-            actions_row.pack(fill="x", pady=(10, 0))
+            actions_row = tk.Frame(body, bg="#f3f6fb")
+            actions_row.pack(fill="x", pady=(12, 0))
             def copy_detail():
                 self.root.clipboard_clear()
                 self.root.clipboard_append(detail)
@@ -16723,7 +16773,7 @@ del "%~f0" >nul 2>nul
                 if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
                     return
                 target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
-                target_top -= scale_px(72 if (self.tiny_ui or self.micro_ui) else 88)
+                target_top -= scale_px(48 if (self.tiny_ui or self.micro_ui) else 62)
                 max_top = max(0, int(sidebar.winfo_height() - member_box.winfo_reqheight() - scale_px(12)))
                 target_top = min(int(target_top), max_top)
                 current_top = spacer.winfo_y()
@@ -16734,10 +16784,7 @@ del "%~f0" >nul 2>nul
                     target_height = max(0, int(member_box.winfo_reqheight() or 0))
                     target_height = max(target_height, scale_px(138 if (self.tiny_ui or self.micro_ui) else 154))
                 else:
-                    target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
-                    min_member_height = 118 if (self.tiny_ui or self.micro_ui) else 130
-                    if target_height:
-                        target_height = max(target_height, scale_px(min_member_height))
+                    target_height = scale_px(124 if (self.tiny_ui or self.micro_ui) else 138)
                 if target_height and member_box.winfo_height() != target_height:
                     member_box.configure(height=target_height)
             except Exception:
