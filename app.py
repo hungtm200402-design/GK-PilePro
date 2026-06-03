@@ -9633,19 +9633,26 @@ class App:
         try:
             log_path = role_log_path()
             log_path.parent.mkdir(parents=True, exist_ok=True)
+            created_empty_log = False
             if not log_path.exists():
                 log_path.write_text("Chưa có lỗi nào được ghi nhận.\n", encoding="utf-8")
+                created_empty_log = True
             self.root.clipboard_clear()
             self.root.clipboard_append(str(log_path))
             try:
                 os.startfile(str(log_path.parent))
             except Exception:
                 pass
-            self._set_status("Đã copy đường dẫn log.", "success")
-            messagebox.showinfo("Gửi log cho Admin", f"Đã copy đường dẫn file log:\n{log_path}\n\nGửi file này cho Admin để kiểm tra lỗi.")
+            self._set_status("Đã chuẩn bị log để gửi Admin.", "success")
+            detail = "Hiện chưa có lỗi nào được ghi nhận." if created_empty_log else "File log đã sẵn sàng."
+            messagebox.showinfo(
+                "Gửi log cho Admin",
+                f"{detail}\n\nĐã copy đường dẫn log vào clipboard và mở thư mục log.\n\nFile log:\n{log_path}",
+            )
         except Exception as exc:
             write_role_error_log("send_log_to_admin", exc)
-            messagebox.showerror("Gửi log", f"Không lấy được file log:\n{exc}")
+            self._set_status("Không chuẩn bị được log.", "error")
+            messagebox.showerror("Gửi log cho Admin", f"Không chuẩn bị được file log:\n{exc}")
 
 
 
