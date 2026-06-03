@@ -16158,15 +16158,16 @@ del "%~f0" >nul 2>nul
                 variant="warn",
             ).pack(anchor="center")
 
-        log_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
-        log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
-        ui_button(
-            log_btn_row,
-            "Gửi log",
-            self._send_log_to_admin,
-            width=9 if (self.tiny_ui or self.micro_ui) else 10,
-            variant="soft",
-        ).pack(anchor="center")
+        if not is_admin_build():
+            log_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
+            log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
+            ui_button(
+                log_btn_row,
+                "Gửi log",
+                self._send_log_to_admin,
+                width=9 if (self.tiny_ui or self.micro_ui) else 10,
+                variant="soft",
+            ).pack(anchor="center")
 
         main = tk.Frame(shell, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
 
@@ -16710,7 +16711,7 @@ del "%~f0" >nul 2>nul
                             spacer.configure(height=6)
                         member_box = getattr(self, "_sidebar_member_box", None)
                         if member_box is not None:
-                            member_box.configure(height=148 if (self.tiny_ui or self.micro_ui) else 164)
+                            member_box.configure(height=122 if (self.tiny_ui or self.micro_ui) else 136)
                     except Exception:
                         pass
                     return
@@ -16722,7 +16723,7 @@ del "%~f0" >nul 2>nul
                 if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
                     return
                 target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
-                target_top -= scale_px(96 if (self.tiny_ui or self.micro_ui) else 118)
+                target_top -= scale_px(72 if (self.tiny_ui or self.micro_ui) else 88)
                 max_top = max(0, int(sidebar.winfo_height() - member_box.winfo_reqheight() - scale_px(12)))
                 target_top = min(int(target_top), max_top)
                 current_top = spacer.winfo_y()
@@ -16734,7 +16735,7 @@ del "%~f0" >nul 2>nul
                     target_height = max(target_height, scale_px(138 if (self.tiny_ui or self.micro_ui) else 154))
                 else:
                     target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
-                    min_member_height = 132 if (self.tiny_ui or self.micro_ui) else 146
+                    min_member_height = 118 if (self.tiny_ui or self.micro_ui) else 130
                     if target_height:
                         target_height = max(target_height, scale_px(min_member_height))
                 if target_height and member_box.winfo_height() != target_height:
