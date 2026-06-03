@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 
-SERVER_OWNER_MACHINE_CODE = "762EE-25BD9-F030F-01131"
+SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
 
 
 def get_machine_code():
@@ -407,7 +407,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=20)
     args = parser.parse_args()
 
-    if get_machine_code() != SERVER_OWNER_MACHINE_CODE:
+    if SERVER_OWNER_MACHINE_CODE and get_machine_code() != SERVER_OWNER_MACHINE_CODE:
         raise SystemExit("This presence server is locked to the owner machine.")
 
     db_path = Path(args.db).resolve()

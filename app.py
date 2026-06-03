@@ -12,6 +12,8 @@ import shutil
 
 import subprocess
 
+import time
+
 import uuid
 
 import socket
@@ -71,7 +73,7 @@ TEMPLATE_PRESETS = {"Bảng bất kỳ - tự nhận cột": {}}
 
 CANONICAL_TEMPLATE_COLUMNS = {}
 
-SERVER_OWNER_MACHINE_CODE = "762EE-25BD9-F030F-01131"
+SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
 
 
 
@@ -498,6 +500,9 @@ class RoundedButton(tk.Canvas):
         }
 
         self.bg_color, self.fg_color, self.hover_color, self.border_color = self.colors.get(variant, self.colors["default"])
+        self.press_color = self._press_color(self.hover_color)
+        self._hovered = False
+        self._pressed = False
 
         if width <= 0:
 
@@ -527,14 +532,39 @@ class RoundedButton(tk.Canvas):
 
         )
 
-        self.bind("<Button-1>", self._click)
+        self.bind("<ButtonPress-1>", self._press)
 
-        self.bind("<Enter>", lambda _e: self._draw(self.hover_color))
+        self.bind("<ButtonRelease-1>", self._release)
 
-        self.bind("<Leave>", lambda _e: self._draw(self.bg_color))
+        self.bind("<Enter>", self._enter)
+
+        self.bind("<Leave>", self._leave)
 
         self._draw(self.bg_color)
 
+
+    def _press_color(self, color):
+        try:
+            r, g, b = self.winfo_rgb(color)
+            return "#{:02x}{:02x}{:02x}".format(
+                max(0, int(r / 256 * 0.82)),
+                max(0, int(g / 256 * 0.82)),
+                max(0, int(b / 256 * 0.82)),
+            )
+        except Exception:
+            return color
+
+    def config(self, cnf=None, **kwargs):
+        if cnf:
+            kwargs.update(cnf)
+        if "text" in kwargs:
+            self.text = kwargs.pop("text")
+            self._draw(self.hover_color if self._hovered else self.bg_color)
+        if kwargs:
+            return super().config(**kwargs)
+        return None
+
+    configure = config
 
 
     def _draw(self, fill):
@@ -576,6 +606,31 @@ class RoundedButton(tk.Canvas):
         if callable(self.command):
 
             self.command()
+
+    def _enter(self, _event=None):
+        self._hovered = True
+        self._draw(self.press_color if self._pressed else self.hover_color)
+
+    def _leave(self, _event=None):
+        self._hovered = False
+        self._pressed = False
+        self._draw(self.bg_color)
+
+    def _press(self, _event=None):
+        self._pressed = True
+        self._draw(self.press_color)
+
+    def _release(self, event=None):
+        was_pressed = self._pressed
+        self._pressed = False
+        inside = True
+        try:
+            inside = 0 <= event.x <= self.pixel_width and 0 <= event.y <= self.pixel_height
+        except Exception:
+            pass
+        self._draw(self.hover_color if inside else self.bg_color)
+        if was_pressed and inside:
+            self._click(event)
 
 
 
@@ -1423,6 +1478,62 @@ def app_data_path(*parts):
     return path
 
 
+def role_log_path():
+    return app_data_path("logs", "admin_error.log" if is_admin_build() else "user_error.log")
+
+
+def write_role_error_log(context, exc=None, extra=None):
+    try:
+        path = role_log_path()
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [
+            "=" * 80,
+            f"time: {stamp}",
+            f"role: {'admin' if is_admin_build() else 'user'}",
+            f"machine: {get_machine_code()}",
+            f"context: {context}",
+        ]
+        if extra:
+            try:
+                lines.append("extra: " + json.dumps(extra, ensure_ascii=False, default=str))
+            except Exception:
+                lines.append(f"extra: {extra}")
+        if exc is not None:
+            lines.append(f"error: {exc}")
+        lines.append(traceback.format_exc())
+        with path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return path
+    except Exception:
+        return None
+
+
+def backup_file(path, category="config"):
+    try:
+        src = Path(path)
+        if not src.exists():
+            return None
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = app_data_path("backups", category)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out = out_dir / f"{src.stem}_{stamp}{src.suffix}"
+        shutil.copy2(src, out)
+        return out
+    except Exception as exc:
+        write_role_error_log(f"backup_file:{path}", exc)
+        return None
+
+
+def validate_excel_before_write(wb):
+    if wb is None:
+        raise ValueError("Không đọc được workbook Excel.")
+    if not getattr(wb, "sheetnames", None):
+        raise ValueError("Workbook không có sheet.")
+    for ws in wb.worksheets:
+        if ws.max_row >= 1 and ws.max_column >= 1:
+            return True
+    raise ValueError("Workbook không có dữ liệu để ghi.")
+
 
 def last_run_dir():
 
@@ -1624,7 +1735,7 @@ def get_machine_code():
 
 
 def is_server_owner_machine():
-    return get_machine_code() == SERVER_OWNER_MACHINE_CODE
+    return (not SERVER_OWNER_MACHINE_CODE) or get_machine_code() == SERVER_OWNER_MACHINE_CODE
 
 
 
@@ -2306,6 +2417,7 @@ def load_history_entries():
 def save_history_entries(entries):
 
     try:
+        backup_file(history_entries_path(), "config")
 
         history_entries_path().write_text(
 
@@ -2340,6 +2452,7 @@ def load_mapping_templates():
 def save_mapping_templates(templates):
 
     try:
+        backup_file(mapping_templates_path(), "config")
 
         mapping_templates_path().write_text(
 
@@ -2374,6 +2487,7 @@ def load_formula_profiles():
 def save_formula_profiles(profiles):
 
     try:
+        backup_file(formula_profiles_path(), "config")
 
         formula_profiles_path().write_text(
 
@@ -2479,6 +2593,7 @@ def save_env(api_key, model, screen_profile="auto", presence_server_url=None):
     }
 
     if getattr(sys, "frozen", False):
+        backup_file(user_settings_path(), "config")
 
         user_settings_path().write_text(
 
@@ -2489,6 +2604,7 @@ def save_env(api_key, model, screen_profile="auto", presence_server_url=None):
         )
 
     else:
+        backup_file(env_path(), "config")
 
         env_path().write_text(
 
@@ -2499,6 +2615,7 @@ def save_env(api_key, model, screen_profile="auto", presence_server_url=None):
         )
 
     try:
+        backup_file(user_settings_path(), "config")
 
         user_settings_path().write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -2555,7 +2672,7 @@ def resolve_presence_server_url(url):
     return base
 
 
-DEFAULT_PRESENCE_SERVER_URL = normalize_presence_server_url(os.getenv("PRESENCE_SERVER_URL_DEFAULT", "http://192.168.1.137:8765"))
+DEFAULT_PRESENCE_SERVER_URL = normalize_presence_server_url(os.getenv("PRESENCE_SERVER_URL_DEFAULT", "http://192.168.1.5:8765"))
 
 
 def presence_server_url_from_env():
@@ -2788,6 +2905,8 @@ def save_selected_excel_files(paths):
             seen.add(key)
 
             unique.append(str(Path(p).resolve()))
+
+        backup_file(selected_excel_files_path(), "config")
 
         selected_excel_files_path().write_text(
 
@@ -9394,6 +9513,19 @@ class App:
             except Exception:
                 self._presence_server_online = False
 
+        if not is_admin_build() and self._presence_server_online is not True:
+            self.member_locked = True
+            try:
+                self.root.withdraw()
+            except Exception:
+                pass
+            self._presence_server_down_notified = True
+            try:
+                self.root.after(0, self._notify_presence_server_down)
+            except Exception:
+                pass
+            return
+
         self.member_locked = (not is_admin_build()) and (not is_machine_approved())
 
         if self.member_locked:
@@ -9496,6 +9628,24 @@ class App:
         except Exception:
 
             pass
+
+    def _send_log_to_admin(self):
+        try:
+            log_path = role_log_path()
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            if not log_path.exists():
+                log_path.write_text("Chưa có lỗi nào được ghi nhận.\n", encoding="utf-8")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(str(log_path))
+            try:
+                os.startfile(str(log_path.parent))
+            except Exception:
+                pass
+            self._set_status("Đã copy đường dẫn log.", "success")
+            messagebox.showinfo("Gửi log cho Admin", f"Đã copy đường dẫn file log:\n{log_path}\n\nGửi file này cho Admin để kiểm tra lỗi.")
+        except Exception as exc:
+            write_role_error_log("send_log_to_admin", exc)
+            messagebox.showerror("Gửi log", f"Không lấy được file log:\n{exc}")
 
 
 
@@ -9699,6 +9849,85 @@ class App:
 
             pass
 
+    def _presence_server_bind_from_url(self, server_url=None):
+        url = normalize_presence_server_url(
+            server_url
+            if server_url is not None
+            else getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get()
+        )
+        host = "0.0.0.0"
+        port = 8765
+        try:
+            parsed = urllib_parse.urlsplit(url)
+            if parsed.port:
+                port = int(parsed.port)
+        except Exception:
+            pass
+        return host, port
+
+    def _local_ipv4_addresses(self):
+        ips = {"127.0.0.1", "localhost"}
+        try:
+            name = socket.gethostname()
+            for item in socket.getaddrinfo(name, None, socket.AF_INET):
+                ip = item[4][0]
+                if ip:
+                    ips.add(str(ip))
+        except Exception:
+            pass
+        try:
+            detected = _detect_local_ip_address()
+            if detected:
+                ips.add(str(detected))
+        except Exception:
+            pass
+        return ips
+
+    def _validate_presence_server_url_for_admin(self, server_url):
+        url = normalize_presence_server_url(server_url)
+        if not url:
+            return False, "Chưa nhập URL server."
+        try:
+            parsed = urllib_parse.urlsplit(url)
+            host = (parsed.hostname or "").strip()
+            if host and host not in self._local_ipv4_addresses():
+                local_ips = sorted(ip for ip in self._local_ipv4_addresses() if ip not in {"127.0.0.1", "localhost"})
+                hint = ", ".join(local_ips) if local_ips else _detect_local_ip_address()
+                return False, f"IP {host} không thuộc máy admin. IP máy này: {hint}."
+        except Exception:
+            return False, "URL server không hợp lệ."
+        return True, ""
+
+    def _ensure_presence_server_for_url(self, server_url=None):
+        if not is_admin_build():
+            return True, "Bản user không điều khiển server."
+        if not is_server_owner_machine():
+            return False, "May nay khong duoc phep khoi dong server."
+
+        url = resolve_presence_server_url(
+            server_url
+            if server_url is not None
+            else getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get()
+        )
+        ok_url, url_msg = self._validate_presence_server_url_for_admin(url)
+        if not ok_url:
+            return False, url_msg
+        if url and check_presence_server_alive(url, timeout=0.5):
+            self._presence_server_down_notified = False
+            self._presence_server_down_dialog_shown = False
+            return True, "Server trạng thái máy đang chạy."
+
+        if self._presence_server_is_running():
+            self._stop_presence_server()
+        ok, msg = self._start_presence_server()
+        if not ok:
+            return ok, msg
+        for _ in range(8):
+            if check_presence_server_alive(url, timeout=0.35):
+                return True, "Đã bật server."
+            time.sleep(0.15)
+        return False, f"Server đã chạy nhưng URL {url} chưa truy cập được."
+
     def _start_presence_server(self):
 
         if not is_admin_build():
@@ -9717,6 +9946,7 @@ class App:
             try:
 
                 db_path = Path(self._presence_server_db_path).resolve()
+                bind_host, bind_port = self._presence_server_bind_from_url()
                 try:
                     import presence_server as presence_mod
                     presence_mod.init_db(db_path)
@@ -9729,9 +9959,9 @@ class App:
                         cmd = [
                             str(server_exe),
                             "--host",
-                            "0.0.0.0",
+                            bind_host,
                             "--port",
-                            "8765",
+                            str(bind_port),
                             "--db",
                             str(db_path),
                             "--timeout",
@@ -9742,9 +9972,9 @@ class App:
                             sys.executable,
                             "--presence-server",
                             "--host",
-                            "0.0.0.0",
+                            bind_host,
                             "--port",
-                            "8765",
+                            str(bind_port),
                             "--db",
                             str(db_path),
                             "--timeout",
@@ -9756,9 +9986,9 @@ class App:
                         str(Path(__file__).resolve()),
                         "--presence-server",
                         "--host",
-                        "0.0.0.0",
+                        bind_host,
                         "--port",
-                        "8765",
+                        str(bind_port),
                         "--db",
                         str(db_path),
                         "--timeout",
@@ -9793,10 +10023,10 @@ class App:
                 self._presence_server_down_notified = False
                 self._presence_server_down_dialog_shown = False
                 try:
-                    self._set_status("Server trạng thái máy đang chạy.", "success")
+                    self._set_status(f"Server trạng thái máy đang chạy tại {bind_host}:{bind_port}.", "success")
                 except Exception:
                     pass
-                return True, "Đã khởi động server."
+                return True, "Đã bật server."
 
             except Exception as exc:
 
@@ -12309,7 +12539,7 @@ class App:
 
         win.grab_set()
 
-        body = tk.Frame(win, bg=UI_SURFACE, padx=22, pady=18)
+        body = tk.Frame(win, bg=UI_SURFACE, padx=28, pady=24)
 
         body.pack(fill="both", expand=True)
 
@@ -13454,8 +13684,8 @@ del "%~f0" >nul 2>nul
         body.pack(fill="both", expand=True)
         body.grid_columnconfigure(0, weight=1)
 
-        read_box = tk.Frame(body, bg="#fbfdff", highlightthickness=1, highlightbackground=UI_BORDER, padx=14, pady=12)
-        read_box.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+        read_box = tk.Frame(body, bg="#fbfdff", highlightthickness=1, highlightbackground=UI_BORDER, padx=18, pady=16)
+        read_box.grid(row=0, column=0, sticky="ew", pady=(0, 16))
 
         tk.Label(read_box, text="Phần đọc mã", bg="#fbfdff", fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
         tk.Label(read_box, text="Gửi mã máy bên dưới cho Admin để nhận mã duyệt.", bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 10))
@@ -13464,7 +13694,7 @@ del "%~f0" >nul 2>nul
 
         machine_var = tk.StringVar(value=machine_code)
 
-        machine_entry = tk.Entry(read_box, textvariable=machine_var, width=34, relief="solid", bd=1, font=ui_font(11))
+        machine_entry = tk.Entry(read_box, textvariable=machine_var, width=46, relief="solid", bd=1, font=ui_font(11))
 
         machine_entry.pack(fill="x", pady=(4, 10))
 
@@ -13476,14 +13706,14 @@ del "%~f0" >nul 2>nul
 
         code_var = tk.StringVar()
 
-        code_entry = tk.Entry(read_box, textvariable=code_var, width=34, relief="solid", bd=1, font=ui_font(11))
+        code_entry = tk.Entry(read_box, textvariable=code_var, width=46, relief="solid", bd=1, font=ui_font(11))
 
         code_entry.pack(fill="x", pady=(4, 0))
 
         code_entry.focus_set()
 
-        member_box = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER, padx=14, pady=12)
-        member_box.grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        member_box = tk.Frame(body, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER, padx=18, pady=16)
+        member_box.grid(row=1, column=0, sticky="ew", pady=(0, 16))
 
         tk.Label(member_box, text="Khối thành viên", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(11, bold=True)).pack(anchor="w")
         tk.Label(member_box, textvariable=self.user_role_var, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(3, 0))
@@ -13564,7 +13794,7 @@ del "%~f0" >nul 2>nul
 
 
 
-        self._fit_dialog_to_screen(win, 560, 360, min_w=560, min_h=360, max_ratio=0.50, lock_size=True)
+        self._fit_dialog_to_screen(win, 680, 460, min_w=680, min_h=460, max_ratio=0.70, lock_size=True)
         self._center_dialog_on_screen(win)
 
         try:
@@ -13632,34 +13862,31 @@ del "%~f0" >nul 2>nul
                 pass
             return "break"
 
-        win = tk.Frame(self.root, bg="#1f2128")
-        win.place(relx=0, rely=0, relwidth=1, relheight=1)
+        win = tk.Toplevel(self.root)
+        win.configure(bg="#1f2128")
+        win.title("Cài đặt")
+        win.resizable(False, False)
+        try:
+            win.transient(self.root)
+            win.grab_set()
+        except Exception:
+            pass
         self.settings_panel = win
 
-        def _noop(*_args, **_kwargs):
-            return None
-
-        win.title = _noop
-        win.resizable = _noop
-        win.transient = _noop
-        win.grab_set = _noop
-        win.geometry = _noop
-        win.minsize = _noop
-        win.maxsize = _noop
-        win.protocol = _noop
-        win.wait_window = _noop
         win.bind("<Destroy>", lambda e: setattr(self, "settings_panel", None) if e.widget is win else None, add="+")
 
         screen_w = int(getattr(self, "screen_w", 0) or win.winfo_screenwidth() or 1366)
         screen_h = int(getattr(self, "screen_h", 0) or win.winfo_screenheight() or 768)
         if screen_w <= 1366 or screen_h <= 768:
-            dialog_w, dialog_h = 860, 640
+            dialog_w, dialog_h = 760, 540
         elif screen_w <= 1600 or screen_h <= 900:
-            dialog_w, dialog_h = 980, 690
+            dialog_w, dialog_h = 840, 580
         elif screen_w <= 1920 or screen_h <= 1080:
-            dialog_w, dialog_h = 1080, 740
+            dialog_w, dialog_h = 900, 620
         else:
-            dialog_w, dialog_h = 1120, 780
+            dialog_w, dialog_h = 960, 650
+        dialog_w = min(dialog_w, int(screen_w * 0.90))
+        dialog_h = min(dialog_h, int(screen_h * 0.88))
         self._fit_dialog_to_screen(win, dialog_w, dialog_h, min_w=dialog_w, min_h=dialog_h, max_ratio=0.90, lock_size=True)
 
         dark_bg = "#1f2128"
@@ -13673,10 +13900,13 @@ del "%~f0" >nul 2>nul
         text_sub = "#b4bccf"
         text_dim = "#8790a5"
 
-        root = tk.Frame(win, bg=dark_bg, padx=18, pady=18)
+        dialog_shell = tk.Frame(win, bg=dark_bg, highlightthickness=1, highlightbackground=card_border)
+        dialog_shell.pack(fill="both", expand=True)
+
+        root = tk.Frame(dialog_shell, bg=dark_bg, padx=14, pady=14)
         root.grid(row=0, column=0, sticky="nsew")
-        win.grid_rowconfigure(0, weight=1)
-        win.grid_columnconfigure(0, weight=1)
+        dialog_shell.grid_rowconfigure(0, weight=1)
+        dialog_shell.grid_columnconfigure(0, weight=1)
         root.grid_columnconfigure(0, weight=1)
         root.grid_rowconfigure(2, weight=1)
 
@@ -13692,7 +13922,7 @@ del "%~f0" >nul 2>nul
         ).pack(anchor="w", pady=(6, 0))
 
         nav_row = tk.Frame(root, bg=dark_bg)
-        nav_row.grid(row=1, column=0, sticky="ew", pady=(14, 8))
+        nav_row.grid(row=1, column=0, sticky="ew", pady=(10, 6))
 
         page_host = tk.Frame(root, bg=dark_bg)
         page_host.grid(row=2, column=0, sticky="nsew")
@@ -13719,9 +13949,9 @@ del "%~f0" >nul 2>nul
                 highlightthickness=1,
                 highlightbackground=border,
                 highlightcolor=border,
-                font=ui_font(12, bold=(active or accent_button)),
-                padx=16,
-                pady=10,
+                font=ui_font(10, bold=(active or accent_button)),
+                padx=12,
+                pady=7,
                 width=width,
             )
 
@@ -13755,14 +13985,14 @@ del "%~f0" >nul 2>nul
             tab_defs.append(("api", "API"))
 
         for key, label in tab_defs:
-            btn = dark_button(nav_row, label, lambda k=key: show_page(k), width=13, active=(key == "display"))
-            btn.pack(side="left", padx=(0, 10))
+            btn = dark_button(nav_row, label, lambda k=key: show_page(k), width=11, active=(key == "display"))
+            btn.pack(side="left", padx=(0, 8))
             top_tabs[key] = btn
 
         display_card = tk.Frame(display_page, bg=panel_bg, highlightthickness=1, highlightbackground=card_border)
         display_card.pack(fill="both", expand=True)
 
-        left_panel = tk.Frame(display_card, bg=panel_bg, width=168, padx=14, pady=14)
+        left_panel = tk.Frame(display_card, bg=panel_bg, width=140, padx=12, pady=12)
         left_panel.pack(side="left", fill="y")
         left_panel.pack_propagate(False)
         tk.Label(left_panel, text="Độ phân giải", bg=panel_bg, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
@@ -13773,10 +14003,10 @@ del "%~f0" >nul 2>nul
             fg=text_sub,
             font=ui_font(10),
             justify="left",
-            wraplength=118,
+            wraplength=104,
         ).pack(anchor="w", pady=(8, 0))
 
-        right_panel = tk.Frame(display_card, bg=panel_bg, padx=16, pady=14)
+        right_panel = tk.Frame(display_card, bg=panel_bg, padx=14, pady=12)
         right_panel.pack(side="left", fill="both", expand=True)
 
         mode_bar = tk.Frame(right_panel, bg=panel_bg)
@@ -13790,7 +14020,7 @@ del "%~f0" >nul 2>nul
             font=ui_font(10),
             anchor="w",
             justify="left",
-            wraplength=540,
+            wraplength=460,
         )
         selected_summary.pack(fill="x", pady=(6, 0))
         mode_host = tk.Frame(right_panel, bg=panel_bg)
@@ -13902,16 +14132,16 @@ del "%~f0" >nul 2>nul
             refresh_selected_summary()
 
         for mode_name in ("Tự động", "Ngang", "Dọc", "Siêu rộng", "Tùy chỉnh"):
-            btn = dark_button(mode_bar, mode_name, lambda m=mode_name: set_mode(m), width=12, active=(mode_name == initial_mode))
-            btn.pack(side="left", padx=(0, 8))
+            btn = dark_button(mode_bar, mode_name, lambda m=mode_name: set_mode(m), width=10, active=(mode_name == initial_mode))
+            btn.pack(side="left", padx=(0, 6))
             mode_buttons[mode_name] = btn
 
         auto_panel = tk.Frame(mode_host, bg=panel_bg)
         mode_frames["Tự động"] = auto_panel
-        auto_card = tk.Frame(auto_panel, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=16, pady=16)
+        auto_card = tk.Frame(auto_panel, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
         auto_card.pack(fill="x")
         tk.Label(auto_card, text="Tự động theo màn hình thật", bg=card_soft, fg=text_main, font=ui_font(11, bold=True)).pack(anchor="w")
-        tk.Label(auto_card, text="Đây là chế độ mặc định khi chạy thật. App tự lấy vùng làm việc của màn hình hiện tại và tự scale giao diện.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=520, justify="left").pack(anchor="w", pady=(4, 10))
+        tk.Label(auto_card, text="Đây là chế độ mặc định khi chạy thật. App tự lấy vùng làm việc của màn hình hiện tại và tự scale giao diện.", bg=card_soft, fg=text_sub, font=ui_font(10), wraplength=460, justify="left").pack(anchor="w", pady=(4, 8))
         tk.Label(auto_card, text=f"Hiện tại: {self.screen_w} x {self.screen_h} (DPI {getattr(self, 'screen_dpi', 96)})", bg=card_soft, fg=text_main, font=ui_font(10, bold=True)).pack(anchor="w")
 
         def make_option_frame(parent, label, value, extra_text=None):
@@ -13932,12 +14162,12 @@ del "%~f0" >nul 2>nul
                 highlightthickness=0,
                 font=ui_font(11),
                 padx=12,
-                pady=7,
+                pady=5,
                 anchor="w",
             )
             radio.pack(fill="x")
             if extra_text:
-                tk.Label(row, text=extra_text, bg=card_soft, fg=text_sub, font=ui_font(10), anchor="w").pack(fill="x", padx=38, pady=(0, 6))
+                tk.Label(row, text=extra_text, bg=card_soft, fg=text_sub, font=ui_font(10), anchor="w").pack(fill="x", padx=38, pady=(0, 5))
 
             def select_row(_event=None, selected_value=value):
                 choice_var.set(selected_value)
@@ -14067,7 +14297,10 @@ del "%~f0" >nul 2>nul
 
             presence_box = tk.Frame(api_card, bg=panel_bg)
             presence_box.pack(fill="x", pady=(0, 16))
-            tk.Label(presence_box, text="Server trạng thái máy", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(anchor="w", pady=(0, 6))
+            server_controls = {}
+            server_header = tk.Frame(presence_box, bg=panel_bg)
+            server_header.pack(fill="x", pady=(0, 6))
+            tk.Label(server_header, text="Server trạng thái máy", bg=panel_bg, fg=text_sub, font=ui_font(11, bold=True)).pack(side="left")
             presence_shell = tk.Frame(presence_box, bg=card_soft, highlightthickness=1, highlightbackground=card_border)
             presence_shell.pack(fill="x")
             presence_entry = tk.Entry(
@@ -14082,37 +14315,45 @@ del "%~f0" >nul 2>nul
                 font=ui_font(11),
             )
             presence_entry.pack(fill="x", padx=12, pady=9)
-            tk.Label(presence_box, text="Ví dụ: http://192.168.1.10:8765", bg=panel_bg, fg=text_sub, font=ui_font(10)).pack(anchor="w", pady=(4, 0))
 
-            server_status_row = tk.Frame(presence_box, bg=panel_bg)
-            server_status_row.pack(fill="x", pady=(10, 0))
-            server_status_var = tk.StringVar(value="Đang kiểm tra...")
-            tk.Label(server_status_row, textvariable=server_status_var, bg=panel_bg, fg=text_sub, font=ui_font(10)).pack(side="left")
+            def set_server_button_state(btn, text, bg, hover, border):
+                if not btn:
+                    return
+                btn.bg_color = bg
+                btn.hover_color = hover
+                btn.border_color = border
+                btn.fg_color = "#ffffff"
+                btn.press_color = btn._press_color(hover)
+                btn.config(text=text)
 
             def refresh_server_status_label():
+                btn = server_controls.get("toggle")
                 if self._presence_server_is_running():
-                    server_status_var.set("Server: đang chạy")
+                    set_server_button_state(btn, "Tắt server", "#dc2626", "#b91c1c", "#dc2626")
                 else:
-                    server_status_var.set("Server: đang bảo trì")
+                    set_server_button_state(btn, "Bật server", "#16a34a", "#15803d", "#16a34a")
 
-            def start_server():
-                ok, msg = self._start_presence_server()
+            def toggle_server():
+                stopping_server = self._presence_server_is_running()
+                if stopping_server:
+                    ok, msg = self._stop_presence_server()
+                    error_title = "Không tắt được server"
+                else:
+                    server_url = resolve_presence_server_url(self.presence_server_var.get())
+                    if server_url:
+                        self.presence_server_var.set(server_url)
+                    ok, msg = self._ensure_presence_server_for_url(self.presence_server_var.get())
+                    error_title = "Không khởi động được server"
                 refresh_server_status_label()
-                self._set_status(msg)
+                if ok:
+                    self._set_status(msg, "error" if stopping_server else "success")
+                else:
+                    self._set_status(msg, "error")
                 if not ok:
-                    messagebox.showerror("Không khởi động được server", msg)
+                    messagebox.showerror(error_title, msg)
 
-            def stop_server():
-                ok, msg = self._stop_presence_server()
-                refresh_server_status_label()
-                self._set_status(msg)
-                if not ok:
-                    messagebox.showerror("Không tắt được server", msg)
-
-            btn_box = tk.Frame(presence_box, bg=panel_bg)
-            btn_box.pack(fill="x", pady=(8, 0))
-            ui_button(btn_box, "Mở server", start_server, width=12, variant="primary").pack(side="left")
-            ui_button(btn_box, "Tắt server", stop_server, width=12, variant="warn").pack(side="left", padx=(8, 0))
+            server_controls["toggle"] = ui_button(server_header, "Bật server", toggle_server, width=10, variant="primary")
+            server_controls["toggle"].pack(side="right")
             refresh_server_status_label()
 
             note = tk.Frame(api_card, bg=card_soft, highlightthickness=1, highlightbackground=card_border, padx=14, pady=12)
@@ -14153,9 +14394,19 @@ del "%~f0" >nul 2>nul
             profile_key = resolve_selected_profile()
             if not profile_key:
                 return
+            server_url = resolve_presence_server_url(self.presence_server_var.get())
             self.screen_profile_var.set(profile_key)
             if settings_is_admin:
+                self.presence_server_var.set(server_url or DEFAULT_PRESENCE_SERVER_URL)
                 save_env(self.api_key_var.get(), self.model_var.get(), profile_key, self.presence_server_var.get())
+                ok, msg = self._ensure_presence_server_for_url(self.presence_server_var.get())
+                try:
+                    self._set_status(msg, "success" if ok else "error")
+                except Exception:
+                    pass
+                if not ok:
+                    messagebox.showerror("Không khởi động được server", msg)
+                    return
             else:
                 save_env(self.api_key_var.get(), self.model_var.get(), profile_key)
             self._dialog_return_page = None
@@ -15704,6 +15955,16 @@ del "%~f0" >nul 2>nul
                 variant="warn",
             ).pack(anchor="center")
 
+        log_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
+        log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
+        ui_button(
+            log_btn_row,
+            "Gửi log",
+            self._send_log_to_admin,
+            width=9 if (self.tiny_ui or self.micro_ui) else 10,
+            variant="soft",
+        ).pack(anchor="center")
+
         main = tk.Frame(shell, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
 
         main.pack(side="left", fill="both", expand=True)
@@ -16246,7 +16507,7 @@ del "%~f0" >nul 2>nul
                             spacer.configure(height=6)
                         member_box = getattr(self, "_sidebar_member_box", None)
                         if member_box is not None:
-                            member_box.configure(height=112 if (self.tiny_ui or self.micro_ui) else 122)
+                            member_box.configure(height=138 if (self.tiny_ui or self.micro_ui) else 154)
                     except Exception:
                         pass
                     return
@@ -16267,7 +16528,7 @@ del "%~f0" >nul 2>nul
                     spacer.configure(height=new_height)
                 if is_admin_build():
                     target_height = max(0, int(member_box.winfo_reqheight() or 0))
-                    target_height = max(target_height, scale_px(120 if (self.tiny_ui or self.micro_ui) else 128))
+                    target_height = max(target_height, scale_px(138 if (self.tiny_ui or self.micro_ui) else 154))
                 else:
                     target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
                     min_member_height = 112 if (self.tiny_ui or self.micro_ui) else 124
@@ -19145,12 +19406,15 @@ del "%~f0" >nul 2>nul
             return
 
 
+        backup_path = None
 
         try:
+            backup_path = backup_file(self.excel_path, "excel")
 
             # Luôn nạp lại file gốc để preview không làm nhân đôi dữ liệu trong bộ nhớ
 
             wb = load_workbook(self.excel_path)
+            validate_excel_before_write(wb)
 
             info = self._apply_rows_to_workbook(wb)
 
@@ -19163,9 +19427,20 @@ del "%~f0" >nul 2>nul
             try:
                 wb.save(out_path)
             except PermissionError:
+                if backup_path:
+                    try:
+                        shutil.copy2(backup_path, out_path)
+                    except Exception as rollback_exc:
+                        write_role_error_log("excel_rollback_permission_error", rollback_exc, {"backup": str(backup_path), "target": out_path})
                 messagebox.showerror("Lỗi ghi file", f"Không thể lưu trực tiếp vào file Excel.\nVui lòng đóng file Excel '{Path(out_path).name}' trước khi điền dữ liệu.")
                 return
             except Exception as e:
+                if backup_path:
+                    try:
+                        shutil.copy2(backup_path, out_path)
+                    except Exception as rollback_exc:
+                        write_role_error_log("excel_rollback_save_error", rollback_exc, {"backup": str(backup_path), "target": out_path})
+                write_role_error_log("excel_save_error", e, {"excel_path": out_path, "backup": str(backup_path or "")})
                 messagebox.showerror("Lỗi", f"Có lỗi khi lưu file: {str(e)}")
                 return
 
@@ -19256,12 +19531,18 @@ del "%~f0" >nul 2>nul
                 pass
 
         except Exception:
+            if backup_path:
+                try:
+                    shutil.copy2(backup_path, self.excel_path)
+                except Exception as rollback_exc:
+                    write_role_error_log("excel_rollback_outer_error", rollback_exc, {"backup": str(backup_path), "target": self.excel_path})
 
             out = last_run_dir()
 
             out.mkdir(exist_ok=True)
 
             (out / "last_error_fill.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            write_role_error_log("fill_excel", None, {"excel_path": self.excel_path, "backup": str(backup_path or "")})
 
             messagebox.showerror("Lỗi điền Excel", "Có lỗi. Xem last_run_v12/last_error_fill.txt")
 
@@ -19534,6 +19815,8 @@ def _apply_rows_insert_before_total_chot(self, wb):
     total_row_after = total_row + row_count
 
     target_rows = list(range(insert_at, insert_at + row_count))
+    effective_first_data_row = min(first_data_row, min(target_rows))
+    data_last_row = max(target_rows)
 
 
 
@@ -20686,6 +20969,8 @@ def _v229_apply_rows_to_workbook(self, wb):
     total_row_after = total_row + row_count
 
     target_rows = list(range(insert_at, insert_at + row_count))
+    effective_first_data_row = min(first_data_row, min(target_rows))
+    data_last_row = max(target_rows)
 
 
 
@@ -20762,7 +21047,7 @@ def _v229_apply_rows_to_workbook(self, wb):
         updated_total_cols = update_total_formulas(
             ws,
             total_row_after,
-            first_data_row,
+            effective_first_data_row,
             data_last_row,
             excel_headers=excel_headers,
             no_col=no_col,
@@ -22804,12 +23089,41 @@ def main():
                 root.withdraw()
             except Exception:
                 pass
+            try:
+                server_url = presence_server_url_from_env()
+                if not check_presence_server_alive(server_url, timeout=0.1):
+                    messagebox.showwarning(
+                        "Server đang bảo trì",
+                        "Server đang bảo trì.\n\nVui lòng chờ admin mở lại server để tiếp tục sử dụng ứng dụng.",
+                    )
+                    try:
+                        root.destroy()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                try:
+                    messagebox.showwarning(
+                        "Server đang bảo trì",
+                        "Server đang bảo trì.\n\nVui lòng chờ admin mở lại server để tiếp tục sử dụng ứng dụng.",
+                    )
+                    root.destroy()
+                except Exception:
+                    pass
+                return
 
         App(root)
 
         root.mainloop()
 
     except Exception as exc:
+
+        try:
+            write_role_error_log("main", exc)
+
+        except Exception:
+
+            pass
 
         try:
 
