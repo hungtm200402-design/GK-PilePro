@@ -9700,10 +9700,9 @@ class App:
                 return
 
             self._set_status("Đã gửi log cho Admin.", "success")
-            detail = "Hiện chưa có lỗi nào được ghi nhận." if created_empty_log else "Admin đã nhận được log."
             messagebox.showinfo(
                 "Gửi log cho Admin",
-                f"{detail}\n\nThông tin đã gửi gồm mã máy, tên máy Windows, user Windows và nội dung lỗi.",
+                "Admin đã nhận được log.\n\nThông tin đã gửi gồm mã máy, tên máy Windows, user Windows và nội dung lỗi.",
             )
         except Exception as exc:
             write_role_error_log("send_log_to_admin", exc)
@@ -15180,6 +15179,16 @@ del "%~f0" >nul 2>nul
         log_header = tk.Frame(log_box, bg="#ffffff")
         log_header.pack(fill="x", padx=12, pady=(10, 6))
         tk.Label(log_header, text="⚠  Log lỗi User gửi", bg="#ffffff", fg=UI_ERROR, font=ui_font(11, bold=True)).pack(side="left")
+        log_count_badge = tk.Label(
+            log_header,
+            text="0",
+            bg=UI_ERROR,
+            fg="#ffffff",
+            font=ui_font(8, bold=True),
+            padx=7,
+            pady=2,
+        )
+        log_count_badge.pack(side="left", padx=(8, 0))
         log_summary_var = tk.StringVar(value="Chưa tải log.")
         tk.Label(log_header, textvariable=log_summary_var, bg="#ffffff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(12, 0))
 
@@ -15328,6 +15337,8 @@ del "%~f0" >nul 2>nul
                 def _apply():
                     try:
                         log_cache["rows"] = rows
+                        count_text = str(len(rows))
+                        log_count_badge.configure(text=count_text, bg=UI_ERROR if rows else "#94a3b8")
                         log_tree.delete(*log_tree.get_children())
                         for row in rows[:80]:
                             iid = str(row.get("id") or "")
@@ -15345,7 +15356,7 @@ del "%~f0" >nul 2>nul
                                     str(row.get("message") or row.get("log_text") or "")[:120],
                                 ),
                             )
-                        log_summary_var.set(f"{len(rows)} log gần nhất." if rows else "Chưa có log user gửi.")
+                        log_summary_var.set(f"{len(rows)} lần lỗi gần nhất." if rows else "Chưa có log user gửi.")
                     except Exception:
                         log_summary_var.set("Không hiển thị được log.")
 
