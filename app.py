@@ -2827,6 +2827,32 @@ def send_presence_approved_machine(server_url, payload, timeout=3):
         return False
 
 
+def send_presence_error_log(server_url, payload, timeout=5):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return False
+    try:
+        data = _presence_client_request_json(f"{base}/error-logs", payload=payload, timeout=timeout, method="POST")
+        return bool(isinstance(data, dict) and data.get("ok"))
+    except Exception:
+        return False
+
+
+def fetch_presence_error_logs(server_url, limit=100, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    if not base:
+        return []
+    try:
+        data = _presence_client_request_json(f"{base}/error-logs?limit={int(limit or 100)}", timeout=timeout, method="GET")
+        if isinstance(data, dict):
+            logs = data.get("error_logs")
+            if isinstance(logs, list):
+                return logs
+    except Exception:
+        pass
+    return []
+
+
 def delete_presence_approved_machine(server_url, machine_code, timeout=3):
     base = normalize_presence_server_url(server_url)
     machine_code = str(machine_code or "").strip().upper()
@@ -9637,17 +9663,47 @@ class App:
             if not log_path.exists():
                 log_path.write_text("Chưa có lỗi nào được ghi nhận.\n", encoding="utf-8")
                 created_empty_log = True
-            self.root.clipboard_clear()
-            self.root.clipboard_append(str(log_path))
             try:
-                os.startfile(str(log_path.parent))
+                log_text = log_path.read_text(encoding="utf-8", errors="replace")
             except Exception:
-                pass
-            self._set_status("Đã chuẩn bị log để gửi Admin.", "success")
-            detail = "Hiện chưa có lỗi nào được ghi nhận." if created_empty_log else "File log đã sẵn sàng."
+                log_text = "Không đọc được nội dung log."
+            if not log_text.strip():
+                log_text = "Chưa có lỗi nào được ghi nhận."
+
+            server_url = presence_server_url_from_env()
+            payload = {
+                "machine_code": get_machine_code(),
+                "user_name": resolve_member_display_name(get_machine_code()),
+                "windows_user": os.environ.get("USERNAME", ""),
+                "computer_name": os.environ.get("COMPUTERNAME", socket.gethostname()),
+                "role": "Admin" if is_admin_build() else "User",
+                "app_kind": "admin" if is_admin_build() else "user",
+                "message": "User gửi log lỗi" if not is_admin_build() else "Admin gửi log lỗi",
+                "log_text": log_text[-60000:],
+                "log_path": str(log_path),
+            }
+
+            if not check_presence_server_alive(server_url, timeout=0.7):
+                self._set_status("Không gửi được log: server chưa bật.", "error")
+                messagebox.showwarning(
+                    "Gửi log cho Admin",
+                    "Chưa gửi được log vì server Admin chưa bật.\n\nVui lòng báo Admin bật server rồi bấm gửi lại.",
+                )
+                return
+
+            if not send_presence_error_log(server_url, payload, timeout=5):
+                self._set_status("Không gửi được log lên server.", "error")
+                messagebox.showerror(
+                    "Gửi log cho Admin",
+                    "Không gửi được log lên server.\n\nVui lòng thử lại hoặc báo Admin kiểm tra server.",
+                )
+                return
+
+            self._set_status("Đã gửi log cho Admin.", "success")
+            detail = "Hiện chưa có lỗi nào được ghi nhận." if created_empty_log else "Admin đã nhận được log."
             messagebox.showinfo(
                 "Gửi log cho Admin",
-                f"{detail}\n\nĐã copy đường dẫn log vào clipboard và mở thư mục log.\n\nFile log:\n{log_path}",
+                f"{detail}\n\nThông tin đã gửi gồm mã máy, tên máy Windows, user Windows và nội dung lỗi.",
             )
         except Exception as exc:
             write_role_error_log("send_log_to_admin", exc)
@@ -15118,7 +15174,147 @@ del "%~f0" >nul 2>nul
         admin_button(list_actions, "🗑 Xóa máy đã chọn", delete_selected, width=15, variant="danger").pack(side="left")
         admin_button(list_actions, "↻ Tải lại danh sách", clear_search, width=15, variant="soft").pack(side="left", padx=(8, 0))
 
+        log_box = tk.Frame(list_box, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+        log_box.pack(fill="x", padx=16, pady=(0, 12))
+
+        log_header = tk.Frame(log_box, bg="#ffffff")
+        log_header.pack(fill="x", padx=12, pady=(10, 6))
+        tk.Label(log_header, text="⚠  Log lỗi User gửi", bg="#ffffff", fg=UI_ERROR, font=ui_font(11, bold=True)).pack(side="left")
+        log_summary_var = tk.StringVar(value="Chưa tải log.")
+        tk.Label(log_header, textvariable=log_summary_var, bg="#ffffff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(12, 0))
+
+        log_frame = tk.Frame(log_box, bg="#ffffff")
+        log_frame.pack(fill="x", padx=12)
+        log_tree = ttk.Treeview(
+            log_frame,
+            style="Custom.Treeview",
+            columns=("time", "user", "windows", "computer", "message"),
+            show="headings",
+            height=3,
+        )
+        log_tree.heading("time", text="Thời gian")
+        log_tree.heading("user", text="Tên người")
+        log_tree.heading("windows", text="User Windows")
+        log_tree.heading("computer", text="Tên máy")
+        log_tree.heading("message", text="Thông báo")
+        log_tree.column("time", width=150, anchor="center", stretch=False)
+        log_tree.column("user", width=130, anchor="center", stretch=False)
+        log_tree.column("windows", width=130, anchor="center", stretch=False)
+        log_tree.column("computer", width=130, anchor="center", stretch=False)
+        log_tree.column("message", width=360, anchor="w")
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=log_tree.yview)
+        log_tree.configure(yscrollcommand=log_scroll.set)
+        log_tree.grid(row=0, column=0, sticky="ew")
+        log_scroll.grid(row=0, column=1, sticky="ns")
+        log_frame.columnconfigure(0, weight=1)
+        log_cache = {"rows": []}
+
+        def selected_log_row():
+            selected = log_tree.selection()
+            if not selected:
+                return None
+            try:
+                idx = int(str(selected[0]))
+                for row in log_cache["rows"]:
+                    if int(row.get("id") or -1) == idx:
+                        return row
+            except Exception:
+                pass
+            return None
+
+        def show_selected_log():
+            row = selected_log_row()
+            if not row:
+                messagebox.showinfo("Log lỗi", "Chọn một dòng log trước.")
+                return
+            detail = (
+                f"Thời gian: {row.get('created_at', '')}\n"
+                f"Mã máy: {row.get('machine_code', '')}\n"
+                f"Tên người: {row.get('user_name', '')}\n"
+                f"User Windows: {row.get('windows_user', '')}\n"
+                f"Tên máy Windows: {row.get('computer_name', '')}\n"
+                f"Vai trò: {row.get('role', '')}\n\n"
+                f"Nội dung log:\n{row.get('log_text', '')}"
+            )
+            top = tk.Toplevel(self.root)
+            top.title("Chi tiết log lỗi")
+            top.configure(bg="#ffffff")
+            self._fit_dialog_to_screen(top, 820, 560, min_w=760, min_h=460, max_ratio=0.80, lock_size=False)
+            body = tk.Frame(top, bg="#ffffff", padx=14, pady=14)
+            body.pack(fill="both", expand=True)
+            text = tk.Text(body, wrap="word", bg="#f8fafc", fg=UI_TEXT, relief="solid", bd=1, font=("Consolas", 10))
+            text.pack(fill="both", expand=True)
+            text.insert("1.0", detail)
+            text.configure(state="disabled")
+            actions_row = tk.Frame(body, bg="#ffffff")
+            actions_row.pack(fill="x", pady=(10, 0))
+            def copy_detail():
+                self.root.clipboard_clear()
+                self.root.clipboard_append(detail)
+            admin_button(actions_row, "Copy log", copy_detail, width=10, variant="soft").pack(side="left")
+            admin_button(actions_row, "Đóng", top.destroy, width=8).pack(side="right")
+            self._center_dialog_on_screen(top)
+
+        def copy_selected_log():
+            row = selected_log_row()
+            if not row:
+                messagebox.showinfo("Log lỗi", "Chọn một dòng log trước.")
+                return
+            text = (
+                f"{row.get('created_at', '')} | {row.get('machine_code', '')} | "
+                f"{row.get('user_name', '')} | {row.get('windows_user', '')} | "
+                f"{row.get('computer_name', '')}\n{row.get('log_text', '')}"
+            )
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+
+        def refresh_error_logs():
+            server_url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value="")).get())
+            log_summary_var.set("Đang tải log...")
+
+            def _worker():
+                rows = fetch_presence_error_logs(server_url, limit=80, timeout=3)
+
+                def _apply():
+                    try:
+                        log_cache["rows"] = rows
+                        log_tree.delete(*log_tree.get_children())
+                        for row in rows[:80]:
+                            iid = str(row.get("id") or "")
+                            if not iid:
+                                continue
+                            log_tree.insert(
+                                "",
+                                "end",
+                                iid=iid,
+                                values=(
+                                    row.get("created_at", ""),
+                                    row.get("user_name", ""),
+                                    row.get("windows_user", ""),
+                                    row.get("computer_name", ""),
+                                    str(row.get("message") or row.get("log_text") or "")[:120],
+                                ),
+                            )
+                        log_summary_var.set(f"{len(rows)} log gần nhất." if rows else "Chưa có log user gửi.")
+                    except Exception:
+                        log_summary_var.set("Không hiển thị được log.")
+
+                try:
+                    self.root.after(0, _apply)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        log_tree.bind("<Double-1>", lambda _e: show_selected_log())
+        log_actions = tk.Frame(log_box, bg="#ffffff")
+        log_actions.pack(fill="x", padx=12, pady=(8, 10))
+        admin_button(log_actions, "↻ Tải log", refresh_error_logs, width=10, variant="soft").pack(side="left")
+        admin_button(log_actions, "Xem chi tiết", show_selected_log, width=12, variant="primary").pack(side="left", padx=(8, 0))
+        admin_button(log_actions, "Copy log", copy_selected_log, width=10, variant="default").pack(side="left", padx=(8, 0))
+
         refresh_list(fill_selection=False)
+        refresh_error_logs()
         clear_approval_form()
 
 

@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
@@ -122,6 +122,23 @@ def init_db(db_path: Path):
                 role TEXT DEFAULT '',
                 app_kind TEXT DEFAULT '',
                 status TEXT DEFAULT ''
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS error_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                machine_code TEXT DEFAULT '',
+                user_name TEXT DEFAULT '',
+                windows_user TEXT DEFAULT '',
+                computer_name TEXT DEFAULT '',
+                role TEXT DEFAULT '',
+                app_kind TEXT DEFAULT '',
+                message TEXT DEFAULT '',
+                log_text TEXT DEFAULT '',
+                created_at TEXT DEFAULT '',
+                payload_json TEXT DEFAULT ''
             )
             """
         )
@@ -255,6 +272,67 @@ def delete_approved_machine(db_path: Path, machine_code: str):
     return cur.rowcount > 0
 
 
+def insert_error_log(db_path: Path, payload: dict):
+    machine_code = str(payload.get("machine_code") or "").strip().upper()
+    now = utc_now()
+    record = {
+        "machine_code": machine_code,
+        "user_name": str(payload.get("user_name") or "").strip(),
+        "windows_user": str(payload.get("windows_user") or "").strip(),
+        "computer_name": str(payload.get("computer_name") or "").strip(),
+        "role": str(payload.get("role") or "").strip(),
+        "app_kind": str(payload.get("app_kind") or "").strip(),
+        "message": str(payload.get("message") or "").strip(),
+        "log_text": str(payload.get("log_text") or "").strip()[-60000:],
+        "created_at": now,
+        "payload_json": json.dumps(payload, ensure_ascii=False),
+    }
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO error_logs (
+                machine_code, user_name, windows_user, computer_name,
+                role, app_kind, message, log_text, created_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["machine_code"],
+                record["user_name"],
+                record["windows_user"],
+                record["computer_name"],
+                record["role"],
+                record["app_kind"],
+                record["message"],
+                record["log_text"],
+                record["created_at"],
+                record["payload_json"],
+            ),
+        )
+        conn.commit()
+        record["id"] = cur.lastrowid
+    return record
+
+
+def fetch_error_logs(db_path: Path, limit=100):
+    try:
+        limit = max(1, min(300, int(limit or 100)))
+    except Exception:
+        limit = 100
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, machine_code, user_name, windows_user, computer_name,
+                   role, app_kind, message, log_text, created_at
+            FROM error_logs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 class PresenceHandler(BaseHTTPRequestHandler):
     server_version = "GKPresence/1.0"
 
@@ -305,7 +383,8 @@ class PresenceHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         server = self.server  # type: ignore[attr-defined]
         timeout_seconds = getattr(server, "timeout_seconds", 20)
-        path = urlparse(self.path).path.rstrip("/")
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path.rstrip("/")
         if path in {"", "/"}:
             return self._send_json({"ok": True, "service": "presence"})
         if path == "/health":
@@ -342,6 +421,11 @@ class PresenceHandler(BaseHTTPRequestHandler):
         if path == "/approved-machines":
             approved = fetch_approved_machines(server.db_path)
             return self._send_json({"ok": True, "approved_machines": approved})
+        if path == "/error-logs":
+            query = parse_qs(parsed_url.query or "")
+            limit = (query.get("limit") or ["100"])[0]
+            logs = fetch_error_logs(server.db_path, limit=limit)
+            return self._send_json({"ok": True, "error_logs": logs})
         if path.startswith("/machines/"):
             machine_code = path.split("/", 2)[2].strip().upper()
             machines = fetch_machines(server.db_path)
@@ -372,6 +456,10 @@ class PresenceHandler(BaseHTTPRequestHandler):
             if not record:
                 return self._send_json({"ok": False, "error": "machine_code_required"}, status=400)
             return self._send_json({"ok": True, "machine": record})
+        if path == "/error-logs":
+            payload = self._read_json()
+            record = insert_error_log(server.db_path, payload)
+            return self._send_json({"ok": True, "error_log": record})
         if path.startswith("/approved-machines/"):
             machine_code = path.split("/", 2)[2].strip().upper()
             deleted = delete_approved_machine(server.db_path, machine_code)
