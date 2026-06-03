@@ -14586,7 +14586,11 @@ del "%~f0" >nul 2>nul
                     badge = getattr(self, "admin_log_count_badge", None)
                     if badge is not None and badge.winfo_exists():
                         count = len(rows)
-                        badge.configure(text=str(count), bg=UI_ERROR if count else "#94a3b8")
+                        if count:
+                            badge.configure(text=str(count))
+                            badge.place(relx=0.72, rely=0.18, anchor="center")
+                        else:
+                            badge.place_forget()
                 except Exception:
                     pass
                 try:
@@ -16379,37 +16383,6 @@ del "%~f0" >nul 2>nul
         )
         self.status.pack(fill="both", expand=True)
 
-        if is_admin_build():
-            notify_card = tk.Frame(sidebar, bg="#f8fbff", cursor="hand2", height=46)
-            notify_card.pack(fill="x", pady=(8, 0))
-            notify_card.pack_propagate(False)
-            notify_icon = tk.Canvas(
-                notify_card,
-                width=42,
-                height=42,
-                bg="#f8fbff",
-                bd=0,
-                highlightthickness=0,
-                cursor="hand2",
-            )
-            notify_icon.place(relx=0.5, rely=0.5, anchor="center")
-            notify_icon.create_oval(3, 3, 39, 39, fill="#e5e7eb", outline="#e5e7eb")
-            notify_icon.create_text(21, 21, text="🔔", fill="#111827", font=ui_font(15))
-            self.admin_log_count_badge = tk.Label(
-                notify_card,
-                text="0",
-                bg="#94a3b8",
-                fg="#ffffff",
-                font=ui_font(8, bold=True),
-                padx=5,
-                pady=1,
-                cursor="hand2",
-            )
-            self.admin_log_count_badge.place(relx=0.57, rely=0.16, anchor="center")
-            for widget in (notify_card, notify_icon, self.admin_log_count_badge):
-                widget.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
-            self.root.after(500, self._admin_log_badge_loop)
-
         sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=8 if (self.tiny_ui or self.micro_ui) else 12)
 
         sidebar_spacer.pack(fill="x")
@@ -16518,6 +16491,49 @@ del "%~f0" >nul 2>nul
         tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(10), bg=UI_BG, fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
 
         if not self.tiny_ui:
+
+            if is_admin_build():
+                notify_button = tk.Canvas(
+                    header,
+                    width=30,
+                    height=30,
+                    bg=UI_BG,
+                    bd=0,
+                    highlightthickness=0,
+                    cursor="hand2",
+                )
+                notify_button.pack(side="left", padx=4)
+                notify_button.create_oval(3, 3, 27, 27, fill="#ffffff", outline="#dbe3ef", width=1)
+                notify_button.create_line(
+                    15, 8,
+                    12, 10,
+                    10, 15,
+                    10, 19,
+                    20, 19,
+                    20, 15,
+                    18, 10,
+                    15, 8,
+                    fill="#111827",
+                    width=1.5,
+                    smooth=True,
+                )
+                notify_button.create_line(9, 20, 21, 20, fill="#111827", width=1.5)
+                notify_button.create_arc(12, 20, 18, 25, start=200, extent=140, style="arc", outline="#111827", width=1.5)
+                notify_button.create_line(15, 7, 15, 8, fill="#111827", width=1.5)
+                self.admin_log_count_badge = tk.Label(
+                    notify_button,
+                    text="",
+                    bg=UI_ERROR,
+                    fg="#ffffff",
+                    font=ui_font(7, bold=True),
+                    padx=4,
+                    pady=0,
+                    cursor="hand2",
+                )
+                self.admin_log_count_badge.place_forget()
+                for widget in (notify_button, self.admin_log_count_badge):
+                    widget.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
+                self.root.after(500, self._admin_log_badge_loop)
 
             for text in ("☼", "⚙", "?"):
 
