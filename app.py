@@ -14638,8 +14638,6 @@ del "%~f0" >nul 2>nul
         tk.Label(title_box, text="Thông báo log lỗi", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
         summary_var = tk.StringVar(value="Đang tải...")
         tk.Label(title_box, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
-        count_badge = tk.Label(header, text="0", bg="#94a3b8", fg="#ffffff", font=ui_font(11, bold=True), padx=12, pady=5)
-        count_badge.pack(side="right")
 
         table_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
         table_card.pack(fill="both", expand=True)
@@ -14776,7 +14774,6 @@ del "%~f0" >nul 2>nul
                                 ),
                                 tags=("done" if done else "new",),
                             )
-                        count_badge.configure(text=str(unresolved), bg=UI_ERROR if unresolved else "#94a3b8")
                         summary_var.set(f"{unresolved} thông báo chưa xử lý / {len(rows)} log gần nhất.")
                     except Exception:
                         summary_var.set("Không tải được log.")
