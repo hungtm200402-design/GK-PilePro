@@ -16194,9 +16194,9 @@ del "%~f0" >nul 2>nul
 
 
 
-        def section_title(parent, title, subtitle=None):
+        def section_title(parent, title, subtitle=None, title_size=10):
 
-            tk.Label(parent, text=title, font=ui_font(10, bold=True), bg=UI_SURFACE, fg=UI_TEXT).pack(anchor="w")
+            tk.Label(parent, text=title, font=ui_font(title_size, bold=True), bg=UI_SURFACE, fg=UI_TEXT).pack(anchor="w")
 
             if subtitle:
 
@@ -16380,26 +16380,33 @@ del "%~f0" >nul 2>nul
         self.status.pack(fill="both", expand=True)
 
         if is_admin_build():
-            notify_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#fecaca", cursor="hand2")
-            notify_card.pack(fill="x", pady=(6, 0))
-            notify_inner = tk.Frame(notify_card, bg="#ffffff", padx=8, pady=8, cursor="hand2")
-            notify_inner.pack(fill="x")
-            notify_icon = tk.Label(notify_inner, text="!", bg="#fee2e2", fg=UI_ERROR, font=ui_font(10, bold=True), width=2, cursor="hand2")
-            notify_icon.pack(side="left", padx=(0, 8))
-            notify_label = tk.Label(notify_inner, text="Thông báo log", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True), anchor="w", cursor="hand2")
-            notify_label.pack(side="left", fill="x", expand=True)
+            notify_card = tk.Frame(sidebar, bg="#f8fbff", cursor="hand2", height=46)
+            notify_card.pack(fill="x", pady=(8, 0))
+            notify_card.pack_propagate(False)
+            notify_icon = tk.Canvas(
+                notify_card,
+                width=42,
+                height=42,
+                bg="#f8fbff",
+                bd=0,
+                highlightthickness=0,
+                cursor="hand2",
+            )
+            notify_icon.place(relx=0.5, rely=0.5, anchor="center")
+            notify_icon.create_oval(3, 3, 39, 39, fill="#e5e7eb", outline="#e5e7eb")
+            notify_icon.create_text(21, 21, text="🔔", fill="#111827", font=ui_font(15))
             self.admin_log_count_badge = tk.Label(
-                notify_inner,
+                notify_card,
                 text="0",
                 bg="#94a3b8",
                 fg="#ffffff",
                 font=ui_font(8, bold=True),
-                padx=7,
-                pady=2,
+                padx=5,
+                pady=1,
                 cursor="hand2",
             )
-            self.admin_log_count_badge.pack(side="right")
-            for widget in (notify_card, notify_inner, notify_icon, notify_label, self.admin_log_count_badge):
+            self.admin_log_count_badge.place(relx=0.57, rely=0.16, anchor="center")
+            for widget in (notify_card, notify_icon, self.admin_log_count_badge):
                 widget.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
             self.root.after(500, self._admin_log_badge_loop)
 
@@ -16981,7 +16988,7 @@ del "%~f0" >nul 2>nul
 
         right_col.grid(row=0, column=2, sticky="nsew")
 
-        section_title(right_col, "XÁC NHẬN ÁNH XẠ CỘT", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn")
+        section_title(right_col, "Xác nhận mapping cột", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn", title_size=12)
 
         summary_card = tk.Frame(right_col, bg=UI_SURFACE)
         summary_card.pack(fill="x", pady=(8, 0))
