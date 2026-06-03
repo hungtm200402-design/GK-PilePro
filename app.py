@@ -16099,7 +16099,7 @@ del "%~f0" >nul 2>nul
 
         member_content = tk.Frame(user_inner, bg=UI_SURFACE)
 
-        member_content.pack(fill="both", expand=True, pady=(7 if (self.tiny_ui or self.micro_ui) else 9, 5))
+        member_content.pack(fill="both", expand=True, pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 4))
 
         if self.tiny_ui or self.micro_ui:
             self.sidebar_member_role_label = tk.Label(
@@ -16722,7 +16722,7 @@ del "%~f0" >nul 2>nul
                 if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
                     return
                 target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
-                target_top -= scale_px(44 if (self.tiny_ui or self.micro_ui) else 56)
+                target_top -= scale_px(96 if (self.tiny_ui or self.micro_ui) else 118)
                 max_top = max(0, int(sidebar.winfo_height() - member_box.winfo_reqheight() - scale_px(12)))
                 target_top = min(int(target_top), max_top)
                 current_top = spacer.winfo_y()
