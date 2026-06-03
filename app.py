@@ -2838,12 +2838,15 @@ def send_presence_error_log(server_url, payload, timeout=5):
         return False
 
 
-def fetch_presence_error_logs(server_url, limit=100, timeout=3):
+def fetch_presence_error_logs(server_url, limit=100, timeout=3, unresolved_only=False):
     base = normalize_presence_server_url(server_url)
     if not base:
         return []
     try:
-        data = _presence_client_request_json(f"{base}/error-logs?limit={int(limit or 100)}", timeout=timeout, method="GET")
+        query = f"limit={int(limit or 100)}"
+        if unresolved_only:
+            query += "&unresolved=1"
+        data = _presence_client_request_json(f"{base}/error-logs?{query}", timeout=timeout, method="GET")
         if isinstance(data, dict):
             logs = data.get("error_logs")
             if isinstance(logs, list):
@@ -2851,6 +2854,21 @@ def fetch_presence_error_logs(server_url, limit=100, timeout=3):
     except Exception:
         pass
     return []
+
+
+def resolve_presence_error_log(server_url, log_id, timeout=3):
+    base = normalize_presence_server_url(server_url)
+    try:
+        log_id = int(log_id)
+    except Exception:
+        return False
+    if not base:
+        return False
+    try:
+        data = _presence_client_request_json(f"{base}/error-logs/{log_id}/resolve", payload={}, timeout=timeout, method="POST")
+        return bool(isinstance(data, dict) and data.get("ok"))
+    except Exception:
+        return False
 
 
 def delete_presence_approved_machine(server_url, machine_code, timeout=3):
@@ -14556,6 +14574,225 @@ del "%~f0" >nul 2>nul
 
 
 
+    def _admin_log_badge_loop(self):
+        if not is_admin_build():
+            return
+
+        def _worker():
+            rows = fetch_presence_error_logs(presence_server_url_from_env(), limit=300, timeout=2, unresolved_only=True)
+
+            def _apply():
+                try:
+                    badge = getattr(self, "admin_log_count_badge", None)
+                    if badge is not None and badge.winfo_exists():
+                        count = len(rows)
+                        badge.configure(text=str(count), bg=UI_ERROR if count else "#94a3b8")
+                except Exception:
+                    pass
+                try:
+                    self.root.after(5000, self._admin_log_badge_loop)
+                except Exception:
+                    pass
+
+            try:
+                self.root.after(0, _apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+
+    def open_admin_log_panel(self):
+        if not is_admin_build():
+            return
+        if getattr(self, "admin_log_panel", None) is not None:
+            try:
+                if self.admin_log_panel.winfo_exists():
+                    self.admin_log_panel.lift()
+                    self.admin_log_panel.focus_force()
+                    return
+            except Exception:
+                pass
+
+        win = tk.Toplevel(self.root)
+        win.title("Thông báo log")
+        win.configure(bg="#f3f6fb")
+        self.admin_log_panel = win
+        win.bind("<Destroy>", lambda e: setattr(self, "admin_log_panel", None) if e.widget is win else None, add="+")
+        self._fit_dialog_to_screen(win, 920, 620, min_w=820, min_h=520, max_ratio=0.84, lock_size=False)
+
+        body = tk.Frame(win, bg="#f3f6fb", padx=18, pady=18)
+        body.pack(fill="both", expand=True)
+        header = tk.Frame(body, bg="#f3f6fb")
+        header.pack(fill="x", pady=(0, 12))
+        title_box = tk.Frame(header, bg="#f3f6fb")
+        title_box.pack(side="left", fill="x", expand=True)
+        tk.Label(title_box, text="Thông báo log lỗi", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
+        summary_var = tk.StringVar(value="Đang tải...")
+        tk.Label(title_box, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
+        count_badge = tk.Label(header, text="0", bg="#94a3b8", fg="#ffffff", font=ui_font(11, bold=True), padx=12, pady=5)
+        count_badge.pack(side="right")
+
+        table_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+        table_card.pack(fill="both", expand=True)
+        table_frame = tk.Frame(table_card, bg="#ffffff", padx=12, pady=12)
+        table_frame.pack(fill="both", expand=True)
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.columnconfigure(0, weight=1)
+
+        style = ttk.Style()
+        style.configure("Log.Treeview", background="#ffffff", fieldbackground="#ffffff", rowheight=34, borderwidth=0, font=ui_font(10))
+        style.configure("Log.Treeview.Heading", font=ui_font(10, bold=True), background="#eff6ff", foreground="#0f172a", relief="flat", borderwidth=0)
+        log_tree = ttk.Treeview(
+            table_frame,
+            style="Log.Treeview",
+            columns=("state", "time", "user", "windows", "computer", "message"),
+            show="headings",
+            height=9,
+        )
+        for col, text, width, anchor in (
+            ("state", "TT", 58, "center"),
+            ("time", "Thời gian", 158, "center"),
+            ("user", "Tên người", 130, "center"),
+            ("windows", "User Windows", 126, "center"),
+            ("computer", "Tên máy", 140, "center"),
+            ("message", "Nội dung", 300, "w"),
+        ):
+            log_tree.heading(col, text=text)
+            log_tree.column(col, width=width, anchor=anchor, stretch=(col == "message"))
+        log_tree.tag_configure("new", foreground=UI_ERROR, background="#fff7f7")
+        log_tree.tag_configure("done", foreground="#64748b", background="#f8fafc")
+        scroll = ttk.Scrollbar(table_frame, orient="vertical", command=log_tree.yview)
+        log_tree.configure(yscrollcommand=scroll.set)
+        log_tree.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+
+        rows_cache = {"rows": []}
+
+        def selected_row():
+            selected = log_tree.selection()
+            if not selected:
+                return None
+            sid = str(selected[0])
+            for item in rows_cache["rows"]:
+                if str(item.get("id") or "") == sid:
+                    return item
+            return None
+
+        def detail_text(row):
+            return (
+                f"Thời gian: {row.get('created_at', '')}\n"
+                f"Mã máy: {row.get('machine_code', '')}\n"
+                f"Tên người: {row.get('user_name', '')}\n"
+                f"User Windows: {row.get('windows_user', '')}\n"
+                f"Tên máy Windows: {row.get('computer_name', '')}\n"
+                f"Vai trò: {row.get('role', '')}\n"
+                f"Trạng thái: {'Đã hoàn thành' if row.get('resolved_at') else 'Chưa xử lý'}\n\n"
+                f"Nội dung log:\n{row.get('log_text', '')}"
+            )
+
+        def show_detail():
+            row = selected_row()
+            if not row:
+                messagebox.showinfo("Thông báo log", "Chọn một dòng log trước.")
+                return
+            top = tk.Toplevel(win)
+            top.title("Chi tiết log lỗi")
+            top.configure(bg="#f3f6fb")
+            self._fit_dialog_to_screen(top, 860, 600, min_w=780, min_h=500, max_ratio=0.82, lock_size=False)
+            wrap = tk.Frame(top, bg="#f3f6fb", padx=18, pady=18)
+            wrap.pack(fill="both", expand=True)
+            tk.Label(wrap, text="Chi tiết log lỗi", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
+            tk.Label(wrap, text=f"{row.get('user_name', '')} - {row.get('computer_name', '')}", bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 12))
+            text = tk.Text(wrap, wrap="word", bg="#0f172a", fg="#e5edf7", insertbackground="#e5edf7", relief="flat", bd=0, font=("Consolas", 10), padx=12, pady=10)
+            text.pack(fill="both", expand=True)
+            text.insert("1.0", detail_text(row))
+            text.configure(state="disabled")
+            actions = tk.Frame(wrap, bg="#f3f6fb")
+            actions.pack(fill="x", pady=(12, 0))
+            ui_button(actions, "Copy log", lambda: (self.root.clipboard_clear(), self.root.clipboard_append(detail_text(row))), width=10, variant="soft").pack(side="left")
+            ui_button(actions, "Đóng", top.destroy, width=8, variant="default").pack(side="right")
+            self._center_dialog_on_screen(top)
+
+        def copy_log():
+            row = selected_row()
+            if not row:
+                messagebox.showinfo("Thông báo log", "Chọn một dòng log trước.")
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append(detail_text(row))
+
+        def mark_done():
+            row = selected_row()
+            if not row:
+                messagebox.showinfo("Thông báo log", "Chọn một dòng log trước.")
+                return
+            if row.get("resolved_at"):
+                return
+            if resolve_presence_error_log(presence_server_url_from_env(), row.get("id"), timeout=3):
+                self._set_status("Đã hoàn thành log lỗi.", "success")
+                refresh_logs()
+                self._admin_log_badge_loop()
+            else:
+                messagebox.showerror("Thông báo log", "Không đánh dấu hoàn thành được log này.")
+
+        def refresh_logs():
+            summary_var.set("Đang tải...")
+
+            def _worker():
+                rows = fetch_presence_error_logs(presence_server_url_from_env(), limit=200, timeout=3)
+
+                def _apply():
+                    try:
+                        rows_cache["rows"] = rows
+                        log_tree.delete(*log_tree.get_children())
+                        unresolved = 0
+                        for row in rows:
+                            done = bool(row.get("resolved_at"))
+                            if not done:
+                                unresolved += 1
+                            iid = str(row.get("id") or "")
+                            if not iid:
+                                continue
+                            log_tree.insert(
+                                "",
+                                "end",
+                                iid=iid,
+                                values=(
+                                    "Mới" if not done else "Xong",
+                                    row.get("created_at", ""),
+                                    row.get("user_name", ""),
+                                    row.get("windows_user", ""),
+                                    row.get("computer_name", ""),
+                                    str(row.get("message") or row.get("log_text") or "")[:120],
+                                ),
+                                tags=("done" if done else "new",),
+                            )
+                        count_badge.configure(text=str(unresolved), bg=UI_ERROR if unresolved else "#94a3b8")
+                        summary_var.set(f"{unresolved} thông báo chưa xử lý / {len(rows)} log gần nhất.")
+                    except Exception:
+                        summary_var.set("Không tải được log.")
+
+                try:
+                    self.root.after(0, _apply)
+                except Exception:
+                    pass
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        log_tree.bind("<Double-1>", lambda _e: show_detail())
+        actions = tk.Frame(body, bg="#f3f6fb")
+        actions.pack(fill="x", pady=(12, 0))
+        ui_button(actions, "Tải lại", refresh_logs, width=9, variant="soft").pack(side="left")
+        ui_button(actions, "Xem chi tiết", show_detail, width=12, variant="primary").pack(side="left", padx=(8, 0))
+        ui_button(actions, "Hoàn thành", mark_done, width=11, variant="success").pack(side="left", padx=(8, 0))
+        ui_button(actions, "Copy log", copy_log, width=10, variant="default").pack(side="left", padx=(8, 0))
+        ui_button(actions, "Đóng", win.destroy, width=8, variant="default").pack(side="right")
+
+        refresh_logs()
+        self._center_dialog_on_screen(win)
+
+
     def open_admin_approval_panel(self):
         if self.admin_approval_panel is not None:
             try:
@@ -15174,7 +15411,7 @@ del "%~f0" >nul 2>nul
         admin_button(list_actions, "↻ Tải lại danh sách", clear_search, width=15, variant="soft").pack(side="left", padx=(8, 0))
 
         log_box = tk.Frame(list_box, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
-        log_box.pack(fill="x", padx=16, pady=(0, 12))
+        # Log notifications live in the Admin sidebar now, not inside machine approval.
 
         log_header = tk.Frame(log_box, bg="#ffffff")
         log_header.pack(fill="x", padx=12, pady=(10, 6))
@@ -15375,7 +15612,6 @@ del "%~f0" >nul 2>nul
         admin_button(log_actions, "Copy log", copy_selected_log, width=10, variant="default").pack(side="left", padx=(8, 0))
 
         refresh_list(fill_selection=False)
-        refresh_error_logs()
         clear_approval_form()
 
 
@@ -16142,6 +16378,27 @@ del "%~f0" >nul 2>nul
             justify="center",
         )
         self.status.pack(fill="both", expand=True)
+
+        if is_admin_build():
+            notify_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#fecaca", cursor="hand2")
+            notify_card.pack(fill="x", pady=(6, 0))
+            notify_inner = tk.Frame(notify_card, bg="#ffffff", padx=8, pady=8, cursor="hand2")
+            notify_inner.pack(fill="x")
+            tk.Label(notify_inner, text="!", bg="#fee2e2", fg=UI_ERROR, font=ui_font(10, bold=True), width=2).pack(side="left", padx=(0, 8))
+            tk.Label(notify_inner, text="Thông báo log", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True), anchor="w").pack(side="left", fill="x", expand=True)
+            self.admin_log_count_badge = tk.Label(
+                notify_inner,
+                text="0",
+                bg="#94a3b8",
+                fg="#ffffff",
+                font=ui_font(8, bold=True),
+                padx=7,
+                pady=2,
+            )
+            self.admin_log_count_badge.pack(side="right")
+            for widget in (notify_card, notify_inner):
+                widget.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
+            self.root.after(500, self._admin_log_badge_loop)
 
         sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=8 if (self.tiny_ui or self.micro_ui) else 12)
 

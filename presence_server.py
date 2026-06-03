@@ -138,10 +138,14 @@ def init_db(db_path: Path):
                 message TEXT DEFAULT '',
                 log_text TEXT DEFAULT '',
                 created_at TEXT DEFAULT '',
+                resolved_at TEXT DEFAULT '',
                 payload_json TEXT DEFAULT ''
             )
             """
         )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(error_logs)").fetchall()}
+        if "resolved_at" not in cols:
+            conn.execute("ALTER TABLE error_logs ADD COLUMN resolved_at TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -285,6 +289,7 @@ def insert_error_log(db_path: Path, payload: dict):
         "message": str(payload.get("message") or "").strip(),
         "log_text": str(payload.get("log_text") or "").strip()[-60000:],
         "created_at": now,
+        "resolved_at": "",
         "payload_json": json.dumps(payload, ensure_ascii=False),
     }
     with DB_LOCK, sqlite3.connect(db_path) as conn:
@@ -292,8 +297,8 @@ def insert_error_log(db_path: Path, payload: dict):
             """
             INSERT INTO error_logs (
                 machine_code, user_name, windows_user, computer_name,
-                role, app_kind, message, log_text, created_at, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                role, app_kind, message, log_text, created_at, resolved_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["machine_code"],
@@ -305,6 +310,7 @@ def insert_error_log(db_path: Path, payload: dict):
                 record["message"],
                 record["log_text"],
                 record["created_at"],
+                record["resolved_at"],
                 record["payload_json"],
             ),
         )
@@ -313,24 +319,40 @@ def insert_error_log(db_path: Path, payload: dict):
     return record
 
 
-def fetch_error_logs(db_path: Path, limit=100):
+def fetch_error_logs(db_path: Path, limit=100, unresolved_only=False):
     try:
         limit = max(1, min(300, int(limit or 100)))
     except Exception:
         limit = 100
     with DB_LOCK, sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        where_sql = "WHERE COALESCE(resolved_at, '') = ''" if unresolved_only else ""
         rows = conn.execute(
-            """
+            f"""
             SELECT id, machine_code, user_name, windows_user, computer_name,
-                   role, app_kind, message, log_text, created_at
+                   role, app_kind, message, log_text, created_at, resolved_at
             FROM error_logs
+            {where_sql}
             ORDER BY id DESC
             LIMIT ?
             """,
             (limit,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def resolve_error_log(db_path: Path, log_id):
+    try:
+        log_id = int(log_id)
+    except Exception:
+        return False
+    with DB_LOCK, sqlite3.connect(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE error_logs SET resolved_at = ? WHERE id = ?",
+            (utc_now(), log_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0
 
 
 class PresenceHandler(BaseHTTPRequestHandler):
@@ -424,7 +446,8 @@ class PresenceHandler(BaseHTTPRequestHandler):
         if path == "/error-logs":
             query = parse_qs(parsed_url.query or "")
             limit = (query.get("limit") or ["100"])[0]
-            logs = fetch_error_logs(server.db_path, limit=limit)
+            unresolved_only = str((query.get("unresolved") or [""])[0]).strip().lower() in {"1", "true", "yes"}
+            logs = fetch_error_logs(server.db_path, limit=limit, unresolved_only=unresolved_only)
             return self._send_json({"ok": True, "error_logs": logs})
         if path.startswith("/machines/"):
             machine_code = path.split("/", 2)[2].strip().upper()
@@ -460,6 +483,12 @@ class PresenceHandler(BaseHTTPRequestHandler):
             payload = self._read_json()
             record = insert_error_log(server.db_path, payload)
             return self._send_json({"ok": True, "error_log": record})
+        if path.startswith("/error-logs/") and path.endswith("/resolve"):
+            parts = [p for p in path.split("/") if p]
+            log_id = parts[1] if len(parts) >= 3 else ""
+            if not resolve_error_log(server.db_path, log_id):
+                return self._send_json({"ok": False, "error": "not_found"}, status=404)
+            return self._send_json({"ok": True, "id": log_id})
         if path.startswith("/approved-machines/"):
             machine_code = path.split("/", 2)[2].strip().upper()
             deleted = delete_approved_machine(server.db_path, machine_code)
