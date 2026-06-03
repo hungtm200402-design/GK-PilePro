@@ -16099,7 +16099,7 @@ del "%~f0" >nul 2>nul
 
         member_content = tk.Frame(user_inner, bg=UI_SURFACE)
 
-        member_content.place(relx=0.5, rely=0.5, anchor="center")
+        member_content.pack(fill="both", expand=True, pady=(7 if (self.tiny_ui or self.micro_ui) else 9, 5))
 
         if self.tiny_ui or self.micro_ui:
             self.sidebar_member_role_label = tk.Label(
@@ -16710,7 +16710,7 @@ del "%~f0" >nul 2>nul
                             spacer.configure(height=6)
                         member_box = getattr(self, "_sidebar_member_box", None)
                         if member_box is not None:
-                            member_box.configure(height=138 if (self.tiny_ui or self.micro_ui) else 154)
+                            member_box.configure(height=148 if (self.tiny_ui or self.micro_ui) else 164)
                     except Exception:
                         pass
                     return
@@ -16734,7 +16734,7 @@ del "%~f0" >nul 2>nul
                     target_height = max(target_height, scale_px(138 if (self.tiny_ui or self.micro_ui) else 154))
                 else:
                     target_height = max(0, int(anchor.winfo_height() or anchor.winfo_reqheight()))
-                    min_member_height = 112 if (self.tiny_ui or self.micro_ui) else 124
+                    min_member_height = 132 if (self.tiny_ui or self.micro_ui) else 146
                     if target_height:
                         target_height = max(target_height, scale_px(min_member_height))
                 if target_height and member_box.winfo_height() != target_height:
