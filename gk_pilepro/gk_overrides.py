@@ -1568,6 +1568,12 @@ def _v229_apply_rows_to_workbook(self, wb):
     except Exception:
         updated_total_cols = []
 
+    cleared_non_total_formula_cols = _v231_clear_non_total_measure_formulas(
+        ws,
+        total_row_after,
+        excel_headers=excel_headers,
+        no_col=no_col,
+    )
 
     force_workbook_recalculate(wb)
 
@@ -2912,6 +2918,10 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
         n = norm(header_by_col.get(int(col_idx), ""))
         if not n:
             return False
+        if n in {"1st", "2nd", "3rd", "4th", "5th", "6th", "d1", "d2", "d3", "d4", "d5", "d6"}:
+            return True
+        if any(tok in n for tok in ["luc ep", "force", "pressing force"]):
+            return True
         excluded_tokens = {
             "stt", "so tt", "no",
             "ngay", "ngay thi cong", "gio", "thoi gian", "bat dau", "ket thuc",
@@ -2928,10 +2938,8 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
         if _is_sum_excluded_header(col_idx):
             return False
         allowed_tokens = {
-            "1st", "2nd", "3rd", "4th", "5th", "6th",
-            "tong to hop", "to hop", "chieu dai", "chieu sau",
+            "tong to hop", "tong chieu dai", "chieu dai to hop",
             "do sau ep", "ep am", "ep duong", "ep am duong",
-            "luc ep", "tan", "khoi luong",
         }
         return any(tok in n for tok in allowed_tokens)
 
@@ -3179,7 +3187,34 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
     return result
 
 
+def _v231_is_non_total_measure_header(name):
+    n = norm(name)
+    if not n:
+        return False
+    if re.search(r"(^|\s)(1st|2nd|3rd|4th|5th|6th|d1|d2|d3|d4|d5|d6)(\s|$)", n):
+        return True
+    return any(tok in n for tok in ["luc ep", "force", "pressing force"])
 
+
+def _v231_clear_non_total_measure_formulas(ws, total_row, excel_headers=None, no_col=None):
+    cleared = []
+    for col_idx, name in (excel_headers or []):
+        try:
+            c = int(col_idx)
+        except Exception:
+            continue
+        if c == no_col:
+            continue
+        if not _v231_is_non_total_measure_header(name):
+            continue
+        try:
+            cell = ws.cell(total_row, c)
+            if _v229_is_formula(cell.value):
+                cell.value = None
+                cleared.append(c)
+        except Exception:
+            pass
+    return cleared
 
 
 def _v231_apply_rows_to_workbook(self, wb):
@@ -3535,6 +3570,10 @@ def _v231_apply_rows_to_workbook(self, wb):
         "sum_last_row_before_total": sum_last_row,
 
         "updated_total_cols": updated_total_cols,
+        "cleared_non_total_formula_cols": [
+            {"col": c, "letter": get_column_letter(c)}
+            for c in cleared_non_total_formula_cols
+        ],
 
         "sum_columns": [
 

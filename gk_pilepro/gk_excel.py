@@ -2162,6 +2162,10 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
         n = norm(name)
         if not n:
             return False
+        if n in {"1st", "2nd", "3rd", "4th", "5th", "6th", "d1", "d2", "d3", "d4", "d5", "d6"}:
+            return True
+        if any(tok in n for tok in ["luc ep", "force", "pressing force"]):
+            return True
         excluded_tokens = {
             "stt", "so tt", "no",
             "ngay", "ngay thi cong", "gio", "bat dau", "ket thuc", "thoi gian",
@@ -2179,11 +2183,9 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
         if _header_excludes_total(name):
             return False
         return any(tok in n for tok in [
-            "1st", "2nd", "3rd", "4th", "5th", "6th",
-            "to hop", "tong to hop", "chieu dai", "chieu sau",
-            "tai trong", "khoi luong", "do sau", "khoi luong ep",
-            "ep thuc te", "ep am", "ep duong", "ep am duong",
-            "luc ep", "do dai", "m)", "(m)", "(t)", "tan",
+            "tong to hop", "tong chieu dai", "chieu dai to hop",
+            "do sau ep", "ep thuc te",
+            "ep am", "ep duong", "ep am duong",
         ]) or is_actual_pressing_depth_header(n)
 
     def _col_has_numeric_data(col_idx):
