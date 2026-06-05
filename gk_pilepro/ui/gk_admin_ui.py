@@ -88,6 +88,11 @@ def open_admin_log_panel(self):
     if getattr(self, "admin_log_panel", None) is not None:
         try:
             if self.admin_log_panel.winfo_exists():
+    if not is_admin_build():
+        return
+    if getattr(self, "admin_log_panel", None) is not None:
+        try:
+            if self.admin_log_panel.winfo_exists():
                 self.admin_log_panel.lift()
                 self.admin_log_panel.focus_force()
                 return
@@ -95,6 +100,7 @@ def open_admin_log_panel(self):
             pass
 
     win = tk.Toplevel(self.root)
+    win.transient(self.root)
     win.title("Thông báo log")
     win.configure(bg="#f3f6fb")
     self.admin_log_panel = win
@@ -158,6 +164,23 @@ def open_admin_log_panel(self):
         return None
 
     def detail_text(row):
+        log_text = str(row.get('log_text', ''))
+        import re
+        blocks = re.split(r"={10,}", log_text)
+        error_blocks = []
+        for b in blocks:
+            b_strip = b.strip()
+            if not b_strip:
+                continue
+            if "NoneType: None" in b_strip and "Traceback" not in b_strip and "error:" not in b_strip.lower() and "Exception" not in b_strip:
+                continue
+            error_blocks.append(b_strip)
+            
+        if error_blocks:
+            display_log = "\n" + ("=" * 80) + "\n".join(["\n" + b + "\n" + ("=" * 80) for b in error_blocks])
+        else:
+            display_log = "Hiện tại không có lỗi."
+
         return (
             f"Thời gian: {row.get('created_at', '')}\n"
             f"Mã máy: {row.get('machine_code', '')}\n"
@@ -168,7 +191,7 @@ def open_admin_log_panel(self):
             f"Trạng thái: {'Đã hoàn thành' if row.get('resolved_at') else 'Chưa xử lý'}\n\n"
             f"Kiểm tra log: {'Hợp lệ' if row.get('hash_ok') else 'Có dấu hiệu bị sửa hoặc log cũ chưa có hash'}\n"
             f"Mã hash: {row.get('log_hash', '')}\n\n"
-            f"Nội dung log:\n{row.get('log_text', '')}"
+            f"Nội dung log:\n{display_log}"
         )
 
     def show_detail():
@@ -177,6 +200,7 @@ def open_admin_log_panel(self):
             messagebox.showinfo("Thông báo log", "Chọn một dòng log trước.")
             return
         top = tk.Toplevel(win)
+        top.transient(win)
         top.title("Chi tiết log lỗi")
         top.configure(bg="#f3f6fb")
         self._fit_dialog_to_screen(top, 860, 600, min_w=780, min_h=500, max_ratio=0.82, lock_size=False)
@@ -276,6 +300,7 @@ def open_admin_backup_panel(self):
     if not is_admin_build():
         return
     win = tk.Toplevel(self.root)
+    win.transient(self.root)
     win.title("Backup Excel")
     win.configure(bg="#f3f6fb")
     self._fit_dialog_to_screen(win, 960, 640, min_w=840, min_h=600, max_ratio=0.9, lock_size=False)
@@ -390,9 +415,40 @@ def open_admin_backup_panel(self):
         except Exception as exc:
             messagebox.showerror("Backup Excel", f"Không khôi phục được backup:\n{exc}")
 
+    def show_detail():
+        row = selected_backup()
+        if not row:
+            messagebox.showinfo("Backup Excel", "Chọn một backup trước.")
+            return
+        top = tk.Toplevel(win)
+        top.title("Chi tiết backup")
+        top.transient(win)
+        top.configure(bg="#f3f6fb")
+        self._fit_dialog_to_screen(top, 660, 420, min_w=500, min_h=300, max_ratio=0.8, lock_size=False)
+        wrap = tk.Frame(top, bg="#f3f6fb", padx=18, pady=18)
+        wrap.pack(fill="both", expand=True)
+        tk.Label(wrap, text="Chi tiết backup", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
+        tk.Label(wrap, text=f"{row.get('name', '')}", bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 12))
+        text = tk.Text(wrap, wrap="word", bg="#0f172a", fg="#e5edf7", insertbackground="#e5edf7", relief="flat", bd=0, font=("Consolas", 10), padx=12, pady=10)
+        text.pack(fill="both", expand=True)
+        content = (
+            f"Tên backup: {row.get('name', '')}\n"
+            f"Thời gian tạo: {row.get('modified_at', '')}\n"
+            f"Dung lượng: {format_size(row.get('size'))}\n\n"
+            f"Vị trí lưu đầy đủ:\n{row.get('path', '')}"
+        )
+        text.insert("1.0", content)
+        text.configure(state="disabled")
+        actions_top = tk.Frame(wrap, bg="#f3f6fb")
+        actions_top.pack(fill="x", pady=(12, 0))
+        ui_button(actions_top, "Copy đường dẫn", lambda: (self.root.clipboard_clear(), self.root.clipboard_append(row.get('path', ''))), width=16, variant="soft").pack(side="left")
+        ui_button(actions_top, "Đóng", top.destroy, width=8, variant="default").pack(side="right")
+        self._center_dialog_on_screen(top)
+
     actions = tk.Frame(body, bg="#f3f6fb")
     actions.pack(fill="x", pady=(12, 0))
     ui_button(actions, "Tải lại", refresh, width=9, variant="soft").pack(side="left")
+    ui_button(actions, "Xem chi tiết", show_detail, width=12, variant="primary").pack(side="left", padx=(8, 0))
     ui_button(actions, "Khôi phục", restore_selected, width=11, variant="success").pack(side="left", padx=(8, 0))
     ui_button(actions, "Đóng", win.destroy, width=8, variant="default").pack(side="right")
     tree.bind("<<TreeviewSelect>>", update_detail)

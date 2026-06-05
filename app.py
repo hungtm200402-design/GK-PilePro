@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 
 import os
 
@@ -57,9 +57,9 @@ from tkinter import filedialog, messagebox, ttk
 
 
 
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk # type: ignore
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv # type: ignore
 
 from openpyxl import load_workbook
 
