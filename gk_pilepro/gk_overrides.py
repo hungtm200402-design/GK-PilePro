@@ -877,11 +877,44 @@ def _v229_normalize_mapping_to_excel_columns(source_cols, mapping, excel_headers
 
 
 
-def _v229_safe_copy_row(ws, src_row, dst_row):
+def _v229_table_max_col(no_col=None, mapping=None, sum_columns=None, excel_headers=None):
+    cols = []
+    for source in (mapping or []):
+        try:
+            if source:
+                cols.append(int(source))
+        except Exception:
+            pass
+    for source in (sum_columns or []):
+        try:
+            if source:
+                cols.append(int(source))
+        except Exception:
+            pass
+    for item in (excel_headers or []):
+        try:
+            cols.append(int(item[0]))
+        except Exception:
+            pass
+    try:
+        if no_col:
+            cols.append(int(no_col))
+    except Exception:
+        pass
+    return max(cols) if cols else None
+
+
+def _v229_safe_copy_row(ws, src_row, dst_row, max_col=None):
+    try:
+        max_col = int(max_col or 0)
+    except Exception:
+        max_col = 0
+    if max_col <= 0:
+        max_col = min(int(ws.max_column or 1), 32)
 
     try:
 
-        copy_style_row(ws, src_row, dst_row, ws.max_column)
+        copy_style_row(ws, src_row, dst_row, max_col)
 
     except Exception:
 
@@ -1432,6 +1465,7 @@ def _v229_apply_rows_to_workbook(self, wb):
     first_data_row, style_row, last_no = _v229_find_stt_before_total(ws, no_col, header_row, total_row)
 
     sum_columns = _v229_capture_sum_columns(ws, total_row, first_data_row, total_row - 1, no_col)
+    table_max_col = _v229_table_max_col(no_col, mapping, sum_columns, excel_headers)
 
 
 
@@ -1457,7 +1491,7 @@ def _v229_apply_rows_to_workbook(self, wb):
 
         dst_row = target_rows[i]
 
-        _v229_safe_copy_row(ws, style_row, dst_row)
+        _v229_safe_copy_row(ws, style_row, dst_row, table_max_col)
 
 
 
@@ -2011,6 +2045,7 @@ def _v23_apply_rows_to_workbook(self, wb):
     first_data_row, style_row, last_no = _v229_find_stt_before_total(ws, no_col, header_row, total_row)
 
     sum_columns = _v229_capture_sum_columns(ws, total_row, first_data_row, total_row - 1, no_col)
+    table_max_col = _v229_table_max_col(no_col, mapping, sum_columns, excel_headers)
 
 
 
@@ -2032,7 +2067,7 @@ def _v23_apply_rows_to_workbook(self, wb):
 
         dst_row = target_rows[i]
 
-        _v229_safe_copy_row(ws, style_row, dst_row)
+        _v229_safe_copy_row(ws, style_row, dst_row, table_max_col)
 
 
 
@@ -3255,6 +3290,7 @@ def _v231_apply_rows_to_workbook(self, wb):
         formula_profile=formula_profile,
 
     )
+    table_max_col = _v229_table_max_col(no_col, mapping, sum_col_first_rows.keys(), excel_headers)
 
 
 
@@ -3327,7 +3363,7 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         if dst_row >= total_row:
 
-            _v229_safe_copy_row(ws, style_row, dst_row)
+            _v229_safe_copy_row(ws, style_row, dst_row, table_max_col)
 
         self._safe_set_cell_value(ws, dst_row, no_col, last_no + i + 1)
 

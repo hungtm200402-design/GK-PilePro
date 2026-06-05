@@ -278,13 +278,13 @@ def open_admin_backup_panel(self):
     win = tk.Toplevel(self.root)
     win.title("Backup Excel")
     win.configure(bg="#f3f6fb")
-    self._fit_dialog_to_screen(win, 900, 560, min_w=760, min_h=480, max_ratio=0.82, lock_size=False)
+    self._fit_dialog_to_screen(win, 940, 620, min_w=820, min_h=540, max_ratio=0.88, lock_size=False)
 
-    body = tk.Frame(win, bg="#f3f6fb", padx=18, pady=18)
+    body = tk.Frame(win, bg="#f3f6fb", padx=20, pady=18)
     body.pack(fill="both", expand=True)
     tk.Label(body, text="Backup Excel", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
     summary_var = tk.StringVar(value="Chọn backup rồi chọn file Excel cần khôi phục.")
-    tk.Label(body, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 12))
+    tk.Label(body, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 10))
 
     table_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
     table_card.pack(fill="both", expand=True)
@@ -293,20 +293,48 @@ def open_admin_backup_panel(self):
     table_frame.rowconfigure(0, weight=1)
     table_frame.columnconfigure(0, weight=1)
 
-    tree = ttk.Treeview(table_frame, columns=("time", "name", "size", "path"), show="headings", height=10)
+    tree = ttk.Treeview(table_frame, columns=("time", "name", "size", "path"), show="headings", height=11)
     for col, text, width, anchor in (
-        ("time", "Thời gian", 150, "center"),
-        ("name", "Tên backup", 240, "w"),
-        ("size", "Dung lượng", 90, "center"),
-        ("path", "Đường dẫn", 420, "w"),
+        ("time", "Thời gian", 160, "center"),
+        ("name", "Tên backup", 330, "w"),
+        ("size", "Dung lượng", 110, "center"),
+        ("path", "Vị trí lưu", 250, "w"),
     ):
         tree.heading(col, text=text)
-        tree.column(col, width=width, anchor=anchor, stretch=(col == "path"))
+        tree.column(col, width=width, anchor=anchor, stretch=(col in ("name", "path")))
     scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
     tree.configure(yscrollcommand=scroll.set)
     tree.grid(row=0, column=0, sticky="nsew")
     scroll.grid(row=0, column=1, sticky="ns")
     rows_cache = {"rows": []}
+
+    detail_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+    detail_card.pack(fill="x", pady=(10, 0))
+    detail_inner = tk.Frame(detail_card, bg="#ffffff", padx=12, pady=10)
+    detail_inner.pack(fill="x")
+    detail_var = tk.StringVar(value="Chưa chọn backup.")
+    tk.Label(detail_inner, text="Chi tiết backup", bg="#ffffff", fg=UI_TEXT, font=ui_font(10, bold=True)).pack(anchor="w")
+    tk.Label(detail_inner, textvariable=detail_var, bg="#ffffff", fg=UI_MUTED, font=ui_font(9), justify="left", wraplength=860).pack(anchor="w", pady=(4, 0))
+
+    def format_size(size):
+        try:
+            value = int(size or 0)
+        except Exception:
+            return str(size or "")
+        if value >= 1024 * 1024:
+            return f"{value / (1024 * 1024):.1f} MB"
+        if value >= 1024:
+            return f"{value / 1024:.1f} KB"
+        return f"{value} B"
+
+    def short_path(path):
+        path = str(path or "")
+        if len(path) <= 52:
+            return path
+        parts = re.split(r"[\\/]+", path)
+        if len(parts) >= 3:
+            return f"{parts[0]}\\...\\{parts[-2]}\\{parts[-1]}"
+        return f"...{path[-49:]}"
 
     def selected_backup():
         selected = tree.selection()
@@ -321,8 +349,25 @@ def open_admin_backup_panel(self):
         rows_cache["rows"] = rows
         tree.delete(*tree.get_children())
         for idx, row in enumerate(rows):
-            tree.insert("", "end", iid=str(idx), values=(row.get("modified_at", ""), row.get("name", ""), row.get("size", ""), row.get("path", "")))
+            tree.insert(
+                "",
+                "end",
+                iid=str(idx),
+                values=(row.get("modified_at", ""), row.get("name", ""), format_size(row.get("size")), short_path(row.get("path"))),
+            )
         summary_var.set(f"{len(rows)} backup Excel gần nhất." if rows else "Chưa có backup Excel.")
+        detail_var.set("Chưa chọn backup.")
+
+    def update_detail(*_args):
+        row = selected_backup()
+        if not row:
+            detail_var.set("Chưa chọn backup.")
+            return
+        detail_var.set(
+            f"Tên: {row.get('name', '')}\n"
+            f"Dung lượng: {format_size(row.get('size'))}\n"
+            f"Đường dẫn: {row.get('path', '')}"
+        )
 
     def restore_selected():
         row = selected_backup()
@@ -346,6 +391,7 @@ def open_admin_backup_panel(self):
     ui_button(actions, "Tải lại", refresh, width=9, variant="soft").pack(side="left")
     ui_button(actions, "Khôi phục", restore_selected, width=11, variant="success").pack(side="left", padx=(8, 0))
     ui_button(actions, "Đóng", win.destroy, width=8, variant="default").pack(side="right")
+    tree.bind("<<TreeviewSelect>>", update_detail)
     refresh()
     self._center_dialog_on_screen(win)
 
