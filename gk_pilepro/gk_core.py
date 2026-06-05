@@ -111,12 +111,21 @@ def write_role_error_log(context, exc=None, extra=None):
                 lines.append(f"extra: {extra}")
         if exc is not None:
             lines.append(f"error: {exc}")
-        lines.append(traceback.format_exc())
+            lines.append(traceback.format_exc())
         with path.open("a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         return path
     except Exception:
         return None
+
+
+def clean_role_log_text_for_report(log_text):
+    text = str(log_text or "")
+    empty_marker = "Chưa có lỗi nào được ghi nhận."
+    separator = "=" * 80
+    if separator in text:
+        text = text[text.find(separator):].strip()
+    return text or empty_marker
 
 
 def report_runtime_error_to_admin(context, exc=None, extra=None, error_file_name=None, notify_server=True):
@@ -150,6 +159,7 @@ def report_runtime_error_to_admin(context, exc=None, extra=None, error_file_name
                         log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
                 except Exception:
                     log_text = ""
+                log_text = clean_role_log_text_for_report(log_text)
                 payload = {
                     "machine_code": get_machine_code(),
                     "user_name": resolve_member_display_name(get_machine_code()),

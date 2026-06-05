@@ -3532,6 +3532,12 @@ def _v231_apply_rows_to_workbook(self, wb):
     except Exception:
         updated_total_cols = []
 
+    cleared_non_total_formula_cols = _v231_clear_non_total_measure_formulas(
+        ws,
+        total_row_after,
+        excel_headers=excel_headers,
+        no_col=no_col,
+    )
 
     force_workbook_recalculate(wb)
 

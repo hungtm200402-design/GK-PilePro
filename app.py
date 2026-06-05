@@ -81,6 +81,7 @@ from gk_pilepro.gk_core import (
     app_data_path,
     role_log_path,
     write_role_error_log,
+    clean_role_log_text_for_report,
     backup_file,
     validate_excel_before_write,
     last_run_dir,
@@ -559,6 +560,7 @@ class App:
                 log_text = "Không đọc được nội dung log."
             if not log_text.strip():
                 log_text = "Chưa có lỗi nào được ghi nhận."
+            log_text = clean_role_log_text_for_report(log_text)
 
             server_url = presence_server_url_from_env()
             payload = {
