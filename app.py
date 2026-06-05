@@ -3669,18 +3669,12 @@ del "%~f0" >nul 2>nul
                         pass
                     return
                 member_box = getattr(self, "_sidebar_member_box", None)
-                anchor = getattr(self, "_workflow_anchor_card", None)
-                if spacer is None or member_box is None or anchor is None:
+                if spacer is None or member_box is None:
                     return
                 self.root.update_idletasks()
-                if not spacer.winfo_exists() or not member_box.winfo_exists() or not anchor.winfo_exists():
+                if not spacer.winfo_exists() or not member_box.winfo_exists():
                     return
-                target_top = anchor.winfo_rooty() - sidebar.winfo_rooty()
-                target_top -= scale_px(48 if (self.tiny_ui or self.micro_ui) else 62)
-                max_top = max(0, int(sidebar.winfo_height() - member_box.winfo_reqheight() - scale_px(12)))
-                target_top = min(int(target_top), max_top)
-                current_top = spacer.winfo_y()
-                new_height = max(0, int(target_top - current_top))
+                new_height = scale_px(10 if (self.tiny_ui or self.micro_ui) else 14)
                 if new_height != int(str(spacer.cget("height") or 0)):
                     spacer.configure(height=new_height)
                 if is_admin_build():
