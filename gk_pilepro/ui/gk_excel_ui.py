@@ -909,37 +909,71 @@ def _remember_selected_excel_file(self, path):
     self._sync_excel_recent_sidebar()
 
 
+def _select_loaded_workbook_sheet(self, sheets, profiles, prefer_previous=False):
+    previous_sheet = self.sheet_var.get() if hasattr(self, "sheet_var") else ""
+    active_sheet = ""
+    try:
+        active_sheet = self.workbook.active.title
+    except Exception:
+        active_sheet = ""
+
+    selected = ""
+    if prefer_previous and previous_sheet in sheets:
+        selected = previous_sheet
+    elif active_sheet in sheets:
+        selected = active_sheet
+    else:
+        best = choose_best_sheet_profile(profiles)
+        if best and best.get("sheet") in sheets:
+            selected = best["sheet"]
+        elif sheets:
+            selected = sheets[0]
+
+    if selected:
+        self.sheet_var.set(selected)
+        try:
+            self.sheet_combo.current(sheets.index(selected))
+        except Exception:
+            try:
+                self.sheet_combo.set(selected)
+            except Exception:
+                pass
+    return selected
+
+
+def _visible_workbook_sheet_names(workbook):
+    names = []
+    try:
+        for ws in workbook.worksheets:
+            if getattr(ws, "sheet_state", "visible") == "visible":
+                names.append(ws.title)
+    except Exception:
+        names = []
+    return names or list(getattr(workbook, "sheetnames", []) or [])
+
+
 def _load_excel_file(self, path):
 
-    self.excel_path = str(Path(path).resolve())
+    previous_path = getattr(self, "excel_path", "")
+    resolved_path = str(Path(path).resolve())
+    prefer_previous = bool(previous_path and self._excel_file_key(previous_path) == self._excel_file_key(resolved_path))
+
+    self.excel_path = resolved_path
 
     self.workbook = load_workbook(self.excel_path, data_only=False)
 
-    sheets = self.workbook.sheetnames
+    sheets = _visible_workbook_sheet_names(self.workbook)
 
-    self.sheet_combo["values"] = sheets
+    try:
+        self.sheet_combo.set_values(sheets)
+    except Exception:
+        self.sheet_combo["values"] = sheets
 
 
 
     profiles = self._profile_workbook(self.excel_path)
 
-    best = choose_best_sheet_profile(profiles)
-
-
-
-    if best and best.get("sheet") in sheets:
-
-        self.sheet_var.set(best["sheet"])
-
-        self.sheet_combo.current(sheets.index(best["sheet"]))
-
-    elif sheets:
-
-        self.sheet_combo.current(0)
-
-        self.sheet_var.set(sheets[0])
-
-
+    selected_sheet = self._select_loaded_workbook_sheet(sheets, profiles, prefer_previous=prefer_previous)
 
     out = last_run_dir()
 
@@ -955,7 +989,7 @@ def _load_excel_file(self, path):
 
     self.excel_recent_selected_key = self._excel_file_key(self.excel_path)
 
-    self._set_status("Đã đọc toàn bộ file Excel và tự chọn sheet phù hợp.", "success")
+    self._set_status(f"Đã đọc Excel: {len(sheets)} sheet. Đang chọn sheet {selected_sheet or 'trống'}.", "success")
 
     if not self.current_workflow_id:
 
@@ -1639,6 +1673,8 @@ def install_excel_ui(app_cls):
     app_cls._render_mapping_templates = _render_mapping_templates
     app_cls._set_excel_recent_mode = _set_excel_recent_mode
     app_cls._remember_selected_excel_file = _remember_selected_excel_file
+    app_cls._visible_workbook_sheet_names = _visible_workbook_sheet_names
+    app_cls._select_loaded_workbook_sheet = _select_loaded_workbook_sheet
     app_cls._load_excel_file = _load_excel_file
     app_cls.read_current_excel_formulas = read_current_excel_formulas
     app_cls.scan_excel_folder = scan_excel_folder

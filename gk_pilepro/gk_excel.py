@@ -2282,6 +2282,32 @@ def group_of(s):
     return {ns}
 
 
+def _to_hop_slot_index(name):
+    n = norm(name)
+    if not n:
+        return None
+    direct = {
+        "d1": 1, "đ1": 1, "1st": 1,
+        "d2": 2, "đ2": 2, "2nd": 2,
+        "d3": 3, "đ3": 3, "3rd": 3,
+        "d4": 4, "đ4": 4, "4th": 4,
+        "d5": 5, "đ5": 5, "5th": 5,
+        "d6": 6, "đ6": 6, "6th": 6,
+    }
+    if n in direct:
+        return direct[n]
+    m = re.search(r"(^|\s)(d|đ)\s*([1-6])(\s|$)", n)
+    if m:
+        return int(m.group(3))
+    m = re.search(r"(^|\s)([1-6])(st|nd|rd|th)(\s|$)", n)
+    if m:
+        return int(m.group(2))
+    m = re.search(r"(to hop|cot to hop|to hop coc)\s*([1-6])", n)
+    if m:
+        return int(m.group(2))
+    return None
+
+
 
 def auto_map_columns(source_cols, excel_headers):
 
@@ -2307,9 +2333,28 @@ def auto_map_columns(source_cols, excel_headers):
 
     candidates = []
 
+    # Map D1/D2/D3... to the matching 1st/2nd/3rd... sub-column before fuzzy matching.
+    for s_idx, src in enumerate(source_cols):
+        if is_no_header(src):
+            continue
+        src_slot = _to_hop_slot_index(src)
+        if not src_slot:
+            continue
+        for e_idx, ex in enumerate(excel_names):
+            if e_idx in used_excel_idx:
+                continue
+            if _to_hop_slot_index(ex) == src_slot:
+                result[s_idx] = e_idx
+                used_excel_idx.add(e_idx)
+                break
+
 
 
     for s_idx, src in enumerate(source_cols):
+
+        if result[s_idx] is not None:
+
+            continue
 
         srcn = norm(src)
 
@@ -2352,6 +2397,9 @@ def auto_map_columns(source_cols, excel_headers):
             if srcn in {"d1","d2","d3","d4","d5","d6"} and exn == srcn:
 
                 score = 110
+            if _to_hop_slot_index(src) and _to_hop_slot_index(src) == _to_hop_slot_index(ex):
+
+                score = max(score, 120)
 
             if srcn in {"bat dau", "gio bat dau", "start"} and ("bat dau" in exn or exn == "start"):
 

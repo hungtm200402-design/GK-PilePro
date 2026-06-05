@@ -547,60 +547,71 @@ class App:
             pass
 
     def _send_log_to_admin(self):
-        try:
-            log_path = role_log_path()
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            created_empty_log = False
-            if not log_path.exists():
-                log_path.write_text("Chưa có lỗi nào được ghi nhận.\n", encoding="utf-8")
-                created_empty_log = True
+        self._set_status("Đang gửi log...", "warn")
+
+        def _do_send():
             try:
-                log_text = log_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                log_text = "Không đọc được nội dung log."
-            if not log_text.strip():
-                log_text = "Chưa có lỗi nào được ghi nhận."
-            log_text = clean_role_log_text_for_report(log_text)
+                log_path = role_log_path()
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                if not log_path.exists():
+                    log_path.write_text("Chưa có lỗi nào được ghi nhận.\n", encoding="utf-8")
+                try:
+                    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    log_text = "Không đọc được nội dung log."
+                if not log_text.strip():
+                    log_text = "Chưa có lỗi nào được ghi nhận."
+                log_text = clean_role_log_text_for_report(log_text)
 
-            server_url = presence_server_url_from_env()
-            payload = {
-                "machine_code": get_machine_code(),
-                "user_name": resolve_member_display_name(get_machine_code()),
-                "windows_user": os.environ.get("USERNAME", ""),
-                "computer_name": os.environ.get("COMPUTERNAME", socket.gethostname()),
-                "role": "Admin" if is_admin_build() else "User",
-                "app_kind": "admin" if is_admin_build() else "user",
-                "message": "User gửi log lỗi" if not is_admin_build() else "Admin gửi log lỗi",
-                "log_text": log_text[-60000:],
-                "log_path": str(log_path),
-            }
+                server_url = presence_server_url_from_env()
+                payload = {
+                    "machine_code": get_machine_code(),
+                    "user_name": resolve_member_display_name(get_machine_code()),
+                    "windows_user": os.environ.get("USERNAME", ""),
+                    "computer_name": os.environ.get("COMPUTERNAME", socket.gethostname()),
+                    "role": "Admin" if is_admin_build() else "User",
+                    "app_kind": "admin" if is_admin_build() else "user",
+                    "message": "User gửi log lỗi" if not is_admin_build() else "Admin gửi log lỗi",
+                    "log_text": log_text[-60000:],
+                    "log_path": str(log_path),
+                }
 
-            if not check_presence_server_alive(server_url, timeout=0.7):
-                self._set_status("Không gửi được log: server chưa bật.", "error")
-                messagebox.showwarning(
-                    "Gửi log cho Admin",
-                    "Chưa gửi được log vì server Admin chưa bật.\n\nVui lòng báo Admin bật server rồi bấm gửi lại.",
-                )
-                return
+                if not check_presence_server_alive(server_url, timeout=0.7):
+                    def _on_server_down():
+                        self._set_status("Không gửi được log: server chưa bật.", "error")
+                        messagebox.showwarning(
+                            "Gửi log cho Admin",
+                            "Chưa gửi được log vì server Admin chưa bật.\n\nVui lòng báo Admin bật server rồi bấm gửi lại.",
+                        )
+                    self.root.after(0, _on_server_down)
+                    return
 
-            if not send_presence_error_log(server_url, payload, timeout=5):
-                self._set_status("Không gửi được log lên server.", "error")
-                messagebox.showerror(
-                    "Gửi log cho Admin",
-                    "Không gửi được log lên server.\n\nVui lòng thử lại hoặc báo Admin kiểm tra server.",
-                )
-                return
+                if not send_presence_error_log(server_url, payload, timeout=5):
+                    def _on_send_fail():
+                        self._set_status("Không gửi được log lên server.", "error")
+                        messagebox.showerror(
+                            "Gửi log cho Admin",
+                            "Không gửi được log lên server.\n\nVui lòng thử lại hoặc báo Admin kiểm tra server.",
+                        )
+                    self.root.after(0, _on_send_fail)
+                    return
 
-            self._set_status("Đã gửi log cho Admin.", "success")
-            messagebox.showinfo(
-                "Gửi log cho Admin",
-                "Admin đã nhận được log.\n\nThông tin đã gửi gồm mã máy, tên máy Windows, user Windows và nội dung lỗi.",
-            )
-        except Exception as exc:
-            write_role_error_log("send_log_to_admin", exc)
-            self._set_status("Không chuẩn bị được log.", "error")
-            messagebox.showerror("Gửi log cho Admin", f"Không chuẩn bị được file log:\n{exc}")
+                def _on_success():
+                    self._set_status("Đã gửi log cho Admin.", "success")
+                    messagebox.showinfo(
+                        "Gửi log cho Admin",
+                        "Admin đã nhận được log.\n\nThông tin đã gửi gồm mã máy, tên máy Windows, user Windows và nội dung lỗi.",
+                    )
+                self.root.after(0, _on_success)
 
+            except Exception as exc:
+                write_role_error_log("send_log_to_admin", exc)
+                def _on_exc(e=exc):
+                    self._set_status("Không chuẩn bị được log.", "error")
+                    messagebox.showerror("Gửi log cho Admin", f"Không chuẩn bị được file log:\n{e}")
+                self.root.after(0, _on_exc)
+
+        threading.Thread(target=_do_send, daemon=True).start()
 
 
     def _restart_process(self):
@@ -1065,7 +1076,7 @@ class App:
                 self.root.lift()
 
                 try:
-                    self._set_status("Máy đã kết nối server trạng thái.", "success")
+                    pass
 
                 except Exception:
 
@@ -1693,6 +1704,10 @@ class App:
 
                                     self._presence_server_down_notified = False
                                     self._presence_server_down_dialog_shown = False
+                                    try:
+                                        self.root.after(0, lambda: self._set_status("Máy đã kết nối server trạng thái.", "success"))
+                                    except Exception:
+                                        pass
 
                             self._apply_user_visibility()
 
@@ -3086,13 +3101,14 @@ del "%~f0" >nul 2>nul
         if not is_admin_build():
             log_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
             log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
-            ui_button(
+            self._log_btn = ui_button(
                 log_btn_row,
                 "Gửi log",
                 self._send_log_to_admin,
                 width=9 if (self.tiny_ui or self.micro_ui) else 10,
                 variant="soft",
-            ).pack(anchor="center")
+            )
+            self._log_btn.pack(anchor="center")
 
         main = tk.Frame(shell, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
 
