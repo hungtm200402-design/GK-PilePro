@@ -5,7 +5,7 @@ import threading
 import tkinter as tk
 import unicodedata
 from datetime import datetime
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from gk_pilepro.gk_core import (
     delete_admin_approved_machine,
@@ -14,10 +14,12 @@ from gk_pilepro.gk_core import (
     import_local_approval_to_admin_list,
     is_admin_build,
     is_machine_active_recently,
+    list_backup_files,
     load_admin_approved_machines,
     parse_machine_datetime,
     presence_server_url_from_env,
     remember_admin_approved_machine,
+    restore_backup_file,
     resolve_presence_error_log,
     resolve_presence_server_url,
     sync_presence_machines_to_admin_list,
@@ -164,6 +166,8 @@ def open_admin_log_panel(self):
             f"Tên máy Windows: {row.get('computer_name', '')}\n"
             f"Vai trò: {row.get('role', '')}\n"
             f"Trạng thái: {'Đã hoàn thành' if row.get('resolved_at') else 'Chưa xử lý'}\n\n"
+            f"Kiểm tra log: {'Hợp lệ' if row.get('hash_ok') else 'Có dấu hiệu bị sửa hoặc log cũ chưa có hash'}\n"
+            f"Mã hash: {row.get('log_hash', '')}\n\n"
             f"Nội dung log:\n{row.get('log_text', '')}"
         )
 
@@ -268,6 +272,84 @@ def open_admin_log_panel(self):
     self._center_dialog_on_screen(win)
 
 
+def open_admin_backup_panel(self):
+    if not is_admin_build():
+        return
+    win = tk.Toplevel(self.root)
+    win.title("Backup Excel")
+    win.configure(bg="#f3f6fb")
+    self._fit_dialog_to_screen(win, 900, 560, min_w=760, min_h=480, max_ratio=0.82, lock_size=False)
+
+    body = tk.Frame(win, bg="#f3f6fb", padx=18, pady=18)
+    body.pack(fill="both", expand=True)
+    tk.Label(body, text="Backup Excel", bg="#f3f6fb", fg=UI_TEXT, font=ui_font(16, bold=True)).pack(anchor="w")
+    summary_var = tk.StringVar(value="Chọn backup rồi chọn file Excel cần khôi phục.")
+    tk.Label(body, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 12))
+
+    table_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
+    table_card.pack(fill="both", expand=True)
+    table_frame = tk.Frame(table_card, bg="#ffffff", padx=12, pady=12)
+    table_frame.pack(fill="both", expand=True)
+    table_frame.rowconfigure(0, weight=1)
+    table_frame.columnconfigure(0, weight=1)
+
+    tree = ttk.Treeview(table_frame, columns=("time", "name", "size", "path"), show="headings", height=10)
+    for col, text, width, anchor in (
+        ("time", "Thời gian", 150, "center"),
+        ("name", "Tên backup", 240, "w"),
+        ("size", "Dung lượng", 90, "center"),
+        ("path", "Đường dẫn", 420, "w"),
+    ):
+        tree.heading(col, text=text)
+        tree.column(col, width=width, anchor=anchor, stretch=(col == "path"))
+    scroll = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scroll.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    scroll.grid(row=0, column=1, sticky="ns")
+    rows_cache = {"rows": []}
+
+    def selected_backup():
+        selected = tree.selection()
+        if not selected:
+            return None
+        idx = int(selected[0])
+        rows = rows_cache.get("rows") or []
+        return rows[idx] if 0 <= idx < len(rows) else None
+
+    def refresh():
+        rows = list_backup_files("excel", limit=300)
+        rows_cache["rows"] = rows
+        tree.delete(*tree.get_children())
+        for idx, row in enumerate(rows):
+            tree.insert("", "end", iid=str(idx), values=(row.get("modified_at", ""), row.get("name", ""), row.get("size", ""), row.get("path", "")))
+        summary_var.set(f"{len(rows)} backup Excel gần nhất." if rows else "Chưa có backup Excel.")
+
+    def restore_selected():
+        row = selected_backup()
+        if not row:
+            messagebox.showinfo("Backup Excel", "Chọn một backup trước.")
+            return
+        target = filedialog.askopenfilename(title="Chọn file Excel cần khôi phục", filetypes=[("Excel", "*.xlsx *.xlsm"), ("Tất cả", "*.*")])
+        if not target:
+            return
+        if not messagebox.askyesno("Khôi phục backup", f"Khôi phục backup này vào file Excel đã chọn?\n\nBackup: {row.get('name')}\nFile đích: {target}\n\nApp sẽ tạo thêm một backup trước khi ghi đè."):
+            return
+        try:
+            pre = restore_backup_file(row.get("path"), target)
+            self._set_status("Đã khôi phục backup Excel.", "success")
+            messagebox.showinfo("Backup Excel", f"Đã khôi phục backup.\nBackup trước khi ghi đè: {pre or 'Không có'}")
+        except Exception as exc:
+            messagebox.showerror("Backup Excel", f"Không khôi phục được backup:\n{exc}")
+
+    actions = tk.Frame(body, bg="#f3f6fb")
+    actions.pack(fill="x", pady=(12, 0))
+    ui_button(actions, "Tải lại", refresh, width=9, variant="soft").pack(side="left")
+    ui_button(actions, "Khôi phục", restore_selected, width=11, variant="success").pack(side="left", padx=(8, 0))
+    ui_button(actions, "Đóng", win.destroy, width=8, variant="default").pack(side="right")
+    refresh()
+    self._center_dialog_on_screen(win)
+
+
 def open_admin_approval_panel(self):
     if self.admin_approval_panel is not None:
         try:
@@ -344,6 +426,7 @@ def open_admin_approval_panel(self):
     tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg="#ffffff", fg=UI_TEXT).pack(anchor="center")
     tk.Label(member_info, text="Admin", font=ui_font(9), bg="#ffffff", fg=UI_MUTED).pack(anchor="center", pady=(4, 10))
     ui_button(member_info, "Duyệt máy", lambda: None, width=14, variant="warn").pack(anchor="center")
+    ui_button(member_info, "Backup Excel", self.open_admin_backup_panel, width=14, variant="soft").pack(anchor="center", pady=(8, 0))
 
     # Stats box in sidebar (quick glance)
     stat_total_var = tk.StringVar(value="Đang tải...")
@@ -955,6 +1038,8 @@ def open_admin_approval_panel(self):
             f"User Windows: {row.get('windows_user', '')}\n"
             f"Tên máy Windows: {row.get('computer_name', '')}\n"
             f"Vai trò: {row.get('role', '')}\n\n"
+            f"Kiểm tra log: {'Hợp lệ' if row.get('hash_ok') else 'Có dấu hiệu bị sửa hoặc log cũ chưa có hash'}\n"
+            f"Mã hash: {row.get('log_hash', '')}\n\n"
             f"Nội dung log:\n{row.get('log_text', '')}"
         )
         top = tk.Toplevel(self.root)
@@ -1093,4 +1178,5 @@ def open_admin_approval_panel(self):
 def install_admin_ui(app_cls):
     app_cls._admin_log_badge_loop = _admin_log_badge_loop
     app_cls.open_admin_log_panel = open_admin_log_panel
+    app_cls.open_admin_backup_panel = open_admin_backup_panel
     app_cls.open_admin_approval_panel = open_admin_approval_panel

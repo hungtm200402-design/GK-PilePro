@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import msvcrt
 import os
 import re
 import shutil
@@ -10,6 +11,7 @@ import sys
 import time
 import traceback
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from urllib import error as urllib_error, parse as urllib_parse, request as urllib_request
@@ -115,6 +117,129 @@ def write_role_error_log(context, exc=None, extra=None):
         return path
     except Exception:
         return None
+
+
+def audit_log_path():
+    return app_data_path("logs", "audit_events.jsonl")
+
+
+def _audit_hash_payload(record):
+    payload = dict(record or {})
+    payload.pop("hash", None)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def make_record_hash(record):
+    return hashlib.sha256(_audit_hash_payload(record).encode("utf-8")).hexdigest()
+
+
+def append_audit_event(action, status="success", file_path="", message="", extra=None):
+    try:
+        record = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "role": "admin" if is_admin_build() else "user",
+            "machine": get_machine_code(),
+            "windows_user": current_os_username(),
+            "app_user": load_app_user_name_setting(),
+            "action": str(action or "").strip(),
+            "status": str(status or "").strip() or "success",
+            "file_path": str(file_path or ""),
+            "message": str(message or ""),
+            "extra": extra or {},
+        }
+        record["hash"] = make_record_hash(record)
+        path = audit_log_path()
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        return record
+    except Exception as exc:
+        write_role_error_log("append_audit_event", exc, {"action": action, "file_path": file_path})
+        return None
+
+
+def verify_record_hash(record):
+    try:
+        return str((record or {}).get("hash") or "") == make_record_hash(record)
+    except Exception:
+        return False
+
+
+@contextmanager
+def locked_file_for_write(path, timeout=10):
+    lock_path = Path(str(path) + ".gklock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+b")
+    start = time.time()
+    locked = False
+    try:
+        while True:
+            try:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                locked = True
+                break
+            except OSError:
+                if time.time() - start >= float(timeout or 10):
+                    raise TimeoutError(f"File đang được máy khác ghi: {path}")
+                time.sleep(0.15)
+        yield lock_path
+    finally:
+        if locked:
+            try:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+        try:
+            lock_file.close()
+        except Exception:
+            pass
+
+
+def list_backup_files(category="excel", limit=200):
+    try:
+        root = app_data_path("backups", category)
+        if not root.exists():
+            return []
+        rows = []
+        for path in root.glob("*"):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+                rows.append(
+                    {
+                        "path": str(path),
+                        "name": path.name,
+                        "size": stat.st_size,
+                        "modified_at": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
+            except Exception:
+                pass
+        rows.sort(key=lambda item: item.get("modified_at", ""), reverse=True)
+        return rows[: max(1, int(limit or 200))]
+    except Exception as exc:
+        write_role_error_log("list_backup_files", exc, {"category": category})
+        return []
+
+
+def restore_backup_file(backup_path, target_path):
+    src = Path(backup_path)
+    dst = Path(target_path)
+    if not src.exists():
+        raise FileNotFoundError(f"Không tìm thấy backup: {src}")
+    if not dst.parent.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+    pre_restore_backup = backup_file(dst, "excel_restore_before")
+    shutil.copy2(src, dst)
+    append_audit_event(
+        "restore_excel_backup",
+        file_path=str(dst),
+        message="Admin khôi phục Excel từ backup.",
+        extra={"backup_path": str(src), "pre_restore_backup": str(pre_restore_backup or "")},
+    )
+    return str(pre_restore_backup or "")
 
 
 def backup_file(path, category="config"):

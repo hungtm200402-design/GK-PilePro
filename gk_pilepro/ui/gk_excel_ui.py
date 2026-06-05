@@ -20,8 +20,10 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from gk_pilepro.gk_core import (
+    append_audit_event,
     backup_file,
     last_run_dir,
+    locked_file_for_write,
     load_mapping_templates,
     new_workflow_id,
     resource_path,
@@ -1396,14 +1398,20 @@ def fill_excel(self):
         force_workbook_recalculate(wb)
         
         try:
-            wb.save(out_path)
+            with locked_file_for_write(out_path, timeout=10):
+                wb.save(out_path)
         except PermissionError:
             if backup_path:
                 try:
                     shutil.copy2(backup_path, out_path)
                 except Exception as rollback_exc:
                     write_role_error_log("excel_rollback_permission_error", rollback_exc, {"backup": str(backup_path), "target": out_path})
+            append_audit_event("export_excel", status="error", file_path=out_path, message="Không thể lưu Excel vì file đang mở hoặc bị khóa.", extra={"backup": str(backup_path or "")})
             messagebox.showerror("Lỗi ghi file", f"Không thể lưu trực tiếp vào file Excel.\nVui lòng đóng file Excel '{Path(out_path).name}' trước khi điền dữ liệu.")
+            return
+        except TimeoutError as e:
+            append_audit_event("export_excel", status="error", file_path=out_path, message=str(e), extra={"backup": str(backup_path or "")})
+            messagebox.showerror("File đang được ghi", "File Excel đang được máy khác ghi.\nVui lòng chờ rồi thử lại để tránh sai dữ liệu.")
             return
         except Exception as e:
             if backup_path:
@@ -1412,6 +1420,7 @@ def fill_excel(self):
                 except Exception as rollback_exc:
                     write_role_error_log("excel_rollback_save_error", rollback_exc, {"backup": str(backup_path), "target": out_path})
             write_role_error_log("excel_save_error", e, {"excel_path": out_path, "backup": str(backup_path or "")})
+            append_audit_event("export_excel", status="error", file_path=out_path, message=f"Lỗi lưu Excel: {e}", extra={"backup": str(backup_path or "")})
             messagebox.showerror("Lỗi", f"Có lỗi khi lưu file: {str(e)}")
             return
 
@@ -1423,6 +1432,47 @@ def fill_excel(self):
 
         (out / "last_fill_info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
         current_table = self.table_editor.get_current_table() or {}
+        filled_rows = current_table.get("rows") or []
+        numeric_total = 0.0
+        numeric_cells = 0
+        for row in filled_rows:
+            values = row.values() if isinstance(row, dict) else row if isinstance(row, (list, tuple)) else []
+            for value in values:
+                try:
+                    text = str(value).strip().replace(".", "").replace(",", ".")
+                    if re.fullmatch(r"-?\d+(\.\d+)?", text):
+                        numeric_total += float(text)
+                        numeric_cells += 1
+                except Exception:
+                    pass
+        audit_extra = {
+            "sheet": info.get("sheet"),
+            "rows_added": info.get("rows_added"),
+            "start_fill_row": info.get("start_fill_row"),
+            "backup_path": str(backup_path or ""),
+            "source_excel_path": self.excel_path,
+            "source_image_path": self.image_path,
+            "numeric_cells": numeric_cells,
+            "numeric_total": numeric_total,
+        }
+        audit_record = append_audit_event(
+            "export_excel",
+            file_path=out_path,
+            message=f"Đã xuất {info.get('rows_added', 0)} dòng vào Excel.",
+            extra=audit_extra,
+        )
+        reconcile_report = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "file": out_path,
+            "sheet": info.get("sheet"),
+            "rows_added": info.get("rows_added"),
+            "start_fill_row": info.get("start_fill_row"),
+            "backup_path": str(backup_path or ""),
+            "numeric_cells": numeric_cells,
+            "numeric_total": numeric_total,
+            "audit_hash": (audit_record or {}).get("hash", ""),
+        }
+        (out / "last_reconcile_report.json").write_text(json.dumps(reconcile_report, ensure_ascii=False, indent=2), encoding="utf-8")
         current_table_title = str(current_table.get("title") or "").strip()
         current_table_title_l = current_table_title.lower()
         export_ocr_type = str(self.current_doc_kind or "").strip().lower()
@@ -1471,6 +1521,11 @@ def fill_excel(self):
                 "filled_table_columns": current_table.get("columns") or [],
 
                 "filled_rows_data": current_table.get("rows") or [],
+                "backup_path": str(backup_path or ""),
+                "audit_hash": (audit_record or {}).get("hash", ""),
+                "reconcile_report_path": str(out / "last_reconcile_report.json"),
+                "numeric_cells": numeric_cells,
+                "numeric_total": numeric_total,
 
             },
 
@@ -1507,6 +1562,7 @@ def fill_excel(self):
                 shutil.copy2(backup_path, self.excel_path)
             except Exception as rollback_exc:
                 write_role_error_log("excel_rollback_outer_error", rollback_exc, {"backup": str(backup_path), "target": self.excel_path})
+        append_audit_event("export_excel", status="error", file_path=self.excel_path, message="Lỗi khi xuất Excel, đã rollback nếu có backup.", extra={"backup": str(backup_path or "")})
 
         out = last_run_dir()
 

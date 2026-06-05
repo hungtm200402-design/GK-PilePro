@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import threading
@@ -62,6 +63,21 @@ def sys_executable_dir():
 
 def utc_now():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def log_record_hash(record):
+    payload = {
+        "machine_code": str(record.get("machine_code") or ""),
+        "user_name": str(record.get("user_name") or ""),
+        "windows_user": str(record.get("windows_user") or ""),
+        "computer_name": str(record.get("computer_name") or ""),
+        "role": str(record.get("role") or ""),
+        "app_kind": str(record.get("app_kind") or ""),
+        "message": str(record.get("message") or ""),
+        "log_text": str(record.get("log_text") or ""),
+        "created_at": str(record.get("created_at") or ""),
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 def parse_utc(value):
@@ -140,6 +156,7 @@ def init_db(db_path: Path):
                 log_text TEXT DEFAULT '',
                 created_at TEXT DEFAULT '',
                 resolved_at TEXT DEFAULT '',
+                log_hash TEXT DEFAULT '',
                 payload_json TEXT DEFAULT ''
             )
             """
@@ -147,6 +164,8 @@ def init_db(db_path: Path):
         cols = {row[1] for row in conn.execute("PRAGMA table_info(error_logs)").fetchall()}
         if "resolved_at" not in cols:
             conn.execute("ALTER TABLE error_logs ADD COLUMN resolved_at TEXT DEFAULT ''")
+        if "log_hash" not in cols:
+            conn.execute("ALTER TABLE error_logs ADD COLUMN log_hash TEXT DEFAULT ''")
         conn.commit()
 
 
@@ -293,13 +312,14 @@ def insert_error_log(db_path: Path, payload: dict):
         "resolved_at": "",
         "payload_json": json.dumps(payload, ensure_ascii=False),
     }
+    record["log_hash"] = log_record_hash(record)
     with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         cur = conn.execute(
             """
             INSERT INTO error_logs (
                 machine_code, user_name, windows_user, computer_name,
-                role, app_kind, message, log_text, created_at, resolved_at, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                role, app_kind, message, log_text, created_at, resolved_at, log_hash, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["machine_code"],
@@ -312,6 +332,7 @@ def insert_error_log(db_path: Path, payload: dict):
                 record["log_text"],
                 record["created_at"],
                 record["resolved_at"],
+                record["log_hash"],
                 record["payload_json"],
             ),
         )
@@ -331,7 +352,7 @@ def fetch_error_logs(db_path: Path, limit=100, unresolved_only=False):
         rows = conn.execute(
             f"""
             SELECT id, machine_code, user_name, windows_user, computer_name,
-                   role, app_kind, message, log_text, created_at, resolved_at
+                   role, app_kind, message, log_text, created_at, resolved_at, log_hash
             FROM error_logs
             {where_sql}
             ORDER BY id DESC
@@ -339,7 +360,12 @@ def fetch_error_logs(db_path: Path, limit=100, unresolved_only=False):
             """,
             (limit,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        item = dict(r)
+        item["hash_ok"] = bool(item.get("log_hash")) and item.get("log_hash") == log_record_hash(item)
+        out.append(item)
+    return out
 
 
 def resolve_error_log(db_path: Path, log_id):
