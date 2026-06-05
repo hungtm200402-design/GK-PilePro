@@ -5221,13 +5221,64 @@ def row_has_big_merge_area(ws, row):
 
 
 
-def row_is_empty_for_new_data(ws, row, mapping_cols, no_col):
+def _row_wait_header_map(excel_headers):
+    result = {}
+    for item in excel_headers or []:
+        try:
+            c, name = item[0], item[1]
+            result[int(c)] = str(name or "")
+        except Exception:
+            pass
+    return result
+
+
+def _is_prefilled_wait_header(name):
+    n = norm(name)
+    if not n:
+        return False
+    return any(tok in n for tok in [
+        "stt", "so tt", "no",
+        "ngay", "ngay thi cong",
+        "ten may", "may ep", "vi tri",
+    ])
+
+
+def _is_wait_total_or_calc_header(name):
+    n = norm(name)
+    if not n:
+        return False
+    return any(tok in n for tok in [
+        "tong to hop", "tong chieu dai", "chieu dai to hop",
+        "do sau ep", "ep thuc te", "ep am", "ep duong", "ep am duong",
+        "luc ep",
+    ])
+
+
+def _is_zero_like_wait_value(value):
+    if value in (None, ""):
+        return True
+    if is_formula_value(value):
+        return True
+    if isinstance(value, (int, float)):
+        return abs(float(value)) < 1e-12
+    s = str(value or "").strip()
+    if not s:
+        return True
+    s = s.replace(".", "").replace(",", ".")
+    try:
+        return abs(float(s)) < 1e-12
+    except Exception:
+        return False
+
+
+def row_is_empty_for_new_data(ws, row, mapping_cols, no_col, excel_headers=None):
 
     """
 
-    Dòng được coi là trống nếu các cột cần ghi dữ liệu đều đang trống.
+    Dòng được coi là trống nếu các cột cần ghi dữ liệu thật đều đang trống.
 
     Không xét cột STT vì có file đã kẻ sẵn hoặc có công thức STT.
+    Cho phép ghi đè dòng chờ đã có sẵn STT/tên máy/vị trí và các cột tổng đang 0.
 
     """
 
@@ -5267,9 +5318,21 @@ def row_is_empty_for_new_data(ws, row, mapping_cols, no_col):
 
 
 
+    header_by_col = _row_wait_header_map(excel_headers)
+
     for c in cols:
 
         v = ws.cell(row, c).value
+
+        header_name = header_by_col.get(int(c), "")
+
+        if _is_prefilled_wait_header(header_name):
+
+            continue
+
+        if _is_wait_total_or_calc_header(header_name) and _is_zero_like_wait_value(v):
+
+            continue
 
         if v not in (None, ""):
 
@@ -5283,7 +5346,7 @@ def row_is_empty_for_new_data(ws, row, mapping_cols, no_col):
 
 
 
-def find_blank_rows_before_total(ws, start_after_row, total_row, need_count, mapping_cols, no_col):
+def find_blank_rows_before_total(ws, start_after_row, total_row, need_count, mapping_cols, no_col, excel_headers=None):
 
     """
 
@@ -5297,7 +5360,7 @@ def find_blank_rows_before_total(ws, start_after_row, total_row, need_count, map
 
     for r in range(start_after_row + 1, total_row):
 
-        if row_is_empty_for_new_data(ws, r, mapping_cols, no_col):
+        if row_is_empty_for_new_data(ws, r, mapping_cols, no_col, excel_headers=excel_headers):
 
             rows.append(r)
 

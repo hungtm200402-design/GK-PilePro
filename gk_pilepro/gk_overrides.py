@@ -3392,6 +3392,8 @@ def _v231_apply_rows_to_workbook(self, wb):
 
         no_col,
 
+        excel_headers=excel_headers,
+
     )
 
     target_rows = list(blank_rows[:row_count])
@@ -3447,7 +3449,11 @@ def _v231_apply_rows_to_workbook(self, wb):
 
             _v229_safe_copy_row(ws, style_row, dst_row, table_max_col)
 
-        self._safe_set_cell_value(ws, dst_row, no_col, last_no + i + 1)
+        existing_no = ws.cell(dst_row, no_col).value if no_col else None
+        if dst_row < total_row and existing_no not in (None, ""):
+            pass
+        else:
+            self._safe_set_cell_value(ws, dst_row, no_col, last_no + i + 1)
 
 
 
