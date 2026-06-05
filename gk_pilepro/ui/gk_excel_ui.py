@@ -1277,8 +1277,14 @@ def build_mapping(self):
     table = self.table_editor.get_current_table()
 
     if not table:
+        table = {"columns": [], "rows": []}
 
-        return
+    source_cols = list(table.get("columns") or [])
+    if not source_cols:
+        try:
+            source_cols = [str(col) for col in list(self.table_editor.tree["columns"] or []) if str(col).strip()]
+        except Exception:
+            source_cols = []
 
     if not self.excel_headers:
 
@@ -1286,13 +1292,17 @@ def build_mapping(self):
 
         return
 
+    if not source_cols:
+        self.mapping_editor.set_mapping([], self.excel_headers, [])
+        messagebox.showwarning("Thiếu bảng OCR", "Chưa có cột bảng OCR để mapping. Hãy bấm Đọc bảng hoặc Đọc phiếu cọc trước.")
+        return
 
 
-    auto = auto_map_columns(table["columns"], self.excel_headers)
+    auto = auto_map_columns(source_cols, self.excel_headers)
 
-    auto = ensure_no_column_in_mapping(table["columns"], auto, self.excel_headers)
+    auto = ensure_no_column_in_mapping(source_cols, auto, self.excel_headers)
 
-    self.mapping_editor.set_mapping(table["columns"], self.excel_headers, auto)
+    self.mapping_editor.set_mapping(source_cols, self.excel_headers, auto)
 
     self._set_status("Đã auto map từ bảng trong ảnh sang cột của file Excel.", "success")
 

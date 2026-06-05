@@ -3,6 +3,8 @@
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
+from openpyxl.utils import get_column_letter
+
 from gk_pilepro.ui.gk_ui import (
     RoundedMappingDropdown,
     RoundedMappingLabel,
@@ -417,9 +419,9 @@ class MappingEditor(tk.Frame):
 
         self.clear()
 
-        self.table_cols = table_cols
+        self.table_cols = list(table_cols or [])
 
-        self.excel_headers = excel_headers
+        self.excel_headers = list(excel_headers or [])
 
         self.auto_map_idx = list(auto_map_idx or [])
 
@@ -433,11 +435,31 @@ class MappingEditor(tk.Frame):
 
 
 
-        excel_choices = self._make_excel_choices(excel_headers)
+        if not self.table_cols or not self.excel_headers:
+            msg = "Chưa có cột OCR hoặc cột Excel để mapping."
+            if not self.table_cols and self.excel_headers:
+                msg = "Chưa có cột OCR để mapping. Hãy đọc bảng/đọc phiếu cọc trước."
+            elif self.table_cols and not self.excel_headers:
+                msg = "Chưa có cột Excel để mapping. Hãy chọn Excel và đọc sheet trước."
+            tk.Label(
+                self.inner,
+                text=msg,
+                bg=UI_SURFACE,
+                fg=UI_MUTED,
+                font=("Segoe UI", 10),
+                wraplength=max(220, self._layout_width_hint() - 28),
+                justify="left",
+            ).pack(fill="x", padx=8, pady=10)
+            self.canvas.update_idletasks()
+            self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            self.canvas.yview_moveto(0)
+            return
+
+        excel_choices = self._make_excel_choices(self.excel_headers)
 
 
 
-        for i, src in enumerate(table_cols):
+        for i, src in enumerate(self.table_cols):
 
             row = tk.Frame(self.inner, bg=UI_SURFACE)
 
@@ -471,7 +493,7 @@ class MappingEditor(tk.Frame):
 
                 try:
 
-                    excel_col_idx = excel_headers[auto_map_idx[i]][0]
+                    excel_col_idx = self.excel_headers[auto_map_idx[i]][0]
 
                     var.set(self.col_to_display.get(excel_col_idx, "(bỏ qua)"))
 
