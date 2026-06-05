@@ -2158,16 +2158,33 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
     updated = []
     header_by_col = {int(c): str(name or "") for c, name in (excel_headers or [])}
 
+    def _header_excludes_total(name):
+        n = norm(name)
+        if not n:
+            return False
+        excluded_tokens = {
+            "stt", "so tt", "no",
+            "ngay", "ngay thi cong", "gio", "bat dau", "ket thuc", "thoi gian",
+            "ten", "ten may", "ten coc", "vi tri", "ghi chu", "noi dung",
+            "loai", "ma", "ma coc", "so hieu", "ca",
+            "hop dong", "contract", "contract no", "so hop dong", "hd",
+        }
+        return any(tok in n for tok in excluded_tokens)
+
     def _header_is_numeric_candidate(name):
 
         n = norm(name)
         if not n:
             return False
-        if any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"]):
+        if _header_excludes_total(name):
             return False
-        if any(tok in n for tok in ["stt", "no", "ngay", "gio", "bat dau", "ket thuc", "ghi chu", "ten", "loai", "ca"]):
-            return False
-        return any(tok in n for tok in ["chieu dai", "chieu sau", "tai trong", "khoi luong", "do sau", "khoi luong ep", "ep thuc te", "tong hop", "do dai", "m)", "(m)", "(t)"]) or is_actual_pressing_depth_header(n)
+        return any(tok in n for tok in [
+            "1st", "2nd", "3rd", "4th", "5th", "6th",
+            "to hop", "tong to hop", "chieu dai", "chieu sau",
+            "tai trong", "khoi luong", "do sau", "khoi luong ep",
+            "ep thuc te", "ep am", "ep duong", "ep am duong",
+            "luc ep", "do dai", "m)", "(m)", "(t)", "tan",
+        ]) or is_actual_pressing_depth_header(n)
 
     def _col_has_numeric_data(col_idx):
 
@@ -2194,6 +2211,9 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
     for c in range(1, ws.max_column + 1):
         if c == no_col:
             continue
+        header_name = header_by_col.get(c, "")
+        if _header_excludes_total(header_name):
+            continue
         cell = ws.cell(total_row, c)
         if is_formula_value(cell.value):
             candidate_cols.append(c)
@@ -2202,14 +2222,20 @@ def update_total_formulas(ws, total_row, first_data_row, last_data_row, excel_he
         for c in range(1, ws.max_column + 1):
             if c == no_col:
                 continue
-            if _header_is_numeric_candidate(header_by_col.get(c, "")) and _col_has_numeric_data(c) > 0:
+            header_name = header_by_col.get(c, "")
+            if _header_excludes_total(header_name):
+                continue
+            if _header_is_numeric_candidate(header_name) and _col_has_numeric_data(c) > 0:
                 candidate_cols.append(c)
 
     if not candidate_cols:
         for c in range(1, ws.max_column + 1):
             if c == no_col:
                 continue
-            if _col_has_numeric_data(c) > 0:
+            header_name = header_by_col.get(c, "")
+            if _header_excludes_total(header_name):
+                continue
+            if (not header_name or _header_is_numeric_candidate(header_name)) and _col_has_numeric_data(c) > 0:
                 candidate_cols.append(c)
 
     for c in sorted(set(candidate_cols)):

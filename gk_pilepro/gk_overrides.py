@@ -2908,6 +2908,33 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
         header_by_col[int(col_idx)] = str(name or "")
 
+    def _is_sum_excluded_header(col_idx):
+        n = norm(header_by_col.get(int(col_idx), ""))
+        if not n:
+            return False
+        excluded_tokens = {
+            "stt", "so tt", "no",
+            "ngay", "ngay thi cong", "gio", "thoi gian", "bat dau", "ket thuc",
+            "ten", "ten may", "ten coc", "vi tri", "ghi chu", "noi dung",
+            "loai", "ma", "ma coc", "so hieu", "ca",
+            "hop dong", "contract", "contract no", "so hop dong", "hd",
+        }
+        return any(tok in n for tok in excluded_tokens)
+
+    def _is_sum_allowed_header(col_idx):
+        n = norm(header_by_col.get(int(col_idx), ""))
+        if not n:
+            return None
+        if _is_sum_excluded_header(col_idx):
+            return False
+        allowed_tokens = {
+            "1st", "2nd", "3rd", "4th", "5th", "6th",
+            "tong to hop", "to hop", "chieu dai", "chieu sau",
+            "do sau ep", "ep am", "ep duong", "ep am duong",
+            "luc ep", "tan", "khoi luong",
+        }
+        return any(tok in n for tok in allowed_tokens)
+
     def _is_contract_like_header(col_idx):
         n = norm(header_by_col.get(int(col_idx), ""))
         return any(tok in n for tok in ["hop dong", "contract", "contract no", "so hop dong", "hd"])
@@ -2996,6 +3023,10 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
             continue
 
+        allowed_by_header = _is_sum_allowed_header(c)
+        if allowed_by_header is False:
+            continue
+
         if _is_contract_like_header(c):
             continue
 
@@ -3004,6 +3035,10 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
         v = ws.cell(total_row, c).value
 
         if _v229_is_formula(v):
+
+            numeric_hits, text_hits = _column_has_enough_numbers(c)
+            if allowed_by_header is None and (numeric_hits <= 0 or text_hits > numeric_hits):
+                continue
 
             parsed_first = _v231_parse_sum_first_row(v, letter)
 
@@ -3045,6 +3080,11 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
             continue
 
+        if allowed_by_header is None:
+            numeric_hits, text_hits = _column_has_enough_numbers(c)
+            if numeric_hits <= 0 or text_hits > numeric_hits:
+                continue
+
         # Có số phía trên thì đây là cột tổng cần SUM.
 
         for rr in range(default_first_row, total_row):
@@ -3084,6 +3124,10 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
             header_name = header_by_col.get(c, "")
 
+            allowed_by_header = _is_sum_allowed_header(c)
+            if allowed_by_header is False:
+                continue
+
             if _is_contract_like_header(c):
                 continue
 
@@ -3093,7 +3137,7 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
             numeric_hits, text_hits = _column_has_enough_numbers(c)
 
-            if numeric_hits >= 2 and numeric_hits >= text_hits:
+            if numeric_hits >= 2 and numeric_hits >= text_hits and (allowed_by_header is True or not header_name):
 
                 result[c] = _best_start_row_for_col(c)
 
@@ -3114,6 +3158,9 @@ def _v231_capture_sum_columns_and_starts(ws, total_row, default_first_row, no_co
 
                 if not c or c == no_col:
 
+                    continue
+
+                if _is_sum_allowed_header(c) is False:
                     continue
 
                 if _is_contract_like_header(c):

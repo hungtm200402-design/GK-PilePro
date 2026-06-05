@@ -278,7 +278,7 @@ def open_admin_backup_panel(self):
     win = tk.Toplevel(self.root)
     win.title("Backup Excel")
     win.configure(bg="#f3f6fb")
-    self._fit_dialog_to_screen(win, 940, 620, min_w=820, min_h=540, max_ratio=0.88, lock_size=False)
+    self._fit_dialog_to_screen(win, 960, 640, min_w=840, min_h=600, max_ratio=0.9, lock_size=False)
 
     body = tk.Frame(win, bg="#f3f6fb", padx=20, pady=18)
     body.pack(fill="both", expand=True)
@@ -287,13 +287,15 @@ def open_admin_backup_panel(self):
     tk.Label(body, textvariable=summary_var, bg="#f3f6fb", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 10))
 
     table_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
-    table_card.pack(fill="both", expand=True)
+    table_card.pack(fill="x", expand=False)
+    table_card.configure(height=390)
+    table_card.pack_propagate(False)
     table_frame = tk.Frame(table_card, bg="#ffffff", padx=12, pady=12)
     table_frame.pack(fill="both", expand=True)
     table_frame.rowconfigure(0, weight=1)
     table_frame.columnconfigure(0, weight=1)
 
-    tree = ttk.Treeview(table_frame, columns=("time", "name", "size", "path"), show="headings", height=11)
+    tree = ttk.Treeview(table_frame, columns=("time", "name", "size", "path"), show="headings", height=9)
     for col, text, width, anchor in (
         ("time", "Thời gian", 160, "center"),
         ("name", "Tên backup", 330, "w"),
@@ -310,6 +312,8 @@ def open_admin_backup_panel(self):
 
     detail_card = tk.Frame(body, bg="#ffffff", highlightthickness=1, highlightbackground="#dbe6f3")
     detail_card.pack(fill="x", pady=(10, 0))
+    detail_card.configure(height=82)
+    detail_card.pack_propagate(False)
     detail_inner = tk.Frame(detail_card, bg="#ffffff", padx=12, pady=10)
     detail_inner.pack(fill="x")
     detail_var = tk.StringVar(value="Chưa chọn backup.")
