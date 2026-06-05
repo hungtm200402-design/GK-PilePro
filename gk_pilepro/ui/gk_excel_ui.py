@@ -27,6 +27,7 @@ from gk_pilepro.gk_core import (
     load_mapping_templates,
     new_workflow_id,
     resource_path,
+    report_runtime_error_to_admin,
     save_mapping_templates,
     validate_excel_before_write,
     write_role_error_log,
@@ -1566,7 +1567,7 @@ def fill_excel(self):
         except Exception:
             pass
 
-    except Exception:
+    except Exception as exc:
         if backup_path:
             try:
                 shutil.copy2(backup_path, self.excel_path)
@@ -1578,12 +1579,26 @@ def fill_excel(self):
 
         out.mkdir(exist_ok=True)
 
-        (out / "last_error_fill.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        write_role_error_log("fill_excel", None, {"excel_path": self.excel_path, "backup": str(backup_path or "")})
+        error_path, _log_path = report_runtime_error_to_admin(
+            "fill_excel",
+            exc,
+            {
+                "excel_path": self.excel_path,
+                "backup": str(backup_path or ""),
+                "workflow_id": self.current_workflow_id,
+                "workflow_label": self.current_workflow_label,
+            },
+            error_file_name="last_error_fill.txt",
+            notify_server=True,
+        )
 
-        messagebox.showerror("Lỗi điền Excel", "Có lỗi. Xem last_run_v12/last_error_fill.txt")
+        detail = str(exc).strip() or exc.__class__.__name__
+        messagebox.showerror(
+            "Lỗi điền Excel",
+            f"Xuất Excel bị lỗi:\n{detail}\n\nĐã rollback nếu có backup, ghi log và gửi cho Admin nếu server đang bật.\nFile lỗi: {error_path or 'last_run_v12/last_error_fill.txt'}",
+        )
 
-        self._set_status("Lỗi điền Excel.", "error")
+        self._set_status("Lỗi điền Excel, đã ghi log.", "error")
 
         self._record_history(
 

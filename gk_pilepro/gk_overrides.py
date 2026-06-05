@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox
 from gk_pilepro.gk_core import (
     last_run_dir,
     load_formula_profiles,
+    report_runtime_error_to_admin,
     save_formula_profiles,
 )
 
@@ -1737,17 +1738,27 @@ def _v229_preview_excel(self):
 
         )
 
-    except Exception:
+    except Exception as exc:
 
-        out = last_run_dir()
+        error_path, _log_path = report_runtime_error_to_admin(
+            "preview_excel",
+            exc,
+            {
+                "excel_path": self.excel_path,
+                "sheet": self.sheet_var.get() if hasattr(self, "sheet_var") else "",
+            },
+            error_file_name="last_error_preview.txt",
+            notify_server=True,
+        )
 
-        out.mkdir(exist_ok=True)
+        detail = str(exc).strip() or exc.__class__.__name__
 
-        (out / "last_error_preview.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        messagebox.showerror(
+            "Lỗi xem trước",
+            f"Xem trước Excel bị lỗi:\n{detail}\n\nĐã ghi log và gửi cho Admin nếu server đang bật.\nFile lỗi: {error_path or 'last_run_v12/last_error_preview.txt'}",
+        )
 
-        messagebox.showerror("Lỗi xem trước", "Có lỗi. Xem last_run_v12/last_error_preview.txt")
-
-        self._set_status("Lỗi xem trước Excel.", "error")
+        self._set_status("Lỗi xem trước Excel, đã ghi log.", "error")
 
 
 

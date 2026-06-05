@@ -119,6 +119,57 @@ def write_role_error_log(context, exc=None, extra=None):
         return None
 
 
+def report_runtime_error_to_admin(context, exc=None, extra=None, error_file_name=None, notify_server=True):
+    """Record a real exception traceback and best-effort send it to the admin server."""
+    trace_text = traceback.format_exc()
+    if trace_text.strip() == "NoneType: None" and exc is not None:
+        trace_text = "".join(traceback.format_exception(type(exc), exc, getattr(exc, "__traceback__", None)))
+
+    out_path = None
+    try:
+        if error_file_name:
+            out_dir = last_run_dir()
+            out_dir.mkdir(exist_ok=True)
+            out_path = out_dir / error_file_name
+            out_path.write_text(trace_text, encoding="utf-8")
+    except Exception:
+        out_path = None
+
+    log_path = write_role_error_log(context, exc, {
+        **(extra or {}),
+        "error_file": str(out_path or ""),
+    })
+
+    if notify_server:
+        try:
+            server_url = presence_server_url_from_env()
+            if check_presence_server_alive(server_url, timeout=0.7):
+                log_text = ""
+                try:
+                    if log_path and Path(log_path).exists():
+                        log_text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    log_text = ""
+                payload = {
+                    "machine_code": get_machine_code(),
+                    "user_name": resolve_member_display_name(get_machine_code()),
+                    "windows_user": os.environ.get("USERNAME", ""),
+                    "computer_name": os.environ.get("COMPUTERNAME", socket.gethostname()),
+                    "role": "Admin" if is_admin_build() else "User",
+                    "app_kind": "admin" if is_admin_build() else "user",
+                    "message": f"Lỗi {context}",
+                    "log_text": (log_text or trace_text)[-60000:],
+                    "log_path": str(log_path or ""),
+                    "error_file": str(out_path or ""),
+                    "extra": extra or {},
+                }
+                send_presence_error_log(server_url, payload, timeout=3)
+        except Exception:
+            pass
+
+    return out_path, log_path
+
+
 def audit_log_path():
     return app_data_path("logs", "audit_events.jsonl")
 
