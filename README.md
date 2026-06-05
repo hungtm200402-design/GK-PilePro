@@ -7,7 +7,7 @@ Ung dung phuc hoi, doc OCR va quan ly du lieu coc.
 Ban User:
 
 ```bat
-dist\Tool_KL_UI8.exe
+dist\GK PilePro.exe
 ```
 
 Ban Admin:
@@ -59,7 +59,20 @@ File `.env` khong duoc dua len Git.
 ## Cau truc thu muc
 
 ```text
-app.py                 Source chinh cua ung dung
+app.py                 Entry point va luong dieu phoi ung dung
+gk_pilepro/            Package code chinh cua app
+  gk_core.py           Runtime, cau hinh, approval va presence client
+  gk_excel.py          Xu ly OCR, mapping, Excel va formula
+  gk_overrides.py      Override logic workbook/preview/run Gemini dang ap dung cho App
+  ui/                  Package giao dien
+    gk_ui.py           UI constants, font scale va widget dung chung
+    gk_icons.py        Helper icon, DPI va work-area Windows
+    gk_editors.py      MappingEditor va TableEditor
+    gk_settings_ui.py  Settings, help va about dialogs
+    gk_admin_ui.py     Admin log va approval panels
+    gk_history_ui.py   History views va history detail rendering
+    gk_excel_ui.py     Excel page, mapping templates va workbook UI actions
+    gk_ocr_ui.py       OCR workflow, image preview va clipboard actions
 assets/                Logo, icon va tai nguyen giao dien
 dist/                  File exe da build de giao cho khach
 docs/                  Tai lieu va ghi chu phien ban

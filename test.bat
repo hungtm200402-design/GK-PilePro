@@ -7,14 +7,14 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-.\.venv\Scripts\python.exe -m py_compile app.py
+.\.venv\Scripts\python.exe -m compileall -q app.py gk_pilepro presence_server.py tools pyi_hooks
 if errorlevel 1 (
     echo.
-    echo TEST LOI: app.py bi loi compile.
+    echo TEST LOI: source Python bi loi compile.
     pause
     exit /b 1
 )
 
 echo.
-echo TEST OK: app.py compile duoc.
+echo TEST OK: source Python compile duoc.
 pause

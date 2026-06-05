@@ -1,0 +1,18 @@
+{
+  "files.exclude": {
+    "**/__pycache__": true,
+    ".venv": true,
+    "build": true,
+    "build_history": true,
+    "runtime_data": true,
+    "presence_state.db": true
+  },
+  "search.exclude": {
+    "**/__pycache__": true,
+    ".venv": true,
+    "build": true,
+    "build_history": true,
+    "dist": true,
+    "runtime_data": true
+  }
+}

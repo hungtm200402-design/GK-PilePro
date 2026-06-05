@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import threading
 import hashlib
 import os
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -95,7 +96,7 @@ def status_text(last_seen_at, timeout_seconds):
 
 def init_db(db_path: Path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS machines (
@@ -163,7 +164,7 @@ def upsert_machine(db_path: Path, payload: dict):
         "last_seen_at": now,
         "payload_json": json.dumps(payload, ensure_ascii=False),
     }
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         cur = conn.execute(
             "SELECT first_seen_at FROM machines WHERE machine_code = ?",
             (machine_code,),
@@ -200,7 +201,7 @@ def upsert_machine(db_path: Path, payload: dict):
 
 
 def fetch_machines(db_path: Path):
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT machine_code, user_name, role, app_kind, status, first_seen_at, last_seen_at, payload_json FROM machines ORDER BY last_seen_at DESC"
@@ -224,7 +225,7 @@ def upsert_approved_machine(db_path: Path, payload: dict):
         "app_kind": str(payload.get("app_kind") or "").strip(),
         "status": str(payload.get("status") or "approved").strip(),
     }
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         conn.execute(
             """
             INSERT INTO approved_machines (
@@ -258,7 +259,7 @@ def upsert_approved_machine(db_path: Path, payload: dict):
 
 
 def fetch_approved_machines(db_path: Path):
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT machine_code, approval_code, approval_version, approved_at, last_seen_at, user_name, role, app_kind, status FROM approved_machines ORDER BY approved_at DESC, last_seen_at DESC"
@@ -270,7 +271,7 @@ def delete_approved_machine(db_path: Path, machine_code: str):
     machine_code = str(machine_code or "").strip().upper()
     if not machine_code:
         return False
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         cur = conn.execute("DELETE FROM approved_machines WHERE machine_code = ?", (machine_code,))
         conn.commit()
     return cur.rowcount > 0
@@ -292,7 +293,7 @@ def insert_error_log(db_path: Path, payload: dict):
         "resolved_at": "",
         "payload_json": json.dumps(payload, ensure_ascii=False),
     }
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         cur = conn.execute(
             """
             INSERT INTO error_logs (
@@ -324,7 +325,7 @@ def fetch_error_logs(db_path: Path, limit=100, unresolved_only=False):
         limit = max(1, min(300, int(limit or 100)))
     except Exception:
         limit = 100
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         conn.row_factory = sqlite3.Row
         where_sql = "WHERE COALESCE(resolved_at, '') = ''" if unresolved_only else ""
         rows = conn.execute(
@@ -346,7 +347,7 @@ def resolve_error_log(db_path: Path, log_id):
         log_id = int(log_id)
     except Exception:
         return False
-    with DB_LOCK, sqlite3.connect(db_path) as conn:
+    with DB_LOCK, closing(sqlite3.connect(db_path)) as conn:
         cur = conn.execute(
             "UPDATE error_logs SET resolved_at = ? WHERE id = ?",
             (utc_now(), log_id),

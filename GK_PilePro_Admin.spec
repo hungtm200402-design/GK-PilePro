@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 
 datas = [
@@ -11,6 +12,13 @@ datas = [
     ('assets\\tool_kl_taskbar.png', 'assets'),
     ('assets\\tool_kl.ico', 'assets'),
 ]
+binaries = []
+hiddenimports = []
+
+pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
+datas += pil_datas
+binaries += pil_binaries
+hiddenimports += pil_hiddenimports
 
 tcl_root = Path(sys.base_prefix) / 'tcl'
 
@@ -32,13 +40,19 @@ add_tree(datas, tcl_root / 'tcl8.6', 'tcl_data')
 add_tree(datas, tcl_root / 'tk8.6', '_tk_data')
 add_tree(datas, tcl_root / 'tk8.6', 'tk_data')
 
+python_dlls = Path(sys.base_prefix) / 'DLLs'
+for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
+    dll_path = python_dlls / dll_name
+    if dll_path.exists():
+        binaries.append((str(dll_path), '.'))
+
 
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=['pyi_hooks'],
     hooksconfig={},
     runtime_hooks=[],
@@ -58,7 +72,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
