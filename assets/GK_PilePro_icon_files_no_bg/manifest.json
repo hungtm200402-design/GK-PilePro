@@ -1,0 +1,429 @@
+[
+  {
+    "file": "transparent_png/01_app_icon_titlebar.png",
+    "source_box": [
+      48,
+      115,
+      142,
+      218
+    ],
+    "size": [
+      103,
+      103
+    ]
+  },
+  {
+    "file": "transparent_png/02_gk_logo_full.png",
+    "source_box": [
+      170,
+      55,
+      340,
+      235
+    ],
+    "size": [
+      156,
+      184
+    ]
+  },
+  {
+    "file": "transparent_png/03_logo_sidebar_with_text.png",
+    "source_box": [
+      365,
+      55,
+      530,
+      260
+    ],
+    "size": [
+      144,
+      212
+    ]
+  },
+  {
+    "file": "transparent_png/04_sidebar_home.png",
+    "source_box": [
+      580,
+      105,
+      690,
+      215
+    ],
+    "size": [
+      82,
+      88
+    ]
+  },
+  {
+    "file": "transparent_png/05_sidebar_excel.png",
+    "source_box": [
+      705,
+      105,
+      820,
+      215
+    ],
+    "size": [
+      83,
+      91
+    ]
+  },
+  {
+    "file": "transparent_png/06_sidebar_history.png",
+    "source_box": [
+      830,
+      105,
+      945,
+      215
+    ],
+    "size": [
+      87,
+      88
+    ]
+  },
+  {
+    "file": "transparent_png/07_sidebar_mapping.png",
+    "source_box": [
+      955,
+      105,
+      1068,
+      215
+    ],
+    "size": [
+      84,
+      85
+    ]
+  },
+  {
+    "file": "transparent_png/08_sidebar_settings.png",
+    "source_box": [
+      1085,
+      105,
+      1200,
+      215
+    ],
+    "size": [
+      83,
+      87
+    ]
+  },
+  {
+    "file": "transparent_png/09_sidebar_help.png",
+    "source_box": [
+      1210,
+      105,
+      1305,
+      215
+    ],
+    "size": [
+      60,
+      85
+    ]
+  },
+  {
+    "file": "transparent_png/10_sidebar_info.png",
+    "source_box": [
+      1315,
+      105,
+      1430,
+      215
+    ],
+    "size": [
+      86,
+      86
+    ]
+  },
+  {
+    "file": "transparent_png/11_header_notification.png",
+    "source_box": [
+      35,
+      425,
+      115,
+      505
+    ],
+    "size": [
+      52,
+      57
+    ]
+  },
+  {
+    "file": "transparent_png/12_header_avatar.png",
+    "source_box": [
+      130,
+      425,
+      215,
+      505
+    ],
+    "size": [
+      82,
+      82
+    ]
+  },
+  {
+    "file": "transparent_png/13_header_dropdown.png",
+    "source_box": [
+      235,
+      430,
+      305,
+      505
+    ],
+    "size": [
+      64,
+      64
+    ]
+  },
+  {
+    "file": "transparent_png/14_action_import_excel.png",
+    "source_box": [
+      330,
+      420,
+      435,
+      510
+    ],
+    "size": [
+      75,
+      78
+    ]
+  },
+  {
+    "file": "transparent_png/15_action_import_workbook.png",
+    "source_box": [
+      445,
+      420,
+      550,
+      510
+    ],
+    "size": [
+      74,
+      77
+    ]
+  },
+  {
+    "file": "transparent_png/16_action_read_sheet_list.png",
+    "source_box": [
+      560,
+      420,
+      660,
+      510
+    ],
+    "size": [
+      71,
+      78
+    ]
+  },
+  {
+    "file": "transparent_png/17_action_read_formula.png",
+    "source_box": [
+      665,
+      420,
+      765,
+      510
+    ],
+    "size": [
+      69,
+      77
+    ]
+  },
+  {
+    "file": "transparent_png/18_action_read_excel.png",
+    "source_box": [
+      760,
+      420,
+      865,
+      510
+    ],
+    "size": [
+      69,
+      77
+    ]
+  },
+  {
+    "file": "transparent_png/19_action_refresh.png",
+    "source_box": [
+      855,
+      420,
+      960,
+      510
+    ],
+    "size": [
+      72,
+      74
+    ]
+  },
+  {
+    "file": "transparent_png/20_action_read_table.png",
+    "source_box": [
+      955,
+      420,
+      1060,
+      510
+    ],
+    "size": [
+      73,
+      74
+    ]
+  },
+  {
+    "file": "transparent_png/21_action_read_column.png",
+    "source_box": [
+      1050,
+      420,
+      1150,
+      510
+    ],
+    "size": [
+      68,
+      75
+    ]
+  },
+  {
+    "file": "transparent_png/22_action_auto_map.png",
+    "source_box": [
+      1140,
+      420,
+      1250,
+      510
+    ],
+    "size": [
+      72,
+      73
+    ]
+  },
+  {
+    "file": "transparent_png/23_action_preview.png",
+    "source_box": [
+      1235,
+      420,
+      1340,
+      510
+    ],
+    "size": [
+      76,
+      62
+    ]
+  },
+  {
+    "file": "transparent_png/24_action_export_excel.png",
+    "source_box": [
+      1330,
+      420,
+      1435,
+      510
+    ],
+    "size": [
+      69,
+      77
+    ]
+  },
+  {
+    "file": "transparent_png/25_panel_image_upload.png",
+    "source_box": [
+      80,
+      650,
+      205,
+      775
+    ],
+    "size": [
+      96,
+      94
+    ]
+  },
+  {
+    "file": "transparent_png/26_panel_table_grid.png",
+    "source_box": [
+      355,
+      650,
+      480,
+      775
+    ],
+    "size": [
+      89,
+      91
+    ]
+  },
+  {
+    "file": "transparent_png/27_panel_mapping_document.png",
+    "source_box": [
+      675,
+      650,
+      795,
+      780
+    ],
+    "size": [
+      82,
+      95
+    ]
+  },
+  {
+    "file": "transparent_png/28_panel_save.png",
+    "source_box": [
+      945,
+      650,
+      1068,
+      775
+    ],
+    "size": [
+      86,
+      89
+    ]
+  },
+  {
+    "file": "transparent_png/29_status_indicator_pill.png",
+    "source_box": [
+      1170,
+      665,
+      1405,
+      760
+    ],
+    "size": [
+      213,
+      72
+    ]
+  },
+  {
+    "file": "transparent_png/30_footer_running_server_dot.png",
+    "source_box": [
+      92,
+      932,
+      142,
+      982
+    ],
+    "size": [
+      54,
+      54
+    ]
+  },
+  {
+    "file": "transparent_png/31_footer_ready_status_dot.png",
+    "source_box": [
+      262,
+      932,
+      312,
+      982
+    ],
+    "size": [
+      55,
+      54
+    ]
+  },
+  {
+    "file": "transparent_png/00_logo_icon_from_ui_screenshot.png",
+    "source_asset": "logo_icon.png",
+    "size": [
+      127,
+      119
+    ]
+  },
+  {
+    "file": "transparent_png/00_logo_full_from_ui_screenshot.png",
+    "source_asset": "logo_full.png",
+    "size": [
+      127,
+      174
+    ]
+  },
+  {
+    "file": "transparent_png/00_logo_sidebar_full_from_ui_screenshot.png",
+    "source_asset": "logo_sidebar_full.png",
+    "size": [
+      127,
+      185
+    ]
+  }
+]

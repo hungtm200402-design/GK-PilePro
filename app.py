@@ -57,7 +57,7 @@ from tkinter import filedialog, messagebox, ttk
 
 
 
-from PIL import Image, ImageTk # type: ignore
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageTk # type: ignore
 
 from dotenv import load_dotenv # type: ignore
 
@@ -293,11 +293,21 @@ from gk_pilepro.ui.gk_editors import MappingEditor, TableEditor
 
 APP_TITLE = "GK PilePro"
 
-APP_LOGO_PNG = Path("assets") / "tool_kl_logo.png"
+APP_LOGO_PNG = Path("assets") / "gk_logo.png"
 
-APP_TASKBAR_PNG = Path("assets") / "tool_kl_taskbar.png"
+APP_TASKBAR_PNG = Path("assets") / "gk_app_icon.png"
 
-APP_ICON_ICO = Path("assets") / "tool_kl.ico"
+APP_ICON_ICO = Path("assets") / "gk_app_icon.ico"
+
+APP_SPLASH_LOGO_PNG = Path("assets") / "gk_splash_logo.png"
+
+APP_SPLASH_BG_PNG = Path("assets") / "gk_splash_bg.png"
+
+APP_UI_ICON_DIR = Path("assets") / "GK_PilePro_icon_files_no_bg" / "transparent_png"
+
+APP_DECOR_BOTTOM_RIGHT = Path("assets") / "gk_footer_decoration.png"
+
+APP_DECOR_SIDEBAR_BOTTOM = Path("assets") / "gk_sidebar_decoration.png"
 
 SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
 
@@ -420,6 +430,9 @@ class App:
         self._presence_server_check_interval_ms = 150
         self._update_check_inflight = False
         self._update_installing = False
+        self._last_status_text = "Sẵn sàng"
+        self._last_status_tone = "success"
+        self._ui_images = []
 
         if not is_admin_build():
             try:
@@ -540,7 +553,26 @@ class App:
 
             }.get(tone, UI_SUCCESS)
 
-            self.status.config(text=message, fg=color)
+            self._last_status_text = message
+            self._last_status_tone = tone
+
+            if hasattr(self, "status") and self.status is not None:
+                self.status.config(text=message, fg=color)
+
+            footer_status = getattr(self, "footer_status_var", None)
+            if footer_status is not None:
+                footer_status.set(message)
+
+            filter_status = getattr(self, "filter_status_var", None)
+            if filter_status is not None:
+                filter_status.set(message)
+
+            footer_dot = getattr(self, "footer_status_dot", None)
+            if footer_dot is not None:
+                try:
+                    footer_dot.config(fg=color)
+                except Exception:
+                    pass
 
         except Exception:
 
@@ -1500,15 +1532,15 @@ class App:
 
             is_active = page_name == active_page
 
-            bg = "#eaf2ff" if is_active else "#f8fbff"
+            bg = "#0f8d6d" if is_active else "#053f32"
 
-            fg = UI_PRIMARY if is_active else "#667085"
+            fg = "#ffffff" if is_active else "#d8f3e8"
 
             try:
 
                 row.config(bg=bg)
 
-                row.config(highlightbackground=UI_PRIMARY if is_active else "#e7edf6")
+                row.config(highlightbackground="#0f8d6d" if is_active else "#0b5a45")
 
                 if inner is not None:
 
@@ -1516,7 +1548,7 @@ class App:
 
                 if accent is not None:
 
-                    accent.config(bg=UI_PRIMARY if is_active else bg)
+                    accent.config(bg="#f4c542" if is_active else bg)
 
                 icon.config(bg=bg, fg=fg)
 
@@ -1778,22 +1810,22 @@ class App:
         """Update the progress bar. Must be called on the main (tkinter) thread."""
         try:
             dlg = getattr(self, "_update_progress_dialog", None)
-            if not dlg:
-                return
-            pb = dlg._pb
-            info_lbl = dlg._info_lbl
             mb_done = downloaded / 1024 / 1024
             if total > 0:
                 pct = min(100, int(downloaded * 100 / total))
                 mb_total = total / 1024 / 1024
-                if not dlg._pb_determinate:
-                    pb.stop()
-                    pb.config(mode="determinate", maximum=100)
-                    dlg._pb_determinate = True
-                pb.config(value=pct)
-                info_lbl.config(text=f"{mb_done:.1f} / {mb_total:.1f} MB  \u2014  {pct}%")
+                if dlg:
+                    pb = dlg._pb
+                    info_lbl = dlg._info_lbl
+                    if not dlg._pb_determinate:
+                        pb.stop()
+                        pb.config(mode="determinate", maximum=100)
+                        dlg._pb_determinate = True
+                    pb.config(value=pct)
+                    info_lbl.config(text=f"{mb_done:.1f} / {mb_total:.1f} MB  \u2014  {pct}%")
             else:
-                info_lbl.config(text=f"\u0110\u00e3 t\u1ea3i {mb_done:.1f} MB...")
+                if dlg:
+                    dlg._info_lbl.config(text=f"\u0110\u00e3 t\u1ea3i {mb_done:.1f} MB...")
         except Exception:
             pass
 
@@ -2369,7 +2401,7 @@ del "%~f0" >nul 2>nul
             win_w = min(sw, max(min_win_w, int(sw * 0.98)))
             win_h = min(sh, max(min_win_h, int(sh * 0.985)))
         try:
-            self.root.geometry(f"{win_w}x{win_h}")
+            self.root.geometry(f"{win_w}x{win_h}+0+0")
             self.root.minsize(min_win_w, min_win_h)
             if self.screen_profile_mode == "auto":
                 try:
@@ -2380,55 +2412,55 @@ del "%~f0" >nul 2>nul
             pass
 
         if self.micro_ui:
-            self.sidebar_w = scale_px(150)
+            self.sidebar_w = scale_px(190)
             self.main_padx = scale_px(7)
             self.main_pady = scale_px(6)
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(6)
-            self.workspace_mins = (scale_px(100), scale_px(410), scale_px(235))
+            self.workspace_mins = (scale_px(250), scale_px(470), scale_px(320))
             self.image_drop_h = scale_px(118)
             self.mapping_canvas_h = scale_px(150)
-            self.logo_max = (scale_px(90), scale_px(82))
+            self.logo_max = (scale_px(155), scale_px(180))
         elif self.tiny_ui:
-            self.sidebar_w = scale_px(170)
+            self.sidebar_w = scale_px(200)
             self.main_padx = scale_px(8)
             self.main_pady = scale_px(8)
             self.card_padx = scale_px(8)
             self.card_pady = scale_px(7)
-            self.workspace_mins = (scale_px(110), scale_px(400), scale_px(255))
+            self.workspace_mins = (scale_px(260), scale_px(500), scale_px(330))
             self.image_drop_h = scale_px(126)
             self.mapping_canvas_h = scale_px(162)
-            self.logo_max = (scale_px(96), scale_px(88))
+            self.logo_max = (scale_px(165), scale_px(190))
         elif self.dense_ui:
-            self.sidebar_w = scale_px(180)
+            self.sidebar_w = scale_px(200)
             self.main_padx = scale_px(11)
             self.main_pady = scale_px(9)
             self.card_padx = scale_px(10)
             self.card_pady = scale_px(8)
-            self.workspace_mins = (scale_px(125), scale_px(470), scale_px(285))
+            self.workspace_mins = (scale_px(270), scale_px(540), scale_px(350))
             self.image_drop_h = scale_px(138)
             self.mapping_canvas_h = scale_px(176)
-            self.logo_max = (scale_px(118), scale_px(108))
+            self.logo_max = (scale_px(170), scale_px(200))
         elif self.compact_ui:
-            self.sidebar_w = scale_px(190)
+            self.sidebar_w = scale_px(205)
             self.main_padx = scale_px(14)
             self.main_pady = scale_px(12)
             self.card_padx = scale_px(11)
             self.card_pady = scale_px(9)
-            self.workspace_mins = (scale_px(140), scale_px(500), scale_px(320))
+            self.workspace_mins = (scale_px(280), scale_px(580), scale_px(370))
             self.image_drop_h = scale_px(150)
             self.mapping_canvas_h = scale_px(190)
-            self.logo_max = (scale_px(130), scale_px(120))
+            self.logo_max = (scale_px(175), scale_px(205))
         else:
-            self.sidebar_w = scale_px(190)
+            self.sidebar_w = scale_px(210)
             self.main_padx = scale_px(22)
             self.main_pady = scale_px(18)
             self.card_padx = scale_px(14)
             self.card_pady = scale_px(12)
-            self.workspace_mins = (scale_px(165), scale_px(640), scale_px(390))
+            self.workspace_mins = (scale_px(300), scale_px(680), scale_px(400))
             self.image_drop_h = scale_px(158)
             self.mapping_canvas_h = scale_px(198)
-            self.logo_max = (scale_px(156), scale_px(144))
+            self.logo_max = (scale_px(185), scale_px(215))
 
 
 
@@ -2798,12 +2830,120 @@ del "%~f0" >nul 2>nul
             pass
 
 
+    def _ui_asset_image(self, relative_path, size=None, alpha=1.0):
+        try:
+            path = resource_path(*Path(relative_path).parts)
+            if not path.exists():
+                return None
+            img = Image.open(path).convert("RGBA")
+            bbox = img.getchannel("A").getbbox()
+            if bbox:
+                img = img.crop(bbox)
+            if size:
+                img.thumbnail((scale_px(size[0]), scale_px(size[1])), Image.Resampling.LANCZOS)
+            if alpha < 1:
+                channel = img.getchannel("A").point(lambda v: int(v * alpha))
+                img.putalpha(channel)
+            tk_img = ImageTk.PhotoImage(img)
+            self._ui_images.append(tk_img)
+            return tk_img
+        except Exception:
+            return None
+
+    def _ui_icon(self, filename, size=22):
+        return self._ui_asset_image(APP_UI_ICON_DIR / filename, (size, size))
+
+    def _footer_server_state(self):
+        try:
+            url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get())
+        except Exception:
+            url = ""
+        try:
+            if is_admin_build() and self._presence_server_is_running():
+                return f"Đang chạy - {url}" if url else "Đang chạy"
+            online = getattr(self, "_presence_server_online", None)
+            if online is True:
+                return f"Đang chạy - {url}" if url else "Đang chạy"
+            if online is False:
+                return f"Bảo trì - {url}" if url else "Bảo trì"
+            return f"Đang kiểm tra - {url}" if url else "Đang kiểm tra"
+        except Exception:
+            return url or "Không rõ"
+
+    def _refresh_footer_clock(self):
+        try:
+            now = datetime.now()
+            if getattr(self, "footer_time_var", None) is not None:
+                self.footer_time_var.set(now.strftime("%H:%M:%S"))
+            if getattr(self, "footer_date_var", None) is not None:
+                self.footer_date_var.set(now.strftime("%d/%m/%Y"))
+            if getattr(self, "footer_server_var", None) is not None:
+                self.footer_server_var.set(self._footer_server_state())
+            if getattr(self, "footer_status_var", None) is not None:
+                self.footer_status_var.set(getattr(self, "_last_status_text", "Sẵn sàng"))
+        except Exception:
+            pass
+        try:
+            self.root.after(1000, self._refresh_footer_clock)
+        except Exception:
+            pass
+
+    def _refresh_mapping_stats(self):
+        try:
+            vars_ = list(getattr(getattr(self, "mapping_editor", None), "mapping_vars", []) or [])
+            total = len(vars_)
+            mapped = sum(1 for var in vars_ if str(var.get() or "").strip())
+            unmapped = max(0, total - mapped)
+            if getattr(self, "mapping_stat_mapped_var", None) is not None:
+                self.mapping_stat_mapped_var.set(str(mapped))
+            if getattr(self, "mapping_stat_unmapped_var", None) is not None:
+                self.mapping_stat_unmapped_var.set(str(unmapped))
+            if getattr(self, "mapping_stat_total_var", None) is not None:
+                self.mapping_stat_total_var.set(str(total))
+        except Exception:
+            pass
+        try:
+            self.root.after(1000, self._refresh_mapping_stats)
+        except Exception:
+            pass
+
+
 
     def build_ui(self):
 
         self.setup_window_icon()
 
         self.setup_theme()
+
+        self._ui_images = []
+        sidebar_bg = "#053f32"
+        sidebar_bg_2 = "#0b5a45"
+        sidebar_active = "#0f8d6d"
+        sidebar_text = "#d8f3e8"
+        sidebar_muted = "#9fcec0"
+        main_bg = "#eef7fb"
+
+        def image_label(parent, image, bg, **kwargs):
+            if image is None:
+                return tk.Label(parent, bg=bg, **kwargs)
+            return tk.Label(parent, image=image, bg=bg, **kwargs)
+
+        def icon_button(parent, text, command, icon_file=None, variant="default", width=0):
+            btn = ui_button(parent, text, command, width=width, variant=variant)
+            if icon_file:
+                try:
+                    btn.configure(image=self._ui_icon(icon_file, 18), compound="left")
+                except Exception:
+                    pass
+            return btn
+
+        def panel_heading(parent, icon_file, title, bg=UI_SURFACE):
+            row = tk.Frame(parent, bg=bg)
+            row.pack(fill="x")
+            icon = self._ui_icon(icon_file, 22) if icon_file else None
+            image_label(row, icon, bg).pack(side="left", padx=(0, 8))
+            tk.Label(row, text=title, font=ui_font(10, bold=True), bg=bg, fg=UI_TEXT).pack(side="left")
+            return row
 
 
 
@@ -2847,7 +2987,7 @@ del "%~f0" >nul 2>nul
 
 
 
-        shell = tk.Frame(self.root, bg=UI_BG)
+        shell = tk.Frame(self.root, bg=main_bg)
 
         shell.pack(fill="both", expand=True)
 
@@ -2859,7 +2999,7 @@ del "%~f0" >nul 2>nul
 
             width=self.sidebar_w,
 
-            bg="#f8fbff",
+            bg=sidebar_bg,
 
             padx=6 if self.tiny_ui else (8 if self.compact_ui else 10),
 
@@ -2867,7 +3007,7 @@ del "%~f0" >nul 2>nul
 
             highlightthickness=1,
 
-            highlightbackground="#e7edf6",
+            highlightbackground=sidebar_bg_2,
 
         )
 
@@ -2877,7 +3017,7 @@ del "%~f0" >nul 2>nul
 
 
 
-        brand = tk.Frame(sidebar, bg="#f8fbff")
+        brand = tk.Frame(sidebar, bg=sidebar_bg)
 
         brand.pack(fill="x", pady=(0, 14 if self.tiny_ui else 24))
 
@@ -2899,7 +3039,7 @@ del "%~f0" >nul 2>nul
 
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
 
-                tk.Label(brand, image=self.app_logo_img, bg="#f8fbff").pack(anchor="center")
+                tk.Label(brand, image=self.app_logo_img, bg=sidebar_bg).pack(anchor="center")
 
         except Exception:
 
@@ -2909,29 +3049,29 @@ del "%~f0" >nul 2>nul
 
         nav_items = [
 
-            ("home", "⌂", "Trang chủ", True),
+            ("home", "04_sidebar_home.png", "Trang chủ", True),
 
-            ("excel", "▦", "Excel", False),
+            ("excel", "05_sidebar_excel.png", "Excel", False),
 
-            ("history", "◷", "Lịch sử", False),
+            ("history", "06_sidebar_history.png", "Lịch sử", False),
 
-            ("mapping", "▤", "Mẫu mapping", False),
+            ("mapping", "07_sidebar_mapping.png", "Mẫu mapping", False),
 
-            ("settings", "⚙", "Cài đặt", False),
+            ("settings", "08_sidebar_settings.png", "Cài đặt", False),
 
-            ("help", "?", "Trợ giúp", False),
+            ("help", "09_sidebar_help.png", "Trợ giúp", False),
 
-            ("about", "i", "Giới thiệu", False),
+            ("about", "10_sidebar_info.png", "Giới thiệu", False),
 
         ]
 
         for page_id, icon, text, active in nav_items:
 
-            bg = "#dbeafe" if active else "#f8fbff"
+            bg = sidebar_active if active else sidebar_bg
 
-            fg = UI_PRIMARY if active else "#667085"
+            fg = "#ffffff" if active else sidebar_text
 
-            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=UI_PRIMARY if active else "#e7edf6")
+            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=sidebar_active if active else sidebar_bg_2)
 
             row.pack(fill="x", pady=2)
 
@@ -2939,11 +3079,12 @@ del "%~f0" >nul 2>nul
 
             inner.pack(fill="both", expand=True)
 
-            accent = tk.Frame(inner, bg=UI_PRIMARY if active else bg, width=4, height=22)
+            accent = tk.Frame(inner, bg="#f4c542" if active else bg, width=4, height=22)
 
             accent.pack(side="left", padx=(0, 8), fill="y")
 
-            icon_label = tk.Label(inner, text=icon, width=2, bg=bg, fg=fg, font=ui_font(12))
+            icon_img = self._ui_icon(icon, 20)
+            icon_label = image_label(inner, icon_img, bg, width=24)
 
             icon_label.pack(side="left")
 
@@ -3006,38 +3147,39 @@ del "%~f0" >nul 2>nul
 
 
 
-        status_card = tk.Frame(sidebar, bg="#ffffff", highlightthickness=1, highlightbackground="#e7edf6")
-        status_card.pack(fill="x", pady=(6, 0))
-        status_inner = tk.Frame(status_card, bg="#ffffff", padx=5, pady=5)
+        status_card = tk.Frame(sidebar, bg="#0b5a45", highlightthickness=1, highlightbackground="#19765d")
+        status_card.pack(fill="x", pady=(10, 0))
+        status_inner = tk.Frame(status_card, bg="#0b5a45", padx=8, pady=8)
         status_inner.pack(fill="both", expand=True)
+        tk.Label(status_inner, text="Kết nối server", bg="#0b5a45", fg=sidebar_muted, font=ui_font(9, bold=True)).pack(anchor="w", pady=(0, 4))
         self.status = tk.Label(
             status_inner,
             text="● Sẵn sàng",
             anchor="center",
             fg=UI_SUCCESS,
-            bg="#ffffff",
+            bg="#0b5a45",
             font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 9, bold=True),
             wraplength=max(88, self.sidebar_w - 62),
             justify="center",
         )
         self.status.pack(fill="both", expand=True)
 
-        sidebar_spacer = tk.Frame(sidebar, bg="#f8fbff", height=8 if (self.tiny_ui or self.micro_ui) else 12)
+        sidebar_spacer = tk.Frame(sidebar, bg=sidebar_bg, height=8 if (self.tiny_ui or self.micro_ui) else 12)
 
         sidebar_spacer.pack(fill="x")
 
         user_box = card(sidebar, padx=4 if (self.tiny_ui or self.micro_ui) else 5, pady=3 if (self.tiny_ui or self.micro_ui) else 5)
 
-        user_box.configure(bg="#ffffff")
+        user_box.configure(bg="#0b5a45", highlightbackground="#19765d")
 
         user_box.pack(fill="x", pady=(8 if is_admin_build() else 6, 0))
         user_box.pack_propagate(False)
 
-        user_inner = tk.Frame(user_box, bg=UI_SURFACE)
+        user_inner = tk.Frame(user_box, bg="#0b5a45")
 
         user_inner.pack(fill="both", expand=True)
 
-        member_content = tk.Frame(user_inner, bg=UI_SURFACE)
+        member_content = tk.Frame(user_inner, bg="#0b5a45")
 
         member_content.pack(fill="both", expand=True, pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 4))
 
@@ -3046,8 +3188,8 @@ del "%~f0" >nul 2>nul
                 member_content,
                 textvariable=self.user_role_var,
                 font=ui_font(10, bold=True),
-                bg=UI_SURFACE,
-                fg=UI_TEXT,
+                bg="#0b5a45",
+                fg="#ffffff",
                 justify="center",
                 wraplength=max(100, self.sidebar_w - 44),
             )
@@ -3057,8 +3199,8 @@ del "%~f0" >nul 2>nul
                 member_content,
                 text=self.user_name,
                 font=ui_font(9),
-                bg=UI_SURFACE,
-                fg=UI_TEXT,
+                bg="#0b5a45",
+                fg=sidebar_muted,
                 justify="center",
                 wraplength=max(100, self.sidebar_w - 44),
             )
@@ -3068,8 +3210,8 @@ del "%~f0" >nul 2>nul
                 member_content,
                 textvariable=self.user_role_var,
                 font=ui_font(11, bold=True),
-                bg=UI_SURFACE,
-                fg=UI_TEXT,
+                bg="#0b5a45",
+                fg="#ffffff",
                 justify="center",
                 wraplength=max(110, self.sidebar_w - 44),
             ).pack(anchor="center")
@@ -3078,15 +3220,15 @@ del "%~f0" >nul 2>nul
                 member_content,
                 text=self.user_name,
                 font=ui_font(10),
-                bg=UI_SURFACE,
-                fg=UI_MUTED,
+                bg="#0b5a45",
+                fg=sidebar_muted,
                 justify="center",
                 wraplength=max(110, self.sidebar_w - 44),
             ).pack(anchor="center", pady=(4, 0))
 
         if is_admin_build():
 
-            admin_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
+            admin_btn_row = tk.Frame(member_content, bg="#0b5a45")
 
             admin_btn_row.pack(anchor="center", pady=(6 if (self.tiny_ui or self.micro_ui) else 8, 0))
 
@@ -3099,7 +3241,7 @@ del "%~f0" >nul 2>nul
             ).pack(anchor="center")
 
         if not is_admin_build():
-            log_btn_row = tk.Frame(member_content, bg=UI_SURFACE)
+            log_btn_row = tk.Frame(member_content, bg="#0b5a45")
             log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
             self._log_btn = ui_button(
                 log_btn_row,
@@ -3110,25 +3252,29 @@ del "%~f0" >nul 2>nul
             )
             self._log_btn.pack(anchor="center")
 
-        main = tk.Frame(shell, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+        sidebar_decor = self._ui_asset_image(APP_DECOR_SIDEBAR_BOTTOM, (self.sidebar_w - 12, 180), alpha=0.9)
+        if sidebar_decor is not None:
+            tk.Label(sidebar, image=sidebar_decor, bg=sidebar_bg, bd=0).pack(side="bottom", fill="x", pady=(8, 0))
+
+        main = tk.Frame(shell, bg=main_bg, padx=self.main_padx, pady=self.main_pady)
 
         main.pack(side="left", fill="both", expand=True)
 
 
 
-        header = tk.Frame(main, bg=UI_BG)
+        header = tk.Frame(main, bg="#f8fcff", padx=14, pady=10, highlightthickness=1, highlightbackground="#dbe8f1")
 
         header.pack(fill="x")
 
-        title_box = tk.Frame(header, bg=UI_BG)
+        title_box = tk.Frame(header, bg="#f8fcff")
 
         title_box.pack(side="left", fill="x", expand=True)
 
         if APP_TITLE:
 
-            tk.Label(title_box, text=APP_TITLE, font=ui_font(11, bold=True), bg=UI_BG, fg=UI_TEXT).pack(anchor="w")
+            tk.Label(title_box, text=APP_TITLE, font=ui_font(16, bold=True), bg="#f8fcff", fg=UI_TEXT).pack(anchor="w")
 
-        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(10), bg=UI_BG, fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
+        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(10), bg="#f8fcff", fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
 
         if not self.tiny_ui:
 
@@ -3137,14 +3283,18 @@ del "%~f0" >nul 2>nul
                     header,
                     width=38,
                     height=36,
-                    bg=UI_BG,
+                    bg="#f8fcff",
                     bd=0,
                     highlightthickness=0,
                     cursor="hand2",
                 )
                 notify_button.pack(side="left", padx=4)
                 notify_button.create_oval(4, 4, 34, 34, fill="#ffffff", outline="#dbe3ef", width=1)
-                notify_button.create_text(19, 19, text="🔔", fill="#111827", font=("Segoe UI Emoji", 15))
+                bell_img = self._ui_icon("11_header_notification.png", 18)
+                if bell_img is not None:
+                    notify_button.create_image(19, 19, image=bell_img)
+                else:
+                    notify_button.create_text(19, 19, text="🔔", fill="#111827", font=("Segoe UI Emoji", 15))
                 self.admin_log_notify_canvas = notify_button
                 self.admin_log_badge_oval = notify_button.create_oval(
                     23,
@@ -3166,25 +3316,61 @@ del "%~f0" >nul 2>nul
                 notify_button.bind("<Button-1>", lambda _e: self.open_admin_log_panel())
                 self.root.after(500, self._admin_log_badge_loop)
 
-            tk.Label(header, text="A", bg="#6366f1", fg="#ffffff", width=3, height=2, font=ui_font(10, bold=True)).pack(side="left", padx=(10, 6))
+            avatar_img = self._ui_icon("12_header_avatar.png", 34)
+            image_label(header, avatar_img, "#f8fcff", text="A", fg="#ffffff", font=ui_font(10, bold=True)).pack(side="left", padx=(10, 6))
 
-            profile = tk.Frame(header, bg=UI_BG)
+            profile = tk.Frame(header, bg="#f8fcff")
 
             profile.pack(side="left")
 
-            tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg=UI_BG, fg=UI_MUTED, justify="center").pack(anchor="center")
+            tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg="#f8fcff", fg=UI_MUTED, justify="center").pack(anchor="center")
 
-            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=UI_BG, fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
+            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg="#f8fcff", fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
+            dropdown_img = self._ui_icon("13_header_dropdown.png", 14)
+            image_label(header, dropdown_img, "#f8fcff").pack(side="left", padx=(8, 0))
 
 
         self.content_canvas = None
         self._content_window_id = None
-        content = tk.Frame(main, bg=UI_BG)
+        content = tk.Frame(main, bg=main_bg)
         content.pack(fill="both", expand=True)
 
-        self.home_page = tk.Frame(content, bg=UI_BG)
+        footer = tk.Frame(main, bg="#f8fcff", padx=12, pady=7, highlightthickness=1, highlightbackground="#dbe8f1")
+        footer.pack(fill="x", pady=(8, 0))
+        self.footer_server_var = tk.StringVar(value=self._footer_server_state())
+        self.footer_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
+        self.footer_time_var = tk.StringVar(value=datetime.now().strftime("%H:%M:%S"))
+        self.footer_date_var = tk.StringVar(value=datetime.now().strftime("%d/%m/%Y"))
+        self.footer_status_dot = None
 
-        self.excel_page = tk.Frame(content, bg=UI_BG)
+        def footer_item(label, variable=None, static_text=None, dot_file=None):
+            item = tk.Frame(footer, bg="#f8fcff")
+            item.pack(side="left", padx=(0, 18))
+            if dot_file:
+                dot_img = self._ui_icon(dot_file, 11)
+                dot = image_label(item, dot_img, "#f8fcff", text="●", fg=UI_SUCCESS, font=ui_font(9, bold=True))
+                dot.pack(side="left", padx=(0, 5))
+                if dot_file == "31_footer_ready_status_dot.png":
+                    self.footer_status_dot = dot
+            tk.Label(item, text=f"{label}:", bg="#f8fcff", fg=UI_MUTED, font=ui_font(9, bold=True)).pack(side="left")
+            if variable is not None:
+                tk.Label(item, textvariable=variable, bg="#f8fcff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(4, 0))
+            else:
+                tk.Label(item, text=static_text or "", bg="#f8fcff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(4, 0))
+
+        footer_item("Phiên bản", static_text="1.0.0")
+        footer_item("Máy chủ", variable=self.footer_server_var, dot_file="30_footer_running_server_dot.png")
+        footer_item("Trạng thái", variable=self.footer_status_var, dot_file="31_footer_ready_status_dot.png")
+        footer_item("Thời gian", variable=self.footer_time_var)
+        footer_item("Ngày", variable=self.footer_date_var)
+        footer_decor = self._ui_asset_image(APP_DECOR_BOTTOM_RIGHT, (270, 92), alpha=0.62)
+        if footer_decor is not None:
+            tk.Label(footer, image=footer_decor, bg="#f8fcff", bd=0).pack(side="right", padx=(12, 0))
+        self.root.after(250, self._refresh_footer_clock)
+
+        self.home_page = tk.Frame(content, bg=main_bg)
+
+        self.excel_page = tk.Frame(content, bg=main_bg)
 
         self.home_page.pack(fill="both", expand=True)
 
@@ -3237,25 +3423,25 @@ del "%~f0" >nul 2>nul
 
                 btn_row.pack(side="top", anchor="center", pady=(1, 0))
 
-                for text, command, variant in row_btns:
+                for text, command, variant, icon_file in row_btns:
 
-                    ui_button(btn_row, text, command, width=0, variant=variant).pack(side="left", padx=(toolbar_gap, toolbar_gap))
+                    icon_button(btn_row, text, command, icon_file, width=0, variant=variant).pack(side="left", padx=(toolbar_gap, toolbar_gap))
 
             return group
 
         source_btns = [
 
-            ("Chọn Excel", self.choose_excel, "primary"),
+            ("Chọn Excel", self.choose_excel, "primary", "14_action_import_excel.png"),
 
-            ("Workbook" if self.compact_ui else "Đọc workbook", self.scan_current_workbook, "default"),
+            ("Workbook" if self.compact_ui else "Đọc workbook", self.scan_current_workbook, "default", "15_action_import_workbook.png"),
 
-            ("Từng sheet" if self.compact_ui else "Đọc từng sheet", self.read_each_sheet_content, "default"),
+            ("Từng sheet" if self.compact_ui else "Đọc từng sheet", self.read_each_sheet_content, "default", "16_action_read_sheet_list.png"),
 
-            ("Công thức" if self.compact_ui else "Đọc công thức", self.read_current_excel_formulas, "default"),
+            ("Công thức" if self.compact_ui else "Đọc công thức", self.read_current_excel_formulas, "default", "17_action_read_formula.png"),
 
-            ("Đọc lại" if self.compact_ui else "Đọc lại Excel", self.refresh_excel_header_info, "soft"),
+            ("Đọc lại" if self.compact_ui else "Đọc lại Excel", self.refresh_excel_header_info, "soft", "18_action_read_excel.png"),
 
-            ("Đặt lại", self.reset_current_session, "warn"),
+            ("Đặt lại", self.reset_current_session, "warn", "19_action_refresh.png"),
 
         ]
 
@@ -3267,11 +3453,11 @@ del "%~f0" >nul 2>nul
 
         process_btns = [
 
-            ("Đọc bảng", self.run_gemini, "soft"),
+            ("Đọc bảng", self.run_gemini, "soft", "20_action_read_table.png"),
 
-            ("Phiếu cọc" if self.compact_ui else "Đọc phiếu cọc", self.run_gemini_phieu_coc, "soft"),
+            ("Phiếu cọc" if self.compact_ui else "Đọc phiếu cọc", self.run_gemini_phieu_coc, "soft", "21_action_read_column.png"),
 
-            ("Auto map", self.build_mapping, "warn"),
+            ("Auto map", self.build_mapping, "warn", "22_action_auto_map.png"),
 
         ]
 
@@ -3283,9 +3469,9 @@ del "%~f0" >nul 2>nul
 
         export_btns = [
 
-            ("Xem trước", self.preview_excel, "soft"),
+            ("Xem trước", self.preview_excel, "soft", "23_action_preview.png"),
 
-            ("Xuất Excel" if self.compact_ui else "Xuất ra Excel", self.fill_excel, "success"),
+            ("Xuất Excel" if self.compact_ui else "Xuất ra Excel", self.fill_excel, "success", "24_action_export_excel.png"),
 
         ]
 
@@ -3357,6 +3543,14 @@ del "%~f0" >nul 2>nul
 
         self.template_combo.pack(side="left")
 
+        status_pill_img = self._ui_icon("29_status_indicator_pill.png", 108)
+        status_pill = tk.Frame(filter_top, bg=UI_SURFACE)
+        status_pill.pack(side="right", padx=(12, 4))
+        image_label(status_pill, status_pill_img, UI_SURFACE).pack(side="left", padx=(0, 6))
+        tk.Label(status_pill, text="Trạng thái:", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10, bold=True)).pack(side="left")
+        self.filter_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
+        tk.Label(status_pill, textvariable=self.filter_status_var, bg="#e8f7ef", fg=UI_SUCCESS, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="left", padx=(6, 0))
+
         if self.main_content_scroll or self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
             home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
             home_body_shell.pack(fill="both", expand=True)
@@ -3402,7 +3596,7 @@ del "%~f0" >nul 2>nul
             home_body_content = tk.Frame(self.home_page, bg=UI_BG)
             home_body_content.pack(fill="both", expand=True)
 
-        workspace = tk.Frame(home_body_content, bg=UI_BG)
+        workspace = tk.Frame(home_body_content, bg=main_bg)
 
         workspace.pack(fill="both", expand=True)
 
@@ -3412,15 +3606,15 @@ del "%~f0" >nul 2>nul
 
         workspace.grid_columnconfigure(0, weight=1, minsize=left_min)
 
-        workspace.grid_columnconfigure(1, weight=3, minsize=center_min)
+        workspace.grid_columnconfigure(1, weight=4, minsize=center_min)
 
-        workspace.grid_columnconfigure(2, weight=4, minsize=right_min)
+        workspace.grid_columnconfigure(2, weight=2, minsize=right_min)
 
         workspace.grid_rowconfigure(0, weight=1)
 
 
 
-        left_col = tk.Frame(workspace, bg=UI_BG)
+        left_col = tk.Frame(workspace, bg=main_bg)
 
         left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         left_col.grid_columnconfigure(0, weight=1)
@@ -3431,7 +3625,7 @@ del "%~f0" >nul 2>nul
 
         image_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
-        section_title(image_card, "ẢNH OCR")
+        panel_heading(image_card, "25_panel_image_upload.png", "ẢNH OCR")
 
         upload_box = tk.Frame(
             image_card,
@@ -3469,10 +3663,10 @@ del "%~f0" >nul 2>nul
 
         self.img_label = tk.Label(
             self.preview_frame,
-            text="Tải ảnh",
+            text="Kéo thả ảnh vào đây\nhoặc chọn file từ máy tính",
             bg="#f8fbff",
             fg=UI_TEXT,
-            font=ui_font(12, bold=True),
+            font=ui_font(10, bold=True),
             justify="center",
             cursor="hand2",
         )
@@ -3584,7 +3778,7 @@ del "%~f0" >nul 2>nul
 
         info.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
-        section_title(info, "THÔNG TIN EXCEL")
+        panel_heading(info, None, "THÔNG TIN EXCEL")
 
         self.excel_info = tk.Text(
 
@@ -3612,13 +3806,16 @@ del "%~f0" >nul 2>nul
 
         self.excel_info.pack(fill="both", expand=True, pady=(10, 0))
 
+        icon_button(info, "Chọn file Excel", self.choose_excel, "14_action_import_excel.png", width=18, variant="primary").pack(fill="x", pady=(10, 0))
+
 
 
         center_col = card(workspace)
 
         center_col.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
 
-        section_title(center_col, "PREVIEW BẢNG", "Kiểm tra và sửa dữ liệu trước khi đưa vào Excel")
+        panel_heading(center_col, "26_panel_table_grid.png", "PREVIEW BẢNG")
+        tk.Label(center_col, text="Kiểm tra và sửa dữ liệu trước khi đưa vào Excel", font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 8))
 
         self.table_editor = TableEditor(center_col)
         self.table_editor.on_change = self._refresh_daily_summary_panel
@@ -3631,7 +3828,8 @@ del "%~f0" >nul 2>nul
 
         right_col.grid(row=0, column=2, sticky="nsew")
 
-        section_title(right_col, "Xác nhận mapping cột", "Kéo thả để ánh xạ dữ liệu giữa 2 nguồn", title_size=12)
+        panel_heading(right_col, "27_panel_mapping_document.png", "XÁC NHẬN MAPPING CỘT")
+        tk.Label(right_col, text="Kéo thả để ánh xạ dữ liệu giữa 2 nguồn", font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 8))
 
         summary_card = tk.Frame(right_col, bg=UI_SURFACE)
         summary_card.pack(fill="x", pady=(8, 0))
@@ -3663,11 +3861,28 @@ del "%~f0" >nul 2>nul
 
         mapping_action_row.pack(fill="x", pady=(8, 0))
 
-        ui_button(mapping_action_row, "Lưu mẫu", self.save_current_mapping_template, width=10, variant="soft").pack(anchor="e")
+        icon_button(mapping_action_row, "Lưu mẫu", self.save_current_mapping_template, "28_panel_save.png", width=10, variant="soft").pack(anchor="e")
 
         self.mapping_editor = MappingEditor(right_col)
 
+        stats = tk.Frame(right_col, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
+        stats.pack(fill="x", pady=(10, 0))
+        self.mapping_stat_mapped_var = tk.StringVar(value="0")
+        self.mapping_stat_unmapped_var = tk.StringVar(value="0")
+        self.mapping_stat_total_var = tk.StringVar(value="0")
 
+        def stat_cell(col, value_var, label, color):
+            cell = tk.Frame(stats, bg=UI_SURFACE)
+            cell.grid(row=0, column=col, sticky="nsew", padx=1, pady=9)
+            tk.Label(cell, textvariable=value_var, bg=UI_SURFACE, fg=color, font=ui_font(16, bold=True)).pack(anchor="center")
+            tk.Label(cell, text=label, bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(9)).pack(anchor="center", pady=(2, 0))
+
+        for i in range(3):
+            stats.grid_columnconfigure(i, weight=1)
+        stat_cell(0, self.mapping_stat_mapped_var, "Đã mapping", UI_SUCCESS)
+        stat_cell(1, self.mapping_stat_unmapped_var, "Chưa mapping", UI_WARN)
+        stat_cell(2, self.mapping_stat_total_var, "Tổng cột", UI_TEXT)
+        self.root.after(300, self._refresh_mapping_stats)
 
         self._sidebar_member_spacer = sidebar_spacer
         self._sidebar_member_box = user_box
@@ -3870,7 +4085,11 @@ del "%~f0" >nul 2>nul
 
         mapping_title.pack(side="left", fill="x", expand=True)
 
-        tk.Label(mapping_title, text="MẪU MAPPING", bg=UI_SURFACE, fg=UI_TEXT, font=("Segoe UI", 14, "bold")).pack(anchor="w")
+        mapping_icon_title = self._ui_icon("07_sidebar_mapping.png", 24)
+        mapping_title_row = tk.Frame(mapping_title, bg=UI_SURFACE)
+        mapping_title_row.pack(anchor="w")
+        image_label(mapping_title_row, mapping_icon_title, UI_SURFACE).pack(side="left", padx=(0, 8))
+        tk.Label(mapping_title_row, text="MẪU MAPPING", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(14, bold=True)).pack(side="left")
 
         tk.Label(
 
@@ -3886,7 +4105,7 @@ del "%~f0" >nul 2>nul
 
         ).pack(anchor="w", pady=(2, 0))
 
-        ui_button(mapping_top, "Làm mới", self._render_mapping_templates, width=10, variant="soft").pack(side="right")
+        icon_button(mapping_top, "Làm mới", self._render_mapping_templates, "19_action_refresh.png", width=10, variant="soft").pack(side="right")
 
         mapping_body = tk.Frame(mapping_shell, bg=UI_SURFACE)
 
@@ -3924,7 +4143,6 @@ del "%~f0" >nul 2>nul
         self.mapping_templates_canvas.bind("<MouseWheel>", self._on_mapping_mousewheel, add="+")
         self.mapping_templates_canvas.bind("<Button-4>", self._on_mapping_mousewheel, add="+")
         self.mapping_templates_canvas.bind("<Button-5>", self._on_mapping_mousewheel, add="+")
-
 
         self.excel_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
 
@@ -5052,6 +5270,351 @@ from gk_pilepro.gk_overrides import install_app_overrides
 install_app_overrides(App)
 
 
+def _canvas_round_rect(canvas, x1, y1, x2, y2, radius=12, **kwargs):
+    radius = max(1, int(radius))
+    points = [
+        x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+        x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+        x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, splinesteps=24, **kwargs)
+
+
+def _cover_image(source, size):
+    target_w, target_h = size
+    img = source.convert("RGB")
+    src_w, src_h = img.size
+    scale = max(target_w / max(1, src_w), target_h / max(1, src_h))
+    img = img.resize((max(1, int(src_w * scale)), max(1, int(src_h * scale))), Image.LANCZOS)
+    left = max(0, (img.width - target_w) // 2)
+    top = max(0, (img.height - target_h) // 2)
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def _fit_logo_for_splash(path, max_size):
+    logo = Image.open(path).convert("RGBA")
+    alpha_bbox = logo.getchannel("A").getbbox()
+    has_transparent_canvas = bool(alpha_bbox and alpha_bbox != (0, 0, logo.width, logo.height))
+    # Older source logo images included the company title on a white canvas.
+    # Keep only the emblem there; true transparent logo assets are already clean.
+    if not has_transparent_canvas and logo.height > logo.width * 0.65:
+        logo = logo.crop((0, 0, logo.width, int(logo.height * 0.78)))
+
+    pixels = logo.load()
+    width, height = logo.size
+    visited = bytearray(width * height)
+    stack = []
+
+    def near_white(x, y):
+        r, g, b, a = pixels[x, y]
+        return a <= 8 or (r >= 168 and g >= 168 and b >= 168 and (max(r, g, b) - min(r, g, b) <= 42))
+
+    for x in range(width):
+        if near_white(x, 0):
+            stack.append((x, 0))
+        if near_white(x, height - 1):
+            stack.append((x, height - 1))
+    for y in range(height):
+        if near_white(0, y):
+            stack.append((0, y))
+        if near_white(width - 1, y):
+            stack.append((width - 1, y))
+
+    while stack:
+        x, y = stack.pop()
+        idx = y * width + x
+        if visited[idx] or not near_white(x, y):
+            continue
+        visited[idx] = 1
+        r, g, b, _a = pixels[x, y]
+        pixels[x, y] = (r, g, b, 0)
+        if x > 0:
+            stack.append((x - 1, y))
+        if x < width - 1:
+            stack.append((x + 1, y))
+        if y > 0:
+            stack.append((x, y - 1))
+        if y < height - 1:
+            stack.append((x, y + 1))
+
+    alpha_bbox = logo.getchannel("A").getbbox()
+    if alpha_bbox:
+        logo = logo.crop(alpha_bbox)
+    logo.thumbnail(max_size, Image.LANCZOS)
+    return logo.filter(ImageFilter.SHARPEN)
+
+
+def _load_startup_update_notice():
+    try:
+        value = str(os.getenv("STARTUP_UPDATE_NOTICE") or "").strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    try:
+        path = app_data_path("startup_update_notice.txt")
+        if path.exists():
+            value = path.read_text(encoding="utf-8", errors="replace").strip()
+            if value:
+                return value.splitlines()[0].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _splash_font(size_px, bold=False):
+    candidates = (
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+        "segoeuib.ttf" if bold else "segoeui.ttf",
+        "arialbd.ttf" if bold else "arial.ttf",
+    )
+    for name in candidates:
+        try:
+            return ImageFont.truetype(name, size_px)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def _draw_splash_gradient_text(draw, xy, text, font, top_color, bottom_color, stroke_fill, stroke_width=2):
+    x, y = xy
+    bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+    tw = max(1, bbox[2] - bbox[0])
+    th = max(1, bbox[3] - bbox[1])
+    mask = Image.new("L", (tw + stroke_width * 4, th + stroke_width * 4), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.text((stroke_width * 2 - bbox[0], stroke_width * 2 - bbox[1]), text, font=font, fill=255)
+
+    gradient = Image.new("RGBA", mask.size, (0, 0, 0, 0))
+    grad_px = gradient.load()
+    for row in range(mask.height):
+        t = row / max(1, mask.height - 1)
+        r = int(top_color[0] * (1 - t) + bottom_color[0] * t)
+        g = int(top_color[1] * (1 - t) + bottom_color[1] * t)
+        b = int(top_color[2] * (1 - t) + bottom_color[2] * t)
+        for col in range(mask.width):
+            grad_px[col, row] = (r, g, b, 255)
+    gradient.putalpha(mask)
+
+    draw.text((x + 4, y + 5), text, font=font, fill=(0, 0, 0, 165), stroke_width=stroke_width, stroke_fill=(0, 0, 0, 150))
+    draw.text((x, y), text, font=font, fill=stroke_fill, stroke_width=stroke_width, stroke_fill=stroke_fill)
+    draw._image.alpha_composite(gradient, (x - stroke_width * 2, y - stroke_width * 2))
+
+
+def _render_splash_overlay(w, h, progress, step_text, update_text):
+    scale = 2
+    W, H = w * scale, h * scale
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    S = scale
+
+    title_font = _splash_font(max(34, min(52, int(w * 0.047))) * S, bold=True)
+    part_a = "NỀN MÓNG "
+    part_b = "GIA KHÁNH"
+    a_bbox = draw.textbbox((0, 0), part_a, font=title_font, stroke_width=2 * S)
+    b_bbox = draw.textbbox((0, 0), part_b, font=title_font, stroke_width=2 * S)
+    title_w = (a_bbox[2] - a_bbox[0]) + (b_bbox[2] - b_bbox[0])
+    title_y = int(h * 0.615) * S
+    title_x = (W - title_w) // 2
+    _draw_splash_gradient_text(
+        draw,
+        (title_x, title_y),
+        part_a,
+        title_font,
+        (10, 30, 49),
+        (2, 10, 20),
+        (178, 125, 36, 255),
+        stroke_width=2 * S,
+    )
+    _draw_splash_gradient_text(
+        draw,
+        (title_x + (a_bbox[2] - a_bbox[0]), title_y),
+        part_b,
+        title_font,
+        (255, 216, 70),
+        (178, 103, 4),
+        (59, 35, 6, 255),
+        stroke_width=2 * S,
+    )
+
+    panel_left = int(w * 0.145) * S
+    panel_right = int(w * 0.855) * S
+    panel_y = int(h * 0.755) * S
+    panel_h = max(42, int(h * 0.082)) * S
+    bevel = max(16, int((panel_h / S) * 0.42)) * S
+    points = [
+        (panel_left + bevel, panel_y - panel_h // 2),
+        (panel_right - bevel, panel_y - panel_h // 2),
+        (panel_right, panel_y),
+        (panel_right - bevel, panel_y + panel_h // 2),
+        (panel_left + bevel, panel_y + panel_h // 2),
+        (panel_left, panel_y),
+    ]
+    draw.polygon(points, fill=(12, 17, 22, 232), outline=(126, 92, 35, 255))
+    draw.line([(panel_left + bevel, panel_y + panel_h // 2 - 3 * S), (panel_right - bevel, panel_y + panel_h // 2 - 3 * S)], fill=(50, 36, 15, 180), width=S)
+
+    bar_left = panel_left + int((panel_h / S) * 1.28) * S
+    bar_right = panel_right - int((panel_h / S) * 1.28) * S
+    bar_h = max(12, int(h * 0.020)) * S
+    bar_top = panel_y - bar_h // 2
+    radius = bar_h // 2
+    draw.rounded_rectangle((bar_left, bar_top, bar_right, bar_top + bar_h), radius=radius, fill=(16, 22, 27, 255), outline=(165, 123, 42, 255), width=S)
+
+    fill_w = int((bar_right - bar_left) * (max(0.0, min(23.0, float(progress))) / 23.0))
+    if fill_w > 0:
+        fill_right = min(bar_right - 2 * S, bar_left + fill_w)
+        fill_box = (bar_left + 3 * S, bar_top + 3 * S, fill_right, bar_top + bar_h - 3 * S)
+        if fill_box[2] > fill_box[0]:
+            fill_mask = Image.new("L", overlay.size, 0)
+            mask_draw = ImageDraw.Draw(fill_mask)
+            mask_draw.rounded_rectangle(fill_box, radius=max(1, radius - 3 * S), fill=255)
+            fill_layer = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
+            fill_draw = ImageDraw.Draw(fill_layer)
+            for yy in range(fill_box[1], fill_box[3] + 1):
+                t = (yy - fill_box[1]) / max(1, fill_box[3] - fill_box[1])
+                col = (
+                    int(255 * (1 - t) + 218 * t),
+                    int(235 * (1 - t) + 139 * t),
+                    int(103 * (1 - t) + 16 * t),
+                    255,
+                )
+                fill_draw.line((fill_box[0], yy, fill_box[2], yy), fill=col, width=1)
+            fill_layer.putalpha(fill_mask)
+            overlay.alpha_composite(fill_layer)
+
+        glow_x = max(bar_left + 8 * S, fill_right)
+        glow = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow)
+        glow_draw.line((glow_x - 34 * S, panel_y, glow_x + 34 * S, panel_y), fill=(255, 238, 145, 210), width=3 * S)
+        glow_draw.line((glow_x, panel_y - 17 * S, glow_x, panel_y + 17 * S), fill=(255, 248, 205, 230), width=2 * S)
+        glow_draw.ellipse((glow_x - 5 * S, panel_y - 5 * S, glow_x + 5 * S, panel_y + 5 * S), fill=(255, 250, 217, 255))
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=0.45 * S))
+        overlay.alpha_composite(glow)
+
+    status_font = _splash_font(max(15, min(22, int(w * 0.019))) * S, bold=False)
+    status_bbox = draw.textbbox((0, 0), step_text, font=status_font)
+    status_x = (W - (status_bbox[2] - status_bbox[0])) // 2
+    status_y = int(h * 0.848) * S
+    draw.text((status_x, status_y), step_text, font=status_font, fill=(218, 165, 50, 245))
+
+    update_text = str(update_text or "").strip()
+    if update_text:
+        update_font = _splash_font(max(11, min(15, int(w * 0.012))) * S, bold=True)
+        pill_w = min(int(w * 0.42), max(int(w * 0.27), len(update_text) * max(6, int(w * 0.007)))) * S
+        pill_h = max(28, int(h * 0.062)) * S
+        pill_x = (W - pill_w) // 2
+        pill_y = int(h * 0.900) * S
+        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=16 * S, fill=(13, 23, 36, 230), outline=(152, 124, 57, 255), width=S)
+        dot = max(8, int((pill_h / S) * 0.28)) * S
+        draw.ellipse((pill_x + 14 * S, pill_y + (pill_h - dot) // 2, pill_x + 14 * S + dot, pill_y + (pill_h + dot) // 2), fill=(248, 195, 41, 255))
+        draw.text((pill_x + 14 * S + dot + 10 * S, pill_y + pill_h // 2), update_text, font=update_font, fill=(255, 233, 166, 255), anchor="lm")
+
+    return overlay.resize((w, h), Image.LANCZOS)
+
+
+def _draw_startup_splash(canvas, w, h, progress=0, step_text="Đang khởi động hệ thống...", update_text=""):
+    canvas.delete("all")
+    progress = max(0.0, min(23.0, float(progress or 0)))
+
+    if getattr(canvas, "_splash_static_key", None) != (w, h):
+        static_img = Image.new("RGBA", (w, h), (7, 17, 31, 255))
+        bg_path = resource_path(*APP_SPLASH_BG_PNG.parts)
+        if bg_path.exists():
+            try:
+                bg_img = _cover_image(Image.open(bg_path), (w, h)).convert("RGBA")
+                bg_img = Image.alpha_composite(bg_img, Image.new("RGBA", (w, h), (5, 10, 18, 46)))
+                shade = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+                shade_draw = ImageDraw.Draw(shade)
+                shade_draw.rectangle((0, int(h * 0.68), w, h), fill=(0, 0, 0, 66))
+                static_img = Image.alpha_composite(bg_img, shade)
+            except Exception:
+                pass
+
+        logo_path = resource_path(*APP_SPLASH_LOGO_PNG.parts)
+        if not logo_path.exists():
+            logo_path = resource_path(*APP_LOGO_PNG.parts)
+        if logo_path.exists():
+            try:
+                logo = _fit_logo_for_splash(logo_path, (int(w * 0.50), int(h * 0.50)))
+                static_img.alpha_composite(logo, ((w - logo.width) // 2, int(h * 0.34) - logo.height // 2))
+            except Exception:
+                pass
+        canvas._splash_static_key = (w, h)
+        canvas._splash_static_photo = ImageTk.PhotoImage(static_img.convert("RGB"))
+
+    canvas.create_image(0, 0, image=canvas._splash_static_photo, anchor="nw")
+
+    try:
+        overlay = _render_splash_overlay(w, h, progress, step_text, update_text)
+        overlay_photo = ImageTk.PhotoImage(overlay)
+        canvas._splash_overlay = overlay_photo
+        canvas.create_image(0, 0, image=overlay_photo, anchor="nw")
+    except Exception:
+        pass
+
+
+def _show_startup_splash(root, update_text=""):
+    try:
+        splash = tk.Toplevel(root)
+        splash.overrideredirect(True)
+        splash.configure(bg="#050b14")
+        splash.attributes("-topmost", True)
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        w = min(980, max(720, int(sw * 0.74)))
+        h = int(w * 9 / 16)
+        if h > int(sh * 0.78):
+            h = int(sh * 0.78)
+            w = int(h * 16 / 9)
+        splash.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        canvas = tk.Canvas(splash, width=w, height=h, bg="#050b14", bd=0, highlightthickness=0)
+        canvas.pack(fill="both", expand=True)
+        splash._canvas = canvas
+        splash._size = (w, h)
+        splash._update_text = str(update_text or "").strip()
+        splash._progress = 0.0
+        _draw_startup_splash(canvas, w, h, 0, "Đang khởi động hệ thống...", splash._update_text)
+        splash.update_idletasks()
+        splash.update()
+        return splash
+    except Exception:
+        return None
+
+
+def _update_startup_splash(splash, progress, step_text):
+    try:
+        if splash is None or not splash.winfo_exists():
+            return
+        canvas = splash._canvas
+        w, h = splash._size
+        start = float(getattr(splash, "_progress", 0.0))
+        target = max(0.0, min(23.0, float(progress or 0)))
+        if target < start:
+            start = target
+        distance = abs(target - start)
+        frames = max(8, min(22, int(distance * 2.2)))
+        for idx in range(1, frames + 1):
+            t = idx / frames
+            eased = 1 - pow(1 - t, 3)
+            value = start + (target - start) * eased
+            _draw_startup_splash(canvas, w, h, value, step_text, getattr(splash, "_update_text", ""))
+            splash._progress = value
+            splash.update_idletasks()
+            splash.update()
+            time.sleep(0.012)
+        splash._progress = target
+    except Exception:
+        pass
+
+
+def _close_startup_splash(splash):
+    try:
+        if splash is not None and splash.winfo_exists():
+            splash.destroy()
+    except Exception:
+        pass
+
+
 def main():
 
     try:
@@ -5068,11 +5631,12 @@ def main():
 
         root = tk.Tk()
 
+        try:
+            root.withdraw()
+        except Exception:
+            pass
+
         if not is_admin_build():
-            try:
-                root.withdraw()
-            except Exception:
-                pass
             try:
                 server_url = presence_server_url_from_env()
                 if not check_presence_server_alive(server_url, timeout=0.1):
@@ -5096,7 +5660,19 @@ def main():
                     pass
                 return
 
-        App(root)
+        splash = _show_startup_splash(root, _load_startup_update_notice())
+        _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
+        _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
+        app = App(root)
+        _update_startup_splash(splash, 18, "Đang khởi động hệ thống...")
+        _update_startup_splash(splash, 23, "Đang khởi động hệ thống...")
+        _close_startup_splash(splash)
+        try:
+            if not getattr(app, "member_locked", False):
+                root.deiconify()
+                root.lift()
+        except Exception:
+            pass
 
         root.mainloop()
 

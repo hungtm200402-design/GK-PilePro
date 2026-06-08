@@ -808,15 +808,23 @@ def _render_mapping_templates(self):
 
     for template in self.mapping_templates:
 
-        item = tk.Frame(host, bg="#fbfdff", padx=12, pady=10, highlightthickness=1, highlightbackground=UI_BORDER)
+        item = tk.Frame(host, bg="#ffffff", padx=16, pady=14, highlightthickness=1, highlightbackground="#d7e5e0")
 
         item.pack(fill="x", pady=(0, 10))
 
-        top = tk.Frame(item, bg="#fbfdff")
+        top = tk.Frame(item, bg="#ffffff")
 
         top.pack(fill="x")
 
-        title_box = tk.Frame(top, bg="#fbfdff")
+        icon_img = None
+        try:
+            icon_img = self._ui_icon("27_panel_mapping_document.png", 24)
+        except Exception:
+            pass
+        if icon_img is not None:
+            tk.Label(top, image=icon_img, bg="#ffffff").pack(side="left", padx=(0, 10))
+
+        title_box = tk.Frame(top, bg="#ffffff")
 
         title_box.pack(side="left", fill="x", expand=True)
 
@@ -826,7 +834,7 @@ def _render_mapping_templates(self):
 
             text=str(template.get("name") or "Mẫu mapping"),
 
-            bg="#fbfdff",
+            bg="#ffffff",
 
             fg=UI_TEXT,
 
@@ -836,29 +844,43 @@ def _render_mapping_templates(self):
 
         meta = f"{template.get('kind') or 'Mapping'} • {template.get('updated_at') or template.get('created_at') or ''}"
 
-        tk.Label(title_box, text=meta, bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
+        tk.Label(title_box, text=meta, bg="#ffffff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
 
-        ui_button(top, "Áp dụng", lambda tpl=template: self.apply_mapping_template(tpl), width=9, variant="primary").pack(side="right", padx=(8, 0))
+        apply_btn = ui_button(top, "Áp dụng", lambda tpl=template: self.apply_mapping_template(tpl), width=9, variant="primary")
+        try:
+            apply_btn.configure(image=self._ui_icon("37_action_apply.png", 15), compound="left")
+        except Exception:
+            pass
+        apply_btn.pack(side="right", padx=(8, 0))
 
-        ui_button(top, "Xóa", lambda tid=template.get("id"): self.delete_mapping_template(tid), width=7, variant="warn").pack(side="right")
+        delete_btn = ui_button(top, "Xóa", lambda tid=template.get("id"): self.delete_mapping_template(tid), width=7, variant="warn")
+        try:
+            delete_btn.configure(image=self._ui_icon("35_action_delete.png", 15), compound="left")
+        except Exception:
+            pass
+        delete_btn.pack(side="right")
 
-        rows = tk.Frame(item, bg="#fbfdff")
+        rows = tk.Frame(item, bg="#ffffff")
 
         rows.pack(fill="x", pady=(8, 0))
 
-        for pair in (template.get("mapping") or [])[:14]:
+        for idx, pair in enumerate((template.get("mapping") or [])[:18]):
 
             target = f"{pair.get('target_letter') or ''}: {pair.get('target') or ''}".strip()
 
             line = f"{pair.get('source') or ''}  →  {target}"
 
-            tk.Label(rows, text=line, bg="#fbfdff", fg=UI_TEXT, font=ui_font(10), anchor="w").pack(fill="x", pady=1)
+            cell = tk.Label(rows, text=line, bg="#ffffff", fg=UI_TEXT, font=ui_font(10), anchor="w")
+            cell.grid(row=idx // 3, column=idx % 3, sticky="ew", padx=(0, 18), pady=2)
+
+        for col in range(3):
+            rows.grid_columnconfigure(col, weight=1)
 
         total = len(template.get("mapping") or [])
 
-        if total > 14:
+        if total > 18:
 
-            tk.Label(rows, text=f"... còn {total - 14} cặp mapping", bg="#fbfdff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(2, 0))
+            tk.Label(item, text=f"... còn {total - 18} cặp mapping", bg="#ffffff", fg=UI_MUTED, font=ui_font(10)).pack(anchor="w", pady=(6, 0))
 
     self._bind_mapping_mousewheel_recursive()
 

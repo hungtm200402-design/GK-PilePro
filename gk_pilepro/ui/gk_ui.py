@@ -5,25 +5,25 @@ import tkinter as tk
 from tkinter import ttk
 
 
-UI_BG = "#f4f7fb"
+UI_BG = "#edf7f8"
 
 UI_SURFACE = "#ffffff"
 
-UI_SURFACE_2 = "#eef3f8"
+UI_SURFACE_2 = "#f4fbf8"
 
-UI_BORDER = "#d6dee8"
+UI_BORDER = "#d7e5e0"
 
-UI_TEXT = "#162033"
+UI_TEXT = "#102a3b"
 
-UI_MUTED = "#667085"
+UI_MUTED = "#53677a"
 
-UI_PRIMARY = "#1f6feb"
+UI_PRIMARY = "#0b8f62"
 
-UI_PRIMARY_ACTIVE = "#1557bd"
+UI_PRIMARY_ACTIVE = "#08764f"
 
-UI_SUCCESS = "#17803d"
+UI_SUCCESS = "#0b8f62"
 
-UI_SUCCESS_ACTIVE = "#126931"
+UI_SUCCESS_ACTIVE = "#08764f"
 
 UI_WARN = "#b7791f"
 
@@ -90,16 +90,17 @@ class RoundedButton(tk.Canvas):
         self.variant = variant
 
         self.text = text
+        self.icon_image = None
 
         self.colors = {
 
-            "default": (UI_SURFACE, UI_TEXT, "#e8eef5", UI_BORDER),
+            "default": (UI_SURFACE, UI_TEXT, "#f4fbf8", UI_BORDER),
 
             "primary": (UI_PRIMARY, "#ffffff", UI_PRIMARY_ACTIVE, UI_PRIMARY),
 
             "success": (UI_SUCCESS, "#ffffff", UI_SUCCESS_ACTIVE, UI_SUCCESS),
 
-            "soft": ("#f8fbff", UI_PRIMARY, "#e8f2ff", "#b8d8ff"),
+            "soft": ("#ffffff", UI_PRIMARY, "#eefaf4", "#cfe4dc"),
 
             "warn": ("#fffaf0", "#c06b00", "#fff0ce", "#ffd38a"),
 
@@ -166,6 +167,10 @@ class RoundedButton(tk.Canvas):
         if "text" in kwargs:
             self.text = kwargs.pop("text")
             self._draw(self.hover_color if self._hovered else self.bg_color)
+        if "image" in kwargs:
+            self.icon_image = kwargs.pop("image")
+            kwargs.pop("compound", None)
+            self._draw(self.hover_color if self._hovered else self.bg_color)
         if kwargs:
             return super().config(**kwargs)
         return None
@@ -187,7 +192,12 @@ class RoundedButton(tk.Canvas):
 
         font = ui_font(10, bold=self.variant in {"primary", "success"})
 
-        self.create_text(self.pixel_width // 2, self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font)
+        if self.icon_image is not None:
+            icon_x = max(scale_px(17), self.pixel_width // 2 - min(scale_px(44), int(len(str(self.text)) * 2.7 * UI_SCALE)))
+            self.create_image(icon_x, self.pixel_height // 2, image=self.icon_image)
+            self.create_text(icon_x + scale_px(14), self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font, anchor="w")
+        else:
+            self.create_text(self.pixel_width // 2, self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font)
 
 
 

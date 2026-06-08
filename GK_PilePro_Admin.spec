@@ -8,9 +8,16 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ('.env', '.'),
+    ('assets\\gk_logo.png', 'assets'),
     ('assets\\tool_kl_logo.png', 'assets'),
-    ('assets\\tool_kl_taskbar.png', 'assets'),
-    ('assets\\tool_kl.ico', 'assets'),
+    ('assets\\gk_app_icon.png', 'assets'),
+    ('assets\\gk_app_icon.ico', 'assets'),
+    ('assets\\gk_splash_logo.png', 'assets'),
+    ('assets\\gk_splash_bg.png', 'assets'),
+    ('assets\\gk_ui_decor_bottom_right.png', 'assets'),
+    ('assets\\gk_ui_decor_sidebar_bottom.png', 'assets'),
+    ('assets\\gk_footer_decoration.png', 'assets'),
+    ('assets\\gk_sidebar_decoration.png', 'assets'),
 ]
 binaries = []
 hiddenimports = []
@@ -39,6 +46,7 @@ add_tree(datas, tcl_root / 'tcl8.6', '_tcl_data')
 add_tree(datas, tcl_root / 'tcl8.6', 'tcl_data')
 add_tree(datas, tcl_root / 'tk8.6', '_tk_data')
 add_tree(datas, tcl_root / 'tk8.6', 'tk_data')
+add_tree(datas, Path('assets') / 'GK_PilePro_icon_files_no_bg', Path('assets') / 'GK_PilePro_icon_files_no_bg')
 
 python_dlls = Path(sys.base_prefix) / 'DLLs'
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):
@@ -76,7 +84,7 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
-    icon='assets\\tool_kl.ico',
+    icon='assets\\gk_app_icon.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

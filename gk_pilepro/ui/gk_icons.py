@@ -251,9 +251,9 @@ def build_detailed_app_icon(source_path, size=256):
 
     canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
 
-    fit_w = int(size * 1.00)
+    fit_w = int(size * 1.08)
 
-    fit_h = int(size * 1.00)
+    fit_h = int(size * 1.08)
 
     scale = min(fit_w / img.size[0], fit_h / img.size[1])
 
@@ -304,12 +304,12 @@ def build_icon_variant(source_path, size):
         img = img.crop(bbox)
 
     params = {
-        16: (1.00, 1.95, 1.16, 0.34, 250),
-        32: (1.00, 1.80, 1.14, 0.36, 235),
-        48: (1.00, 1.65, 1.12, 0.40, 220),
-        64: (1.00, 1.50, 1.10, 0.42, 200),
-        128: (1.00, 1.34, 1.08, 0.46, 175),
-        256: (1.00, 1.22, 1.06, 0.50, 155),
+        16: (1.18, 1.95, 1.16, 0.34, 250),
+        32: (1.12, 1.80, 1.14, 0.36, 235),
+        48: (1.08, 1.65, 1.12, 0.40, 220),
+        64: (1.06, 1.50, 1.10, 0.42, 200),
+        128: (1.04, 1.34, 1.08, 0.46, 175),
+        256: (1.02, 1.22, 1.06, 0.50, 155),
     }
 
     fit_ratio, sharpness, contrast, radius, percent = params.get(int(size), (1.00, 1.45, 1.08, 0.45, 180))
