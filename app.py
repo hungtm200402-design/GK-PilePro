@@ -1515,6 +1515,10 @@ class App:
         active_page = getattr(self, "current_page", "home")
 
         for page_name, widgets in getattr(self, "nav_widgets", {}).items():
+            if widgets.get("canvas") is not None:
+                widgets["active"] = page_name == active_page
+                self._draw_nav_item(page_name)
+                continue
 
             row = widgets.get("row")
 
@@ -1557,6 +1561,84 @@ class App:
             except Exception:
 
                 pass
+
+
+    def _nav_round_rect(self, canvas, x1, y1, x2, y2, radius=12, **kwargs):
+        points = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        return canvas.create_polygon(points, smooth=True, splinesteps=18, **kwargs)
+
+    def _draw_nav_icon(self, canvas, page_name, x, y, color):
+        try:
+            s = scale_px(18)
+            lw = max(2, scale_px(2))
+            left = x - s // 2
+            top = y - s // 2
+            right = x + s // 2
+            bottom = y + s // 2
+            if page_name == "home":
+                canvas.create_line(left + 1, y, x, top + 1, right - 1, y, fill=color, width=lw, capstyle="round", joinstyle="round")
+                canvas.create_line(left + 4, y, left + 4, bottom - 2, right - 4, bottom - 2, right - 4, y, fill=color, width=lw, capstyle="round", joinstyle="round")
+                canvas.create_line(x - 3, bottom - 2, x - 3, y + 5, x + 3, y + 5, x + 3, bottom - 2, fill=color, width=max(1, lw - 1))
+            elif page_name == "excel":
+                canvas.create_rectangle(left + 3, top + 2, right - 2, bottom - 2, outline=color, width=lw)
+                canvas.create_line(left + 7, top + 2, left + 7, bottom - 2, fill=color, width=max(1, lw - 1))
+                for yy in (top + 7, top + 12):
+                    canvas.create_line(left + 3, yy, right - 2, yy, fill=color, width=max(1, lw - 1))
+            elif page_name == "history":
+                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
+                canvas.create_line(x, y, x, top + 6, fill=color, width=lw, capstyle="round")
+                canvas.create_line(x, y, x + 5, y + 4, fill=color, width=lw, capstyle="round")
+            elif page_name == "mapping":
+                for idx, yy in enumerate((top + 4, y, bottom - 4)):
+                    canvas.create_rectangle(left + 2, yy - 3, left + 7, yy + 2, outline=color, width=max(1, lw - 1))
+                    canvas.create_line(left + 10, yy, right - 1, yy, fill=color, width=lw, capstyle="round")
+            elif page_name == "settings":
+                canvas.create_oval(left + 5, top + 5, right - 5, bottom - 5, outline=color, width=lw)
+                for dx, dy in ((0, -8), (0, 8), (-8, 0), (8, 0), (-6, -6), (6, -6), (-6, 6), (6, 6)):
+                    canvas.create_line(x + dx * 0.72, y + dy * 0.72, x + dx, y + dy, fill=color, width=lw, capstyle="round")
+            elif page_name == "help":
+                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
+                canvas.create_text(x, y - 2, text="?", fill=color, font=ui_font(13, bold=True))
+            else:
+                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
+                canvas.create_text(x, y, text="i", fill=color, font=ui_font(12, bold=True))
+        except Exception:
+            pass
+
+
+    def _draw_nav_item(self, page_name):
+        try:
+            widgets = self.nav_widgets.get(page_name, {})
+            canvas = widgets.get("canvas")
+            if canvas is None:
+                return
+            canvas.delete("all")
+            width = max(160, int(canvas.winfo_width() or self.sidebar_w - 20))
+            height = max(42, int(canvas.winfo_height() or scale_px(44)))
+            active = bool(widgets.get("active"))
+            hovered = bool(widgets.get("hovered"))
+            bg = "#0b8f63" if active else ("#0a5f47" if hovered else "#003f2d")
+            text_color = "#ffffff" if active else "#d8f3e8"
+            icon_color = "#f3c94a" if active else "#d8f3e8"
+            self._nav_round_rect(canvas, 1, 1, width - 1, height - 1, radius=scale_px(12), fill=bg, outline=bg)
+            if active:
+                self._nav_round_rect(canvas, scale_px(5), (height - scale_px(24)) // 2, scale_px(10), (height + scale_px(24)) // 2, radius=scale_px(3), fill="#f3c94a", outline="#f3c94a")
+            icon_x = scale_px(34)
+            self._draw_nav_icon(canvas, page_name, icon_x, height // 2, icon_color)
+            canvas.create_text(
+                icon_x + scale_px(24),
+                height // 2,
+                text=widgets.get("text", ""),
+                fill=text_color,
+                font=ui_font(11, bold=active),
+                anchor="w",
+            )
+        except Exception:
+            pass
 
 
     def _activate_nav_item(self, page_name, callback=None):
@@ -2703,9 +2785,9 @@ del "%~f0" >nul 2>nul
 
                 "Preview.Treeview",
 
-                background="#f7f7f3",
+                background="#ffffff",
 
-                fieldbackground="#f7f7f3",
+                fieldbackground="#ffffff",
 
                 foreground="#1f2933",
 
@@ -2713,11 +2795,11 @@ del "%~f0" >nul 2>nul
 
                 rowheight=row_height,
 
-                bordercolor="#cfd7dd",
+                bordercolor="#e3eae7",
 
-                lightcolor="#cfd7dd",
+                lightcolor="#e3eae7",
 
-                darkcolor="#cfd7dd",
+                darkcolor="#e3eae7",
 
             )
 
@@ -2725,9 +2807,9 @@ del "%~f0" >nul 2>nul
 
                 "Preview.Treeview.Heading",
 
-                background="#6b6358",
+                background="#f3f8f6",
 
-                foreground="#ffffff",
+                foreground=UI_TEXT,
 
                 font=ui_font(11, bold=True),
 
@@ -2751,9 +2833,9 @@ del "%~f0" >nul 2>nul
 
                 "Preview.Treeview.Heading",
 
-                background=[("active", "#5d554c"), ("!active", "#6b6358")],
+                background=[("active", "#e7f3ee"), ("!active", "#f3f8f6")],
 
-                foreground=[("active", "#ffffff"), ("!active", "#ffffff")],
+                foreground=[("active", UI_TEXT), ("!active", UI_TEXT)],
 
             )
 
@@ -2763,21 +2845,21 @@ del "%~f0" >nul 2>nul
 
                 gripcount=0,
 
-                background="#c8d5e6",
+                background="#b8c6c1",
 
-                darkcolor="#c8d5e6",
+                darkcolor="#b8c6c1",
 
-                lightcolor="#c8d5e6",
+                lightcolor="#b8c6c1",
 
-                troughcolor="#eef3f8",
+                troughcolor="#f0f4f3",
 
-                bordercolor="#eef3f8",
+                bordercolor="#f0f4f3",
 
                 arrowcolor=UI_MUTED,
 
                 relief="flat",
 
-                width=14,
+                width=11,
 
             )
 
@@ -2787,21 +2869,21 @@ del "%~f0" >nul 2>nul
 
                 gripcount=0,
 
-                background="#c8d5e6",
+                background="#b8c6c1",
 
-                darkcolor="#c8d5e6",
+                darkcolor="#b8c6c1",
 
-                lightcolor="#c8d5e6",
+                lightcolor="#b8c6c1",
 
-                troughcolor="#eef3f8",
+                troughcolor="#f0f4f3",
 
-                bordercolor="#eef3f8",
+                bordercolor="#f0f4f3",
 
                 arrowcolor=UI_MUTED,
 
                 relief="flat",
 
-                width=14,
+                width=11,
 
             )
 
@@ -2809,7 +2891,7 @@ del "%~f0" >nul 2>nul
 
                 "Vertical.TScrollbar",
 
-                background=[("active", "#9fb2cc"), ("pressed", "#7f96b5")],
+                background=[("active", "#93aaa2"), ("pressed", "#748d85")],
 
                 arrowcolor=[("active", UI_PRIMARY), ("!active", UI_MUTED)],
 
@@ -2819,7 +2901,7 @@ del "%~f0" >nul 2>nul
 
                 "Horizontal.TScrollbar",
 
-                background=[("active", "#9fb2cc"), ("pressed", "#7f96b5")],
+                background=[("active", "#93aaa2"), ("pressed", "#748d85")],
 
                 arrowcolor=[("active", UI_PRIMARY), ("!active", UI_MUTED)],
 
@@ -2850,6 +2932,22 @@ del "%~f0" >nul 2>nul
         except Exception:
             return None
 
+    def _ui_asset_image_exact(self, relative_path, size, alpha=1.0):
+        try:
+            path = resource_path(*Path(relative_path).parts)
+            if not path.exists():
+                return None
+            img = Image.open(path).convert("RGBA")
+            img = img.resize((scale_px(size[0]), scale_px(size[1])), Image.Resampling.LANCZOS)
+            if alpha < 1:
+                channel = img.getchannel("A").point(lambda v: int(v * alpha))
+                img.putalpha(channel)
+            tk_img = ImageTk.PhotoImage(img)
+            self._ui_images.append(tk_img)
+            return tk_img
+        except Exception:
+            return None
+
     def _ui_icon(self, filename, size=22):
         return self._ui_asset_image(APP_UI_ICON_DIR / filename, (size, size))
 
@@ -2860,15 +2958,15 @@ del "%~f0" >nul 2>nul
             url = ""
         try:
             if is_admin_build() and self._presence_server_is_running():
-                return f"Đang chạy - {url}" if url else "Đang chạy"
+                return "Đang chạy"
             online = getattr(self, "_presence_server_online", None)
             if online is True:
-                return f"Đang chạy - {url}" if url else "Đang chạy"
+                return "Đang chạy"
             if online is False:
-                return f"Bảo trì - {url}" if url else "Bảo trì"
-            return f"Đang kiểm tra - {url}" if url else "Đang kiểm tra"
+                return "Bảo trì"
+            return "Đang kiểm tra"
         except Exception:
-            return url or "Không rõ"
+            return "Không rõ"
 
     def _refresh_footer_clock(self):
         try:
@@ -2916,12 +3014,13 @@ del "%~f0" >nul 2>nul
         self.setup_theme()
 
         self._ui_images = []
-        sidebar_bg = "#053f32"
-        sidebar_bg_2 = "#0b5a45"
-        sidebar_active = "#0f8d6d"
+        sidebar_bg = "#003f2d"
+        sidebar_bg_2 = "#00523a"
+        sidebar_active = "#0b8f62"
         sidebar_text = "#d8f3e8"
-        sidebar_muted = "#9fcec0"
-        main_bg = "#eef7fb"
+        sidebar_muted = "#a9d8ca"
+        sidebar_card = "#064f3a"
+        main_bg = UI_BG
 
         def image_label(parent, image, bg, **kwargs):
             if image is None:
@@ -2932,7 +3031,7 @@ del "%~f0" >nul 2>nul
             btn = ui_button(parent, text, command, width=width, variant=variant)
             if icon_file:
                 try:
-                    btn.configure(image=self._ui_icon(icon_file, 18), compound="left")
+                    btn.configure(image=self._ui_icon(icon_file, 16), compound="left")
                 except Exception:
                     pass
             return btn
@@ -2969,7 +3068,7 @@ del "%~f0" >nul 2>nul
 
                 highlightthickness=1,
 
-                highlightbackground="#e6edf5",
+                highlightbackground=UI_BORDER,
 
             )
 
@@ -3003,11 +3102,11 @@ del "%~f0" >nul 2>nul
 
             padx=6 if self.tiny_ui else (8 if self.compact_ui else 10),
 
-            pady=8 if self.tiny_ui else (10 if self.compact_ui else 14),
+            pady=8 if self.tiny_ui else (10 if self.compact_ui else 12),
 
             highlightthickness=1,
 
-            highlightbackground=sidebar_bg_2,
+            highlightbackground="#0c6a4f",
 
         )
 
@@ -3019,7 +3118,7 @@ del "%~f0" >nul 2>nul
 
         brand = tk.Frame(sidebar, bg=sidebar_bg)
 
-        brand.pack(fill="x", pady=(0, 14 if self.tiny_ui else 24))
+        brand.pack(fill="x", pady=(0, 12 if self.tiny_ui else 18))
 
         logo_file = resource_path(*APP_LOGO_PNG.parts)
 
@@ -3040,6 +3139,14 @@ del "%~f0" >nul 2>nul
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
 
                 tk.Label(brand, image=self.app_logo_img, bg=sidebar_bg).pack(anchor="center")
+                tk.Label(
+                    brand,
+                    text="NỀN MÓNG\nGIA KHÁNH",
+                    bg=sidebar_bg,
+                    fg="#ffffff",
+                    font=ui_font(10, bold=True),
+                    justify="center",
+                ).pack(anchor="center", pady=(4, 0))
 
         except Exception:
 
@@ -3067,97 +3174,71 @@ del "%~f0" >nul 2>nul
 
         for page_id, icon, text, active in nav_items:
 
-            bg = sidebar_active if active else sidebar_bg
-
-            fg = "#ffffff" if active else sidebar_text
-
-            row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=sidebar_active if active else sidebar_bg_2)
-
-            row.pack(fill="x", pady=2)
-
-            inner = tk.Frame(row, bg=bg, padx=8, pady=8)
-
-            inner.pack(fill="both", expand=True)
-
-            accent = tk.Frame(inner, bg="#f4c542" if active else bg, width=4, height=22)
-
-            accent.pack(side="left", padx=(0, 8), fill="y")
-
             icon_img = self._ui_icon(icon, 20)
-            icon_label = image_label(inner, icon_img, bg, width=24)
-
-            icon_label.pack(side="left")
-
-            text_label = tk.Label(
-                inner,
-                text=text,
-                bg=bg,
-                fg=fg,
-                font=ui_font(12, bold=active),
-                anchor="w",
-                justify="left",
-                wraplength=max(96, self.sidebar_w - 60),
+            nav_canvas = tk.Canvas(
+                sidebar,
+                height=scale_px(44),
+                bg=sidebar_bg,
+                bd=0,
+                highlightthickness=0,
+                cursor="hand2",
             )
+            nav_canvas.pack(fill="x", pady=3)
 
-            text_label.pack(side="left", padx=(4 if self.tiny_ui else 6, 0), fill="x", expand=True)
-
-            self.nav_widgets[page_id] = {"row": row, "inner": inner, "accent": accent, "icon": icon_label, "label": text_label}
+            self.nav_widgets[page_id] = {
+                "canvas": nav_canvas,
+                "icon_img": icon_img,
+                "text": text,
+                "active": active,
+                "hovered": False,
+            }
 
             if page_id == "excel":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_excel_page))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_excel_page))
 
             elif page_id == "home":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_home_page))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_home_page))
 
             elif page_id == "history":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_history_page))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_history_page))
 
             elif page_id == "mapping":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_mapping_page))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_mapping_page))
 
             elif page_id == "settings":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_settings_dialog))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_settings_dialog))
 
             elif page_id == "help":
 
-                for widget in (row, inner, accent, icon_label, text_label):
-
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_help_dialog))
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_help_dialog))
 
             elif page_id == "about":
 
-                for widget in (row, inner, accent, icon_label, text_label):
+                nav_canvas.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_about_dialog))
 
-                    widget.bind("<Button-1>", lambda _e, p=page_id: self._activate_nav_item(p, self.show_about_dialog))
+            nav_canvas.bind("<Enter>", lambda _e, p=page_id: (self.nav_widgets[p].update({"hovered": True}), self._draw_nav_item(p)))
+            nav_canvas.bind("<Leave>", lambda _e, p=page_id: (self.nav_widgets[p].update({"hovered": False}), self._draw_nav_item(p)))
+            nav_canvas.bind("<Configure>", lambda _e, p=page_id: self._draw_nav_item(p))
+            self.root.after_idle(lambda p=page_id: self._draw_nav_item(p))
 
 
 
-        status_card = tk.Frame(sidebar, bg="#0b5a45", highlightthickness=1, highlightbackground="#19765d")
-        status_card.pack(fill="x", pady=(10, 0))
-        status_inner = tk.Frame(status_card, bg="#0b5a45", padx=8, pady=8)
+        status_card = tk.Frame(sidebar, bg=sidebar_card, highlightthickness=1, highlightbackground="#188060")
+        status_card.pack(fill="x", pady=(12, 0))
+        status_inner = tk.Frame(status_card, bg=sidebar_card, padx=12, pady=10)
         status_inner.pack(fill="both", expand=True)
-        tk.Label(status_inner, text="Kết nối server", bg="#0b5a45", fg=sidebar_muted, font=ui_font(9, bold=True)).pack(anchor="w", pady=(0, 4))
+        tk.Label(status_inner, text="Kết nối server", bg=sidebar_card, fg="#ffffff", font=ui_font(10, bold=True)).pack(anchor="w", pady=(0, 6))
         self.status = tk.Label(
             status_inner,
-            text="● Sẵn sàng",
-            anchor="center",
+            text="● Đã kết nối",
+            anchor="w",
             fg=UI_SUCCESS,
-            bg="#0b5a45",
+            bg=sidebar_card,
             font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 9, bold=True),
             wraplength=max(88, self.sidebar_w - 62),
             justify="center",
@@ -3170,65 +3251,60 @@ del "%~f0" >nul 2>nul
 
         user_box = card(sidebar, padx=4 if (self.tiny_ui or self.micro_ui) else 5, pady=3 if (self.tiny_ui or self.micro_ui) else 5)
 
-        user_box.configure(bg="#0b5a45", highlightbackground="#19765d")
+        user_box.configure(bg=sidebar_card, highlightbackground="#188060")
 
         user_box.pack(fill="x", pady=(8 if is_admin_build() else 6, 0))
         user_box.pack_propagate(False)
 
-        user_inner = tk.Frame(user_box, bg="#0b5a45")
+        user_inner = tk.Frame(user_box, bg=sidebar_card)
 
         user_inner.pack(fill="both", expand=True)
 
-        member_content = tk.Frame(user_inner, bg="#0b5a45")
+        member_content = tk.Frame(user_inner, bg=sidebar_card)
 
         member_content.pack(fill="both", expand=True, pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 4))
 
-        if self.tiny_ui or self.micro_ui:
-            self.sidebar_member_role_label = tk.Label(
-                member_content,
-                textvariable=self.user_role_var,
-                font=ui_font(10, bold=True),
-                bg="#0b5a45",
-                fg="#ffffff",
-                justify="center",
-                wraplength=max(100, self.sidebar_w - 44),
-            )
-            self.sidebar_member_role_label.pack(anchor="center")
-
-            self.sidebar_member_name_label = tk.Label(
-                member_content,
-                text=self.user_name,
-                font=ui_font(9),
-                bg="#0b5a45",
-                fg=sidebar_muted,
-                justify="center",
-                wraplength=max(100, self.sidebar_w - 44),
-            )
-            self.sidebar_member_name_label.pack(anchor="center", pady=(2, 0))
-        else:
-            tk.Label(
-                member_content,
-                textvariable=self.user_role_var,
-                font=ui_font(11, bold=True),
-                bg="#0b5a45",
-                fg="#ffffff",
-                justify="center",
-                wraplength=max(110, self.sidebar_w - 44),
-            ).pack(anchor="center")
-
-            tk.Label(
-                member_content,
-                text=self.user_name,
-                font=ui_font(10),
-                bg="#0b5a45",
-                fg=sidebar_muted,
-                justify="center",
-                wraplength=max(110, self.sidebar_w - 44),
-            ).pack(anchor="center", pady=(4, 0))
+        member_row = tk.Frame(member_content, bg=sidebar_card)
+        member_row.pack(fill="x", padx=(4, 2), pady=(0, 2))
+        avatar = tk.Canvas(
+            member_row,
+            width=scale_px(36),
+            height=scale_px(36),
+            bg=sidebar_card,
+            bd=0,
+            highlightthickness=0,
+        )
+        avatar.pack(side="left", padx=(0, 9))
+        avatar.create_oval(scale_px(2), scale_px(2), scale_px(34), scale_px(34), fill="#a8d8c7", outline="#a8d8c7")
+        avatar.create_text(scale_px(18), scale_px(18), text="A", fill="#0d5c44", font=ui_font(12, bold=True))
+        member_text = tk.Frame(member_row, bg=sidebar_card)
+        member_text.pack(side="left", fill="x", expand=True)
+        self.sidebar_member_role_label = tk.Label(
+            member_text,
+            textvariable=self.user_role_var,
+            font=ui_font(10 if (self.tiny_ui or self.micro_ui) else 11, bold=True),
+            bg=sidebar_card,
+            fg="#ffffff",
+            justify="left",
+            anchor="w",
+            wraplength=max(96, self.sidebar_w - 76),
+        )
+        self.sidebar_member_role_label.pack(anchor="w")
+        self.sidebar_member_name_label = tk.Label(
+            member_text,
+            text=self.user_name,
+            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10),
+            bg=sidebar_card,
+            fg=sidebar_muted,
+            justify="left",
+            anchor="w",
+            wraplength=max(96, self.sidebar_w - 76),
+        )
+        self.sidebar_member_name_label.pack(anchor="w", pady=(2, 0))
 
         if is_admin_build():
 
-            admin_btn_row = tk.Frame(member_content, bg="#0b5a45")
+            admin_btn_row = tk.Frame(member_content, bg=sidebar_card)
 
             admin_btn_row.pack(anchor="center", pady=(6 if (self.tiny_ui or self.micro_ui) else 8, 0))
 
@@ -3241,7 +3317,7 @@ del "%~f0" >nul 2>nul
             ).pack(anchor="center")
 
         if not is_admin_build():
-            log_btn_row = tk.Frame(member_content, bg="#0b5a45")
+            log_btn_row = tk.Frame(member_content, bg=sidebar_card)
             log_btn_row.pack(anchor="center", pady=(5 if (self.tiny_ui or self.micro_ui) else 7, 0))
             self._log_btn = ui_button(
                 log_btn_row,
@@ -3252,7 +3328,7 @@ del "%~f0" >nul 2>nul
             )
             self._log_btn.pack(anchor="center")
 
-        sidebar_decor = self._ui_asset_image(APP_DECOR_SIDEBAR_BOTTOM, (self.sidebar_w - 12, 180), alpha=0.9)
+        sidebar_decor = self._ui_asset_image_exact(APP_DECOR_SIDEBAR_BOTTOM, (self.sidebar_w, 148), alpha=0.58)
         if sidebar_decor is not None:
             tk.Label(sidebar, image=sidebar_decor, bg=sidebar_bg, bd=0).pack(side="bottom", fill="x", pady=(8, 0))
 
@@ -3262,19 +3338,19 @@ del "%~f0" >nul 2>nul
 
 
 
-        header = tk.Frame(main, bg="#f8fcff", padx=14, pady=10, highlightthickness=1, highlightbackground="#dbe8f1")
+        header = tk.Frame(main, bg=main_bg, padx=6, pady=8, highlightthickness=0)
 
         header.pack(fill="x")
 
-        title_box = tk.Frame(header, bg="#f8fcff")
+        title_box = tk.Frame(header, bg=main_bg)
 
         title_box.pack(side="left", fill="x", expand=True)
 
         if APP_TITLE:
 
-            tk.Label(title_box, text=APP_TITLE, font=ui_font(16, bold=True), bg="#f8fcff", fg=UI_TEXT).pack(anchor="w")
+            tk.Label(title_box, text=APP_TITLE, font=ui_font(18, bold=True), bg=main_bg, fg="#073f33").pack(anchor="w")
 
-        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(10), bg="#f8fcff", fg=UI_MUTED).pack(anchor="w", pady=(3, 0))
+        tk.Label(title_box, text="Ứng dụng Phục hồi & Quản lý Dữ liệu Cọc", font=ui_font(11), bg=main_bg, fg=UI_MUTED).pack(anchor="w", pady=(4, 0))
 
         if not self.tiny_ui:
 
@@ -3283,7 +3359,7 @@ del "%~f0" >nul 2>nul
                     header,
                     width=38,
                     height=36,
-                    bg="#f8fcff",
+                    bg=main_bg,
                     bd=0,
                     highlightthickness=0,
                     cursor="hand2",
@@ -3317,17 +3393,17 @@ del "%~f0" >nul 2>nul
                 self.root.after(500, self._admin_log_badge_loop)
 
             avatar_img = self._ui_icon("12_header_avatar.png", 34)
-            image_label(header, avatar_img, "#f8fcff", text="A", fg="#ffffff", font=ui_font(10, bold=True)).pack(side="left", padx=(10, 6))
+            image_label(header, avatar_img, main_bg, text="A", fg="#ffffff", font=ui_font(10, bold=True)).pack(side="left", padx=(10, 6))
 
-            profile = tk.Frame(header, bg="#f8fcff")
+            profile = tk.Frame(header, bg=main_bg)
 
             profile.pack(side="left")
 
-            tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg="#f8fcff", fg=UI_MUTED, justify="center").pack(anchor="center")
+            tk.Label(profile, textvariable=self.user_role_var, font=ui_font(10), bg=main_bg, fg=UI_MUTED, justify="center").pack(anchor="center")
 
-            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg="#f8fcff", fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
+            tk.Label(profile, text=self.user_name, font=ui_font(10, bold=True), bg=main_bg, fg=UI_TEXT, justify="center").pack(anchor="center", pady=(1, 0))
             dropdown_img = self._ui_icon("13_header_dropdown.png", 14)
-            image_label(header, dropdown_img, "#f8fcff").pack(side="left", padx=(8, 0))
+            image_label(header, dropdown_img, main_bg).pack(side="left", padx=(8, 0))
 
 
         self.content_canvas = None
@@ -3335,37 +3411,45 @@ del "%~f0" >nul 2>nul
         content = tk.Frame(main, bg=main_bg)
         content.pack(fill="both", expand=True)
 
-        footer = tk.Frame(main, bg="#f8fcff", padx=12, pady=7, highlightthickness=1, highlightbackground="#dbe8f1")
-        footer.pack(fill="x", pady=(8, 0))
+        footer = tk.Frame(main, bg=UI_SURFACE, padx=18, pady=0, height=scale_px(66), highlightthickness=1, highlightbackground="#e5ece8")
+        footer.pack(fill="x", pady=(10, 0))
+        footer.pack_propagate(False)
         self.footer_server_var = tk.StringVar(value=self._footer_server_state())
         self.footer_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
         self.footer_time_var = tk.StringVar(value=datetime.now().strftime("%H:%M:%S"))
         self.footer_date_var = tk.StringVar(value=datetime.now().strftime("%d/%m/%Y"))
         self.footer_status_dot = None
 
-        def footer_item(label, variable=None, static_text=None, dot_file=None):
-            item = tk.Frame(footer, bg="#f8fcff")
-            item.pack(side="left", padx=(0, 18))
-            if dot_file:
-                dot_img = self._ui_icon(dot_file, 11)
-                dot = image_label(item, dot_img, "#f8fcff", text="●", fg=UI_SUCCESS, font=ui_font(9, bold=True))
-                dot.pack(side="left", padx=(0, 5))
-                if dot_file == "31_footer_ready_status_dot.png":
-                    self.footer_status_dot = dot
-            tk.Label(item, text=f"{label}:", bg="#f8fcff", fg=UI_MUTED, font=ui_font(9, bold=True)).pack(side="left")
+        footer_left = tk.Frame(footer, bg=UI_SURFACE)
+        footer_left.pack(side="left", fill="y")
+
+        def footer_item(label, variable=None, static_text=None, dot=False, value_color=None, separator=True):
+            item = tk.Frame(footer_left, bg=UI_SURFACE)
+            item.pack(side="left", fill="y", padx=(0, 12))
+            item_inner = tk.Frame(item, bg=UI_SURFACE)
+            item_inner.pack(expand=True)
+            if dot:
+                dot_label = tk.Label(item_inner, text="●", bg=UI_SURFACE, fg=UI_SUCCESS, font=ui_font(9, bold=True))
+                dot_label.pack(side="left", padx=(0, 6))
+                if label == "Trạng thái":
+                    self.footer_status_dot = dot_label
+            tk.Label(item_inner, text=f"{label}:", bg=UI_SURFACE, fg="#4b5f68", font=ui_font(9, bold=True)).pack(side="left")
             if variable is not None:
-                tk.Label(item, textvariable=variable, bg="#f8fcff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(4, 0))
+                tk.Label(item_inner, textvariable=variable, bg=UI_SURFACE, fg=value_color or UI_TEXT, font=ui_font(9, bold=bool(value_color))).pack(side="left", padx=(5, 0))
             else:
-                tk.Label(item, text=static_text or "", bg="#f8fcff", fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(4, 0))
+                tk.Label(item_inner, text=static_text or "", bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(9)).pack(side="left", padx=(5, 0))
+            if separator:
+                sep = tk.Frame(footer_left, bg="#dce6e2", width=1, height=scale_px(22))
+                sep.pack(side="left", pady=(scale_px(19), scale_px(19)), padx=(0, 12))
 
         footer_item("Phiên bản", static_text="1.0.0")
-        footer_item("Máy chủ", variable=self.footer_server_var, dot_file="30_footer_running_server_dot.png")
-        footer_item("Trạng thái", variable=self.footer_status_var, dot_file="31_footer_ready_status_dot.png")
+        footer_item("Máy chủ", variable=self.footer_server_var, dot=True, value_color=UI_SUCCESS)
+        footer_item("Trạng thái", variable=self.footer_status_var, dot=True, value_color=UI_SUCCESS)
         footer_item("Thời gian", variable=self.footer_time_var)
-        footer_item("Ngày", variable=self.footer_date_var)
-        footer_decor = self._ui_asset_image(APP_DECOR_BOTTOM_RIGHT, (270, 92), alpha=0.62)
+        footer_item("Ngày", variable=self.footer_date_var, separator=False)
+        footer_decor = self._ui_asset_image_exact(APP_DECOR_BOTTOM_RIGHT, (620, 88), alpha=0.96)
         if footer_decor is not None:
-            tk.Label(footer, image=footer_decor, bg="#f8fcff", bd=0).pack(side="right", padx=(12, 0))
+            tk.Label(footer, image=footer_decor, bg=UI_SURFACE, bd=0).pack(side="right", padx=(0, 0), anchor="se")
         self.root.after(250, self._refresh_footer_clock)
 
         self.home_page = tk.Frame(content, bg=main_bg)
@@ -3376,56 +3460,65 @@ del "%~f0" >nul 2>nul
 
 
 
-        toolbar = card(
-            self.home_page,
-            padx=6 if self.micro_ui else (8 if self.tiny_ui else 12),
-            pady=5 if self.micro_ui else (7 if self.tiny_ui else 10),
-        )
-        toolbar.pack(fill="x", pady=(6 if self.micro_ui else (8 if self.tiny_ui else 12), 6 if self.micro_ui else (8 if self.tiny_ui else 10)))
+        toolbar = tk.Frame(self.home_page, bg=main_bg)
+        toolbar.pack(fill="x", pady=(8 if self.micro_ui else (10 if self.tiny_ui else 14), 8 if self.micro_ui else (10 if self.tiny_ui else 12)))
 
-        toolbar_inner = tk.Frame(toolbar, bg=UI_SURFACE)
+        toolbar_inner = tk.Frame(toolbar, bg=main_bg)
 
         toolbar_inner.pack(fill="x")
 
-        toolbar_inner.grid_columnconfigure(0, weight=5, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(0, weight=7, uniform="toolbar")
 
-        toolbar_inner.grid_columnconfigure(1, weight=0)
+        toolbar_inner.grid_columnconfigure(1, weight=3, uniform="toolbar")
 
         toolbar_inner.grid_columnconfigure(2, weight=3, uniform="toolbar")
 
-        toolbar_inner.grid_columnconfigure(3, weight=0)
-
-        toolbar_inner.grid_columnconfigure(4, weight=2, uniform="toolbar")
-
-        toolbar_gap = 2
+        toolbar_gap = 3 if self.tiny_ui else 4
 
         toolbar_group_pad = 4 if self.dense_ui else 6
 
-        toolbar_sep_pad = 6 if self.dense_ui else 10
 
 
+        def make_group(parent, column, title, btns, bg_color, button_width=0, max_per_row=3, single_row=False):
 
-        def make_group(parent, column, title, btns, bg_color):
-
-            group = tk.Frame(parent, bg=bg_color)
+            group = card(parent, padx=10 if self.tiny_ui else 14, pady=9 if self.tiny_ui else 12)
 
             group.grid(row=0, column=column, sticky="nsew", padx=(toolbar_group_pad, toolbar_group_pad))
 
             if title:
 
-                tk.Label(group, text=title, font=ui_font(10, bold=True), fg=UI_MUTED, bg=bg_color).pack(side="top", anchor="center", pady=(0, 5))
+                tk.Label(group, text=title, font=ui_font(9, bold=True), fg=UI_TEXT, bg=UI_SURFACE).pack(side="top", anchor="center", pady=(0, 9))
 
             rows = [btns]
+            if max_per_row and len(btns) > max_per_row:
+                rows = [btns[i:i + max_per_row] for i in range(0, len(btns), max_per_row)]
 
-            for row_btns in rows:
+            if single_row:
+                btn_grid = tk.Frame(group, bg=UI_SURFACE)
+                btn_grid.pack(side="top", fill="x")
+                for col_idx in range(len(btns)):
+                    btn_grid.grid_columnconfigure(col_idx, weight=1, uniform="source_toolbar_buttons")
+                for col_idx, (text, command, variant, icon_file) in enumerate(btns):
+                    icon_button(btn_grid, text, command, icon_file, width=button_width, variant=variant).grid(
+                        row=0,
+                        column=col_idx,
+                        padx=toolbar_gap,
+                        pady=(1, 0),
+                    )
+                return group
 
-                btn_row = tk.Frame(group, bg=bg_color)
+            btn_grid = tk.Frame(group, bg=UI_SURFACE)
+            btn_grid.pack(side="top", anchor="center")
+            for row_idx, row_btns in enumerate(rows):
 
-                btn_row.pack(side="top", anchor="center", pady=(1, 0))
+                for col_idx, (text, command, variant, icon_file) in enumerate(row_btns):
 
-                for text, command, variant, icon_file in row_btns:
-
-                    icon_button(btn_row, text, command, icon_file, width=0, variant=variant).pack(side="left", padx=(toolbar_gap, toolbar_gap))
+                    icon_button(btn_grid, text, command, icon_file, width=button_width, variant=variant).grid(
+                        row=row_idx,
+                        column=col_idx,
+                        padx=toolbar_gap,
+                        pady=(1, 6 if row_idx < len(rows) - 1 else 0),
+                    )
 
             return group
 
@@ -3433,23 +3526,19 @@ del "%~f0" >nul 2>nul
 
             ("Chọn Excel", self.choose_excel, "primary", "14_action_import_excel.png"),
 
-            ("Workbook" if self.compact_ui else "Đọc workbook", self.scan_current_workbook, "default", "15_action_import_workbook.png"),
+            ("Đọc workbook", self.scan_current_workbook, "default", "15_action_import_workbook.png"),
 
-            ("Từng sheet" if self.compact_ui else "Đọc từng sheet", self.read_each_sheet_content, "default", "16_action_read_sheet_list.png"),
+            ("Đọc từng sheet", self.read_each_sheet_content, "default", "16_action_read_sheet_list.png"),
 
-            ("Công thức" if self.compact_ui else "Đọc công thức", self.read_current_excel_formulas, "default", "17_action_read_formula.png"),
+            ("Đọc công thức", self.read_current_excel_formulas, "default", "17_action_read_formula.png"),
 
-            ("Đọc lại" if self.compact_ui else "Đọc lại Excel", self.refresh_excel_header_info, "soft", "18_action_read_excel.png"),
+            ("Đọc lại Excel", self.refresh_excel_header_info, "soft", "18_action_read_excel.png"),
 
             ("Đặt lại", self.reset_current_session, "warn", "19_action_refresh.png"),
 
         ]
 
-        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE)
-        
-        separator1 = tk.Frame(toolbar_inner, bg="#e2e8f0", width=1)
-
-        separator1.grid(row=0, column=1, sticky="ns", padx=(toolbar_sep_pad, toolbar_sep_pad), pady=4)
+        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE, button_width=14, max_per_row=6, single_row=True)
 
         process_btns = [
 
@@ -3461,11 +3550,7 @@ del "%~f0" >nul 2>nul
 
         ]
 
-        make_group(toolbar_inner, 2, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE)
-        
-        separator2 = tk.Frame(toolbar_inner, bg="#e2e8f0", width=1)
-
-        separator2.grid(row=0, column=3, sticky="ns", padx=(toolbar_sep_pad, toolbar_sep_pad), pady=4)
+        make_group(toolbar_inner, 1, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE)
 
         export_btns = [
 
@@ -3475,9 +3560,9 @@ del "%~f0" >nul 2>nul
 
         ]
 
-        make_group(toolbar_inner, 4, "XEM & XUẤT", export_btns, UI_SURFACE)
+        make_group(toolbar_inner, 2, "XEM & XUẤT", export_btns, UI_SURFACE)
 
-        filters = card(self.home_page, padx=10 if self.tiny_ui else 14, pady=8 if self.tiny_ui else 9)
+        filters = card(self.home_page, padx=14 if self.tiny_ui else 18, pady=10 if self.tiny_ui else 12)
 
         self.filters_card = filters
 
@@ -3503,11 +3588,11 @@ del "%~f0" >nul 2>nul
 
             bg_color="#f8fbff",
 
-            border_color="#bcd2ee",
+            border_color=UI_BORDER,
 
             width=150 if self.tiny_ui else (180 if self.compact_ui else 220),
 
-            height=34,
+            height=38,
 
             radius=8,
 
@@ -3529,11 +3614,11 @@ del "%~f0" >nul 2>nul
 
             bg_color="#f8fbff",
 
-            border_color="#bcd2ee",
+            border_color=UI_BORDER,
 
             width=220 if self.tiny_ui else (260 if self.compact_ui else 330),
 
-            height=34,
+            height=38,
 
             radius=8,
 
@@ -3543,13 +3628,12 @@ del "%~f0" >nul 2>nul
 
         self.template_combo.pack(side="left")
 
-        status_pill_img = self._ui_icon("29_status_indicator_pill.png", 108)
         status_pill = tk.Frame(filter_top, bg=UI_SURFACE)
         status_pill.pack(side="right", padx=(12, 4))
-        image_label(status_pill, status_pill_img, UI_SURFACE).pack(side="left", padx=(0, 6))
+        tk.Label(status_pill, text="●", bg=UI_SURFACE, fg=UI_SUCCESS, font=ui_font(10, bold=True)).pack(side="left", padx=(0, 7))
         tk.Label(status_pill, text="Trạng thái:", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10, bold=True)).pack(side="left")
         self.filter_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
-        tk.Label(status_pill, textvariable=self.filter_status_var, bg="#e8f7ef", fg=UI_SUCCESS, font=ui_font(10, bold=True), padx=10, pady=5).pack(side="left", padx=(6, 0))
+        tk.Label(status_pill, textvariable=self.filter_status_var, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10, bold=True), padx=6, pady=5).pack(side="left", padx=(2, 0))
 
         if self.main_content_scroll or self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
             home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
@@ -3606,7 +3690,7 @@ del "%~f0" >nul 2>nul
 
         workspace.grid_columnconfigure(0, weight=1, minsize=left_min)
 
-        workspace.grid_columnconfigure(1, weight=4, minsize=center_min)
+        workspace.grid_columnconfigure(1, weight=5, minsize=center_min)
 
         workspace.grid_columnconfigure(2, weight=2, minsize=right_min)
 
@@ -3616,22 +3700,22 @@ del "%~f0" >nul 2>nul
 
         left_col = tk.Frame(workspace, bg=main_bg)
 
-        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         left_col.grid_columnconfigure(0, weight=1)
         left_col.grid_rowconfigure(0, weight=1, uniform="left_cards")
         left_col.grid_rowconfigure(1, weight=1, uniform="left_cards")
 
         image_card = card(left_col)
 
-        image_card.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
+        image_card.grid(row=0, column=0, sticky="nsew", pady=(0, 10))
 
         panel_heading(image_card, "25_panel_image_upload.png", "ẢNH OCR")
 
         upload_box = tk.Frame(
             image_card,
-            bg="#fbfdff",
+            bg="#fbfefd",
             highlightthickness=1,
-            highlightbackground="#d7e3f2",
+            highlightbackground="#d8e7e1",
             padx=8,
             pady=8,
             height=self.image_drop_h,
@@ -3642,7 +3726,7 @@ del "%~f0" >nul 2>nul
         upload_box.grid_rowconfigure(0, weight=1)
         upload_box.grid_rowconfigure(1, weight=0)
 
-        preview_shell = tk.Frame(upload_box, bg="#fbfdff")
+        preview_shell = tk.Frame(upload_box, bg="#fbfefd")
         preview_shell.grid(row=0, column=0, sticky="nsew", pady=(0, 12))
         preview_shell.grid_columnconfigure(0, weight=1)
         preview_shell.grid_rowconfigure(0, weight=1)
@@ -3652,9 +3736,9 @@ del "%~f0" >nul 2>nul
 
         self.preview_frame = tk.Frame(
             preview_shell,
-            bg="#f8fbff",
+            bg="#f9fcfb",
             highlightthickness=1,
-            highlightbackground="#d7e3f2",
+            highlightbackground="#cfe1db",
             width=preview_w,
             height=preview_h,
         )
@@ -3664,7 +3748,7 @@ del "%~f0" >nul 2>nul
         self.img_label = tk.Label(
             self.preview_frame,
             text="Kéo thả ảnh vào đây\nhoặc chọn file từ máy tính",
-            bg="#f8fbff",
+            bg="#f9fcfb",
             fg=UI_TEXT,
             font=ui_font(10, bold=True),
             justify="center",
@@ -3761,7 +3845,7 @@ del "%~f0" >nul 2>nul
         self.preview_counter_label = tk.Label(
             upload_box,
             textvariable=self.preview_counter_var,
-            bg="#fbfdff",
+            bg="#fbfefd",
             fg=UI_MUTED,
             font=ui_font(10),
         )
@@ -3776,9 +3860,9 @@ del "%~f0" >nul 2>nul
 
         info = card(left_col)
 
-        info.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        info.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
 
-        panel_heading(info, None, "THÔNG TIN EXCEL")
+        panel_heading(info, "14_action_import_excel.png", "THÔNG TIN EXCEL")
 
         self.excel_info = tk.Text(
 
@@ -3788,7 +3872,7 @@ del "%~f0" >nul 2>nul
 
             wrap="word",
 
-            bg="#fbfdff",
+            bg="#f6faf8",
 
             fg=UI_TEXT,
 
@@ -3812,7 +3896,7 @@ del "%~f0" >nul 2>nul
 
         center_col = card(workspace)
 
-        center_col.grid(row=0, column=1, sticky="nsew", padx=(0, 8))
+        center_col.grid(row=0, column=1, sticky="nsew", padx=(0, 10))
 
         panel_heading(center_col, "26_panel_table_grid.png", "PREVIEW BẢNG")
         tk.Label(center_col, text="Kiểm tra và sửa dữ liệu trước khi đưa vào Excel", font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 8))
@@ -3847,7 +3931,7 @@ del "%~f0" >nul 2>nul
             summary_card,
             height=3 if self.micro_ui else (4 if self.short_ui or self.dense_ui else 5),
             wrap="word",
-            bg="#fbfdff",
+            bg="#ffffff",
             fg=UI_TEXT,
             relief="flat",
             bd=0,
@@ -5557,9 +5641,23 @@ def _draw_startup_splash(canvas, w, h, progress=0, step_text="Đang khởi độ
 def _show_startup_splash(root, update_text=""):
     try:
         splash = tk.Toplevel(root)
-        splash.overrideredirect(True)
+        splash.title("GK PilePro - Đang khởi động")
         splash.configure(bg="#050b14")
-        splash.attributes("-topmost", True)
+        splash.resizable(False, False)
+        try:
+            splash.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            icon_file = resource_path(*APP_ICON_ICO.parts)
+            if icon_file.exists():
+                splash.iconbitmap(default=str(icon_file))
+        except Exception:
+            pass
+        try:
+            splash.protocol("WM_DELETE_WINDOW", root.destroy)
+        except Exception:
+            pass
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
         w = min(980, max(720, int(sw * 0.74)))
         h = int(w * 9 / 16)
@@ -5574,6 +5672,11 @@ def _show_startup_splash(root, update_text=""):
         splash._update_text = str(update_text or "").strip()
         splash._progress = 0.0
         _draw_startup_splash(canvas, w, h, 0, "Đang khởi động hệ thống...", splash._update_text)
+        splash.lift()
+        try:
+            splash.focus_force()
+        except Exception:
+            pass
         splash.update_idletasks()
         splash.update()
         return splash
@@ -5664,6 +5767,10 @@ def main():
         _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
         app = App(root)
+        try:
+            root.withdraw()
+        except Exception:
+            pass
         _update_startup_splash(splash, 18, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 23, "Đang khởi động hệ thống...")
         _close_startup_splash(splash)

@@ -29,11 +29,11 @@ class MappingEditor(tk.Frame):
 
 
 
-        self.source_bg = "#f3efe7"
+        self.source_bg = "#ffffff"
 
-        self.target_bg = "#edf6ff"
+        self.target_bg = "#f7fbf9"
 
-        self.mapping_border = "#c7d5e8"
+        self.mapping_border = UI_BORDER
 
         self.combo_style = "Mapping.TCombobox"
 
@@ -509,7 +509,7 @@ class MappingEditor(tk.Frame):
                     row,
                     text=src_show,
                     bg_color=self.source_bg,
-                    border_color="#d8d2c8",
+                    border_color=UI_BORDER,
                     width=src_width,
                     height=28,
                 )
@@ -548,7 +548,7 @@ class MappingEditor(tk.Frame):
                     row,
                     text=src_show,
                     bg_color=self.source_bg,
-                    border_color="#d8d2c8",
+                    border_color=UI_BORDER,
                     width=src_width,
                     height=28,
                 )
@@ -648,7 +648,7 @@ class TableEditor(tk.Frame):
 
             bg_color="#f8fbff",
 
-            border_color="#bcd2ee",
+            border_color=UI_BORDER,
 
             width=combo_width,
 
@@ -686,9 +686,9 @@ class TableEditor(tk.Frame):
 
         self.tree = ttk.Treeview(tree_frame, show="headings", style="Preview.Treeview")
 
-        self.tree.tag_configure("preview_odd", background="#f7f7f3", foreground="#1f2933")
+        self.tree.tag_configure("preview_odd", background="#ffffff", foreground="#1f2933")
 
-        self.tree.tag_configure("preview_even", background="#e9eee9", foreground="#1f2933")
+        self.tree.tag_configure("preview_even", background="#f7faf9", foreground="#1f2933")
 
         self.v_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree_yview, style="Vertical.TScrollbar")
 
@@ -713,6 +713,30 @@ class TableEditor(tk.Frame):
         tree_frame.rowconfigure(0, weight=1)
 
         tree_frame.columnconfigure(0, weight=1)
+
+        self.empty_preview = tk.Frame(tree_frame, bg="#ffffff")
+        tk.Label(
+            self.empty_preview,
+            text="▦",
+            bg="#ffffff",
+            fg="#8aa39a",
+            font=("Segoe UI", 34, "bold"),
+        ).pack(anchor="center")
+        tk.Label(
+            self.empty_preview,
+            text="Chưa có dữ liệu",
+            bg="#ffffff",
+            fg=UI_TEXT,
+            font=("Segoe UI", 12, "bold"),
+        ).pack(anchor="center", pady=(8, 0))
+        tk.Label(
+            self.empty_preview,
+            text="Đọc dữ liệu từ Excel để hiển thị bảng tại đây",
+            bg="#ffffff",
+            fg=UI_MUTED,
+            font=("Segoe UI", 10),
+        ).pack(anchor="center", pady=(6, 0))
+        self.empty_preview.place(relx=0.5, rely=0.5, anchor="center")
 
 
 
@@ -846,7 +870,7 @@ class TableEditor(tk.Frame):
 
                 if -2 <= line_x <= visible_width + 2:
 
-                    line = tk.Frame(self.tree, bg="#cfc9bc", width=1, bd=0, highlightthickness=0)
+                    line = tk.Frame(self.tree, bg="#e1e8e5", width=1, bd=0, highlightthickness=0)
 
                     line.place(x=line_x, y=0, width=1, height=height)
 
@@ -870,7 +894,7 @@ class TableEditor(tk.Frame):
 
                 if 0 <= line_y <= height:
 
-                    line = tk.Frame(self.tree, bg="#d8d2c8", height=1, bd=0, highlightthickness=0)
+                    line = tk.Frame(self.tree, bg="#e8efec", height=1, bd=0, highlightthickness=0)
 
                     line.place(x=0, y=line_y, width=visible_width, height=1)
 
@@ -950,8 +974,17 @@ class TableEditor(tk.Frame):
 
 
         if not self.tables:
+            try:
+                self.empty_preview.place(relx=0.5, rely=0.5, anchor="center")
+            except Exception:
+                pass
 
             return
+
+        try:
+            self.empty_preview.place_forget()
+        except Exception:
+            pass
 
 
 

@@ -2,30 +2,31 @@
 
 import math
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk
 
 
-UI_BG = "#edf7f8"
+UI_BG = "#f5f8f7"
 
 UI_SURFACE = "#ffffff"
 
-UI_SURFACE_2 = "#f4fbf8"
+UI_SURFACE_2 = "#f7fbf9"
 
-UI_BORDER = "#d7e5e0"
+UI_BORDER = "#e3eae7"
 
-UI_TEXT = "#102a3b"
+UI_TEXT = "#0f2433"
 
-UI_MUTED = "#53677a"
+UI_MUTED = "#5c6f78"
 
-UI_PRIMARY = "#0b8f62"
+UI_PRIMARY = "#007a45"
 
-UI_PRIMARY_ACTIVE = "#08764f"
+UI_PRIMARY_ACTIVE = "#006b3f"
 
-UI_SUCCESS = "#0b8f62"
+UI_SUCCESS = "#007a45"
 
-UI_SUCCESS_ACTIVE = "#08764f"
+UI_SUCCESS_ACTIVE = "#006b3f"
 
-UI_WARN = "#b7791f"
+UI_WARN = "#d88914"
 
 UI_ERROR = "#dc2626"
 
@@ -94,15 +95,15 @@ class RoundedButton(tk.Canvas):
 
         self.colors = {
 
-            "default": (UI_SURFACE, UI_TEXT, "#f4fbf8", UI_BORDER),
+            "default": (UI_SURFACE, UI_TEXT, "#f4faf7", UI_BORDER),
 
             "primary": (UI_PRIMARY, "#ffffff", UI_PRIMARY_ACTIVE, UI_PRIMARY),
 
             "success": (UI_SUCCESS, "#ffffff", UI_SUCCESS_ACTIVE, UI_SUCCESS),
 
-            "soft": ("#ffffff", UI_PRIMARY, "#eefaf4", "#cfe4dc"),
+            "soft": ("#ffffff", UI_PRIMARY, "#eefaf4", "#d8e7e1"),
 
-            "warn": ("#fffaf0", "#c06b00", "#fff0ce", "#ffd38a"),
+            "warn": ("#fff8e8", "#c66b00", "#ffedc4", "#f0c15f"),
 
         }
 
@@ -113,11 +114,11 @@ class RoundedButton(tk.Canvas):
 
         if width <= 0:
 
-            self.pixel_width = max(scale_px(78), min(scale_px(124), int(len(str(text)) * 7.0 * UI_SCALE) + scale_px(28)))
+            self.pixel_width = max(scale_px(76), min(scale_px(124), int(len(str(text)) * 6.8 * UI_SCALE) + scale_px(30)))
 
         else:
 
-            self.pixel_width = max(scale_px(98), scale_px(width * 9.6))
+            self.pixel_width = max(scale_px(74), scale_px(width * 9.0))
 
         self.pixel_height = scale_px(40)
 
@@ -184,18 +185,26 @@ class RoundedButton(tk.Canvas):
 
         try:
 
-            self.create_round_rect(1, 1, self.pixel_width - 1, self.pixel_height - 1, radius=max(10, scale_px(14)), fill=fill, outline=self.border_color)
+            self.create_round_rect(1, 1, self.pixel_width - 1, self.pixel_height - 1, radius=max(11, scale_px(12)), fill=fill, outline=self.border_color)
 
         except Exception:
 
             self.create_rectangle(1, 1, self.pixel_width - 1, self.pixel_height - 1, fill=fill, outline=self.border_color)
 
-        font = ui_font(10, bold=self.variant in {"primary", "success"})
+        font_size = 9 if self.pixel_width <= scale_px(92) else 10
+        font = ui_font(font_size, bold=self.variant in {"primary", "success"})
 
         if self.icon_image is not None:
-            icon_x = max(scale_px(17), self.pixel_width // 2 - min(scale_px(44), int(len(str(self.text)) * 2.7 * UI_SCALE)))
+            try:
+                text_width = max(0, int(tkfont.Font(font=font).measure(str(self.text))))
+            except Exception:
+                text_width = int(len(str(self.text)) * 7 * UI_SCALE)
+            gap = scale_px(8)
+            icon_w = scale_px(16)
+            total_width = icon_w + gap + text_width
+            icon_x = max(scale_px(13), (self.pixel_width - total_width) // 2 + icon_w // 2)
             self.create_image(icon_x, self.pixel_height // 2, image=self.icon_image)
-            self.create_text(icon_x + scale_px(14), self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font, anchor="w")
+            self.create_text(icon_x + icon_w // 2 + gap, self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font, anchor="w")
         else:
             self.create_text(self.pixel_width // 2, self.pixel_height // 2, text=self.text, fill=self.fg_color, font=font)
 
