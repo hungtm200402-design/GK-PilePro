@@ -21,6 +21,8 @@ import socket
 import threading
 
 import tempfile
+import multiprocessing
+import queue
 
 from datetime import datetime
 
@@ -301,13 +303,14 @@ APP_ICON_ICO = Path("assets") / "gk_app_icon.ico"
 
 APP_SPLASH_LOGO_PNG = Path("assets") / "gk_splash_logo.png"
 
-APP_SPLASH_BG_PNG = Path("assets") / "gk_splash_bg.png"
+APP_SPLASH_BG_PNG = Path("assets") / "loading" / "loading_bg.png"
+APP_SPLASH_VIDEO_MP4 = Path("assets") / "loading" / "video-loading.mp4"
 
 APP_UI_ICON_DIR = Path("assets") / "GK_PilePro_icon_files_no_bg" / "transparent_png"
 
-APP_DECOR_BOTTOM_RIGHT = Path("assets") / "gk_footer_decoration.png"
+APP_DECOR_BOTTOM_RIGHT = Path("assets") / "goc_phai_moi.png.png"
 
-APP_DECOR_SIDEBAR_BOTTOM = Path("assets") / "gk_sidebar_decoration.png"
+APP_DECOR_SIDEBAR_BOTTOM = Path("assets") / "goc_trai_moi.png.png"
 
 SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
 
@@ -321,6 +324,7 @@ class App:
     def __init__(self, root):
 
         self.root = root
+        _pulse_startup_splash(root)
 
         root.title(APP_TITLE)
 
@@ -470,7 +474,9 @@ class App:
 
 
 
+        _pulse_startup_splash(root, "Đang chuẩn bị giao diện...")
         self.build_ui()
+        _pulse_startup_splash(root, "Đang hoàn thiện giao diện...")
 
         self._apply_user_visibility()
 
@@ -1382,6 +1388,9 @@ class App:
         except Exception:
             pass
 
+        if hasattr(self, "_footer_decor_lbl") and self._footer_decor_lbl:
+            self._footer_decor_lbl.lift()
+
         return "break"
 
 
@@ -1621,12 +1630,12 @@ class App:
             height = max(42, int(canvas.winfo_height() or scale_px(44)))
             active = bool(widgets.get("active"))
             hovered = bool(widgets.get("hovered"))
-            bg = "#0b8f63" if active else ("#0a5f47" if hovered else "#003f2d")
-            text_color = "#ffffff" if active else "#d8f3e8"
-            icon_color = "#f3c94a" if active else "#d8f3e8"
-            self._nav_round_rect(canvas, 1, 1, width - 1, height - 1, radius=scale_px(12), fill=bg, outline=bg)
+            bg = "#0a4a2f" if active else ("#083522" if hovered else "#042115")
+            text_color = "#ffffff" if active else "#8da396"
+            icon_color = "#d4af37" if active else "#8da396"
+            self._nav_round_rect(canvas, 1, 1, width - 1, height - 1, radius=scale_px(10), fill=bg, outline=bg)
             if active:
-                self._nav_round_rect(canvas, scale_px(5), (height - scale_px(24)) // 2, scale_px(10), (height + scale_px(24)) // 2, radius=scale_px(3), fill="#f3c94a", outline="#f3c94a")
+                self._nav_round_rect(canvas, scale_px(4), (height - scale_px(24)) // 2, scale_px(8), (height + scale_px(24)) // 2, radius=scale_px(2), fill="#d4af37", outline="#d4af37")
             icon_x = scale_px(34)
             self._draw_nav_icon(canvas, page_name, icon_x, height // 2, icon_color)
             canvas.create_text(
@@ -3009,17 +3018,18 @@ del "%~f0" >nul 2>nul
 
     def build_ui(self):
 
+        _pulse_startup_splash(self.root, "Đang dựng giao diện...")
         self.setup_window_icon()
 
         self.setup_theme()
 
         self._ui_images = []
-        sidebar_bg = "#003f2d"
-        sidebar_bg_2 = "#00523a"
-        sidebar_active = "#0b8f62"
-        sidebar_text = "#d8f3e8"
-        sidebar_muted = "#a9d8ca"
-        sidebar_card = "#064f3a"
+        sidebar_bg = "#042115"
+        sidebar_bg_2 = "#083522"
+        sidebar_active = "#0a4a2f"
+        sidebar_text = "#ffffff"
+        sidebar_muted = "#8da396"
+        sidebar_card = "#052e1d"
         main_bg = UI_BG
 
         def image_label(parent, image, bg, **kwargs):
@@ -3050,11 +3060,11 @@ del "%~f0" >nul 2>nul
 
             if padx is None:
 
-                padx = self.card_padx
+                padx = self.card_padx + 6
 
             if pady is None:
 
-                pady = self.card_pady
+                pady = self.card_pady + 6
 
             frame = tk.Frame(
 
@@ -3092,6 +3102,7 @@ del "%~f0" >nul 2>nul
 
 
 
+        _pulse_startup_splash(self.root, "Đang tải thanh điều hướng...")
         sidebar = tk.Frame(
 
             shell,
@@ -3106,7 +3117,7 @@ del "%~f0" >nul 2>nul
 
             highlightthickness=1,
 
-            highlightbackground="#0c6a4f",
+            highlightbackground="#083522",
 
         )
 
@@ -3134,7 +3145,7 @@ del "%~f0" >nul 2>nul
 
                     logo_source = logo_source.crop(bbox)
 
-                logo_source.thumbnail(self.logo_max, Image.LANCZOS)
+                logo_source.thumbnail((self.logo_max[0] - scale_px(16), self.logo_max[1] - scale_px(16)), Image.LANCZOS)
 
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
 
@@ -3228,7 +3239,7 @@ del "%~f0" >nul 2>nul
 
 
 
-        status_card = tk.Frame(sidebar, bg=sidebar_card, highlightthickness=1, highlightbackground="#188060")
+        status_card = tk.Frame(sidebar, bg=sidebar_card, highlightthickness=1, highlightbackground="#083522")
         status_card.pack(fill="x", pady=(12, 0))
         status_inner = tk.Frame(status_card, bg=sidebar_card, padx=12, pady=10)
         status_inner.pack(fill="both", expand=True)
@@ -3251,7 +3262,7 @@ del "%~f0" >nul 2>nul
 
         user_box = card(sidebar, padx=4 if (self.tiny_ui or self.micro_ui) else 5, pady=3 if (self.tiny_ui or self.micro_ui) else 5)
 
-        user_box.configure(bg=sidebar_card, highlightbackground="#188060")
+        user_box.configure(bg=sidebar_card, highlightbackground="#083522")
 
         user_box.pack(fill="x", pady=(8 if is_admin_build() else 6, 0))
         user_box.pack_propagate(False)
@@ -3328,10 +3339,35 @@ del "%~f0" >nul 2>nul
             )
             self._log_btn.pack(anchor="center")
 
-        sidebar_decor = self._ui_asset_image_exact(APP_DECOR_SIDEBAR_BOTTOM, (self.sidebar_w, 148), alpha=0.58)
-        if sidebar_decor is not None:
-            tk.Label(sidebar, image=sidebar_decor, bg=sidebar_bg, bd=0).pack(side="bottom", fill="x", pady=(8, 0))
+        # Dynamically resizing left decor to fill remaining space without vertical stretch
+        try:
+            left_img_path = resource_path(*Path(APP_DECOR_SIDEBAR_BOTTOM).parts)
+            if left_img_path.exists():
+                self._left_raw_img = Image.open(left_img_path).convert("RGBA")
+                # Get the top-left pixel color to fill the empty space seamlessly
+                top_color = self._left_raw_img.getpixel((0, 0))
+                hex_color = "#{:02x}{:02x}{:02x}".format(top_color[0], top_color[1], top_color[2])
+                
+                self.sidebar_canvas = tk.Canvas(sidebar, bg=hex_color, highlightthickness=0, bd=0)
+                self.sidebar_canvas.pack(side="bottom", fill="both", expand=True)
+                self._left_tk_img = None
+                
+                def on_sidebar_resize(event):
+                    if event.width > 2 and event.height > 2:
+                        # Only scale width to fill horizontally, keep aspect ratio or height
+                        img_ratio = self._left_raw_img.width / self._left_raw_img.height
+                        new_h = int(event.width / img_ratio)
+                        resized = self._left_raw_img.resize((event.width, new_h), Image.Resampling.LANCZOS)
+                        self._left_tk_img = ImageTk.PhotoImage(resized)
+                        self.sidebar_canvas.delete("all")
+                        # Place image at the very bottom
+                        self.sidebar_canvas.create_image(0, event.height, image=self._left_tk_img, anchor="sw")
+                
+                self.sidebar_canvas.bind("<Configure>", on_sidebar_resize)
+        except Exception:
+            pass
 
+        _pulse_startup_splash(self.root)
         main = tk.Frame(shell, bg=main_bg, padx=self.main_padx, pady=self.main_pady)
 
         main.pack(side="left", fill="both", expand=True)
@@ -3412,7 +3448,7 @@ del "%~f0" >nul 2>nul
         content.pack(fill="both", expand=True)
 
         footer = tk.Frame(main, bg=UI_SURFACE, padx=18, pady=0, height=scale_px(66), highlightthickness=1, highlightbackground="#e5ece8")
-        footer.pack(fill="x", pady=(10, 0))
+        footer.pack(fill="x", pady=0)
         footer.pack_propagate(False)
         self.footer_server_var = tk.StringVar(value=self._footer_server_state())
         self.footer_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
@@ -3447,11 +3483,48 @@ del "%~f0" >nul 2>nul
         footer_item("Trạng thái", variable=self.footer_status_var, dot=True, value_color=UI_SUCCESS)
         footer_item("Thời gian", variable=self.footer_time_var)
         footer_item("Ngày", variable=self.footer_date_var, separator=False)
-        footer_decor = self._ui_asset_image_exact(APP_DECOR_BOTTOM_RIGHT, (620, 88), alpha=0.96)
-        if footer_decor is not None:
-            tk.Label(footer, image=footer_decor, bg=UI_SURFACE, bd=0).pack(side="right", padx=(0, 0), anchor="se")
+        def _load_and_fade(img_path):
+            try:
+                from PIL import ImageChops
+                p = resource_path(*Path("assets").joinpath(img_path).parts)
+                if not p.exists(): return None
+                img = Image.open(p).convert("RGBA")
+                w, h = img.size
+                alpha = img.split()[3]
+                mask = Image.new("L", (w, h), 255)
+                pixels = mask.load()
+                for x in range(w):
+                    fx = min(1.0, x / max(1, w * 0.25))
+                    for y in range(h):
+                        fy = min(1.0, y / max(1, h * 0.25))
+                        # Eased fade
+                        f = 1 - pow(1 - (fx * fy), 2)
+                        pixels[x, y] = int(255 * f)
+                img.putalpha(ImageChops.multiply(alpha, mask))
+                self._ui_images.append(ImageTk.PhotoImage(img))
+                return self._ui_images[-1]
+            except Exception:
+                return None
+
+        part1_img = _load_and_fade("decor_part1_solid.png")
+        part2_img = _load_and_fade("decor_part2_solid.png")
+        part3_img = _load_and_fade("decor_part3_solid.png")
+
+        if part1_img and part2_img and part3_img:
+            self._decor_lbl1 = tk.Label(main, image=part1_img, bg=UI_SURFACE, bd=0, highlightthickness=0, padx=0, pady=0)
+            self._decor_lbl1.place(relx=1.0, rely=1.0, y=-96, anchor="se")
+            self._decor_lbl1.lift()
+
+            self._decor_lbl2 = tk.Label(main, image=part2_img, bg=main_bg, bd=0, highlightthickness=0, padx=0, pady=0)
+            self._decor_lbl2.place(relx=1.0, rely=1.0, y=-66, anchor="se")
+            self._decor_lbl2.lift()
+
+            self._decor_lbl3 = tk.Label(main, image=part3_img, bg=UI_SURFACE, bd=0, highlightthickness=0, padx=0, pady=0)
+            self._decor_lbl3.place(relx=1.0, rely=1.0, y=0, anchor="se")
+            self._decor_lbl3.lift()
         self.root.after(250, self._refresh_footer_clock)
 
+        _pulse_startup_splash(self.root, "Đang tải màn hình chính...")
         self.home_page = tk.Frame(content, bg=main_bg)
 
         self.excel_page = tk.Frame(content, bg=main_bg)
@@ -3467,11 +3540,11 @@ del "%~f0" >nul 2>nul
 
         toolbar_inner.pack(fill="x")
 
-        toolbar_inner.grid_columnconfigure(0, weight=7, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(0, weight=6, uniform="toolbar")
 
         toolbar_inner.grid_columnconfigure(1, weight=3, uniform="toolbar")
 
-        toolbar_inner.grid_columnconfigure(2, weight=3, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(2, weight=2, uniform="toolbar")
 
         toolbar_gap = 3 if self.tiny_ui else 4
 
@@ -3495,9 +3568,9 @@ del "%~f0" >nul 2>nul
 
             if single_row:
                 btn_grid = tk.Frame(group, bg=UI_SURFACE)
-                btn_grid.pack(side="top", fill="x")
+                btn_grid.pack(side="top", anchor="center")
                 for col_idx in range(len(btns)):
-                    btn_grid.grid_columnconfigure(col_idx, weight=1, uniform="source_toolbar_buttons")
+                    btn_grid.grid_columnconfigure(col_idx, weight=1)
                 for col_idx, (text, command, variant, icon_file) in enumerate(btns):
                     icon_button(btn_grid, text, command, icon_file, width=button_width, variant=variant).grid(
                         row=0,
@@ -3538,30 +3611,24 @@ del "%~f0" >nul 2>nul
 
         ]
 
-        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE, button_width=14, max_per_row=6, single_row=True)
+        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE, button_width=0, max_per_row=6, single_row=True)
 
         process_btns = [
-
             ("Đọc bảng", self.run_gemini, "soft", "20_action_read_table.png"),
-
             ("Phiếu cọc" if self.compact_ui else "Đọc phiếu cọc", self.run_gemini_phieu_coc, "soft", "21_action_read_column.png"),
-
             ("Auto map", self.build_mapping, "warn", "22_action_auto_map.png"),
-
         ]
 
-        make_group(toolbar_inner, 1, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE)
+        make_group(toolbar_inner, 1, "XỬ LÝ DỮ LIỆU", process_btns, UI_SURFACE, button_width=0, single_row=True)
 
         export_btns = [
-
             ("Xem trước", self.preview_excel, "soft", "23_action_preview.png"),
-
             ("Xuất Excel" if self.compact_ui else "Xuất ra Excel", self.fill_excel, "success", "24_action_export_excel.png"),
-
         ]
 
-        make_group(toolbar_inner, 2, "XEM & XUẤT", export_btns, UI_SURFACE)
+        make_group(toolbar_inner, 2, "XEM & XUẤT", export_btns, UI_SURFACE, button_width=0, single_row=True)
 
+        _pulse_startup_splash(self.root)
         filters = card(self.home_page, padx=14 if self.tiny_ui else 18, pady=10 if self.tiny_ui else 12)
 
         self.filters_card = filters
@@ -3637,13 +3704,13 @@ del "%~f0" >nul 2>nul
 
         if self.main_content_scroll or self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
             home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
-            home_body_shell.pack(fill="both", expand=True)
+            self.home_shell.pack(fill="both", expand=True)
 
             self.home_body_canvas = tk.Canvas(home_body_shell, bg=UI_BG, highlightthickness=0, bd=0)
             home_body_scroll = ttk.Scrollbar(home_body_shell, orient="vertical", command=self.home_body_canvas.yview)
             self.home_body_scrollbar = home_body_scroll
             self.home_body_canvas.configure(yscrollcommand=home_body_scroll.set)
-            self.home_body_canvas.pack(side="left", fill="both", expand=True)
+            self.home_body_canvas.pack(side="left", fill="both", expand=True, pady=(0, 70))
 
             home_body_content = tk.Frame(self.home_body_canvas, bg=UI_BG)
             self._home_body_window_id = self.home_body_canvas.create_window((0, 0), window=home_body_content, anchor="nw")
@@ -3889,8 +3956,6 @@ del "%~f0" >nul 2>nul
         )
 
         self.excel_info.pack(fill="both", expand=True, pady=(10, 0))
-
-        icon_button(info, "Chọn file Excel", self.choose_excel, "14_action_import_excel.png", width=18, variant="primary").pack(fill="x", pady=(10, 0))
 
 
 
@@ -4199,11 +4264,12 @@ del "%~f0" >nul 2>nul
 
         mapping_scroll = ttk.Scrollbar(mapping_body, orient="vertical", command=self.mapping_templates_canvas.yview)
 
+        _pulse_startup_splash(self.root, "Đang tải biểu mẫu...")
         self.mapping_templates_canvas.configure(yscrollcommand=mapping_scroll.set)
 
-        mapping_scroll.pack(side="right", fill="y")
+        mapping_scroll.pack(side="right", fill="y", pady=(0, 70))
 
-        self.mapping_templates_canvas.pack(side="left", fill="both", expand=True)
+        self.mapping_templates_canvas.pack(side="left", fill="both", expand=True, pady=(0, 70))
 
         self.mapping_templates_inner = tk.Frame(self.mapping_templates_canvas, bg=UI_SURFACE)
 
@@ -4306,11 +4372,11 @@ del "%~f0" >nul 2>nul
 
         recent_scroll = ttk.Scrollbar(recent_wrap, orient="vertical")
 
-        recent_scroll.pack(side="right", fill="y")
+        recent_scroll.pack(side="right", fill="y", pady=(0, 70))
 
         canvas = tk.Canvas(recent_wrap, bg=UI_SURFACE, highlightthickness=0, bd=0, yscrollcommand=recent_scroll.set)
 
-        canvas.pack(side="left", fill="both", expand=True)
+        canvas.pack(side="left", fill="both", expand=True, pady=(0, 70))
 
         recent_scroll.config(command=canvas.yview)
 
@@ -5461,6 +5527,20 @@ def _splash_font(size_px, bold=False):
     return ImageFont.load_default()
 
 
+def _startup_asset_path(relative_path):
+    relative_path = Path(relative_path)
+    candidates = (
+        Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        / relative_path,
+        Path(__file__).resolve().parent / relative_path,
+        resource_path(*relative_path.parts),
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 def _draw_splash_gradient_text(draw, xy, text, font, top_color, bottom_color, stroke_fill, stroke_width=2):
     x, y = xy
     bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
@@ -5486,156 +5566,682 @@ def _draw_splash_gradient_text(draw, xy, text, font, top_color, bottom_color, st
     draw._image.alpha_composite(gradient, (x - stroke_width * 2, y - stroke_width * 2))
 
 
-def _render_splash_overlay(w, h, progress, step_text, update_text):
-    scale = 2
+def _render_splash_overlay(w, h, progress, step_text, update_text, animation_phase=0.0):
+    scale = 1
     W, H = w * scale, h * scale
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     S = scale
 
-    title_font = _splash_font(max(34, min(52, int(w * 0.047))) * S, bold=True)
-    part_a = "NỀN MÓNG "
-    part_b = "GIA KHÁNH"
-    a_bbox = draw.textbbox((0, 0), part_a, font=title_font, stroke_width=2 * S)
-    b_bbox = draw.textbbox((0, 0), part_b, font=title_font, stroke_width=2 * S)
-    title_w = (a_bbox[2] - a_bbox[0]) + (b_bbox[2] - b_bbox[0])
-    title_y = int(h * 0.615) * S
-    title_x = (W - title_w) // 2
-    _draw_splash_gradient_text(
-        draw,
-        (title_x, title_y),
-        part_a,
-        title_font,
-        (10, 30, 49),
-        (2, 10, 20),
-        (178, 125, 36, 255),
-        stroke_width=2 * S,
-    )
-    _draw_splash_gradient_text(
-        draw,
-        (title_x + (a_bbox[2] - a_bbox[0]), title_y),
-        part_b,
-        title_font,
-        (255, 216, 70),
-        (178, 103, 4),
-        (59, 35, 6, 255),
-        stroke_width=2 * S,
-    )
-
-    panel_left = int(w * 0.145) * S
-    panel_right = int(w * 0.855) * S
-    panel_y = int(h * 0.755) * S
-    panel_h = max(42, int(h * 0.082)) * S
-    bevel = max(16, int((panel_h / S) * 0.42)) * S
-    points = [
-        (panel_left + bevel, panel_y - panel_h // 2),
-        (panel_right - bevel, panel_y - panel_h // 2),
-        (panel_right, panel_y),
-        (panel_right - bevel, panel_y + panel_h // 2),
-        (panel_left + bevel, panel_y + panel_h // 2),
-        (panel_left, panel_y),
-    ]
-    draw.polygon(points, fill=(12, 17, 22, 232), outline=(126, 92, 35, 255))
-    draw.line([(panel_left + bevel, panel_y + panel_h // 2 - 3 * S), (panel_right - bevel, panel_y + panel_h // 2 - 3 * S)], fill=(50, 36, 15, 180), width=S)
-
-    bar_left = panel_left + int((panel_h / S) * 1.28) * S
-    bar_right = panel_right - int((panel_h / S) * 1.28) * S
-    bar_h = max(12, int(h * 0.020)) * S
-    bar_top = panel_y - bar_h // 2
-    radius = bar_h // 2
-    draw.rounded_rectangle((bar_left, bar_top, bar_right, bar_top + bar_h), radius=radius, fill=(16, 22, 27, 255), outline=(165, 123, 42, 255), width=S)
-
-    fill_w = int((bar_right - bar_left) * (max(0.0, min(23.0, float(progress))) / 23.0))
-    if fill_w > 0:
-        fill_right = min(bar_right - 2 * S, bar_left + fill_w)
-        fill_box = (bar_left + 3 * S, bar_top + 3 * S, fill_right, bar_top + bar_h - 3 * S)
-        if fill_box[2] > fill_box[0]:
+    try:
+        # We now have a clean background image, so we draw everything from scratch.
+        # Use a nice responsive scale based on window width
+        bar_w = int(w * 0.30) * S
+        bar_h = int(h * 0.035) * S
+        bar_x = int((W - bar_w) / 2)
+        bar_y = int(H * 0.65)
+        
+        # Draw text "Đang khởi động hệ thống..."
+        status_font = _splash_font(max(15, int(h * 0.030)) * S, bold=True)
+        status_bbox = draw.textbbox(
+            (0, 0),
+            step_text,
+            font=status_font,
+            stroke_width=max(1, S),
+        )
+        status_x = int((W - (status_bbox[2] - status_bbox[0])) / 2)
+        status_y = bar_y - int(bar_h * 1.45)
+        text_pad_x = 14 * S
+        text_pad_y = 6 * S
+        text_box = (
+            status_x - text_pad_x,
+            status_y - text_pad_y,
+            status_x + (status_bbox[2] - status_bbox[0]) + text_pad_x,
+            status_y + (status_bbox[3] - status_bbox[1]) + text_pad_y,
+        )
+        draw.rounded_rectangle(
+            text_box,
+            radius=10 * S,
+            fill=(4, 24, 17, 178),
+            outline=(120, 222, 170, 150),
+            width=max(1, S),
+        )
+        draw.text(
+            (status_x, status_y),
+            step_text,
+            font=status_font,
+            fill=(255, 255, 255, 255),
+            stroke_width=max(1, S),
+            stroke_fill=(0, 38, 25, 255),
+        )
+        
+        # Calculate progress value
+        percent_val = max(0.0, min(100.0, float(progress) / 23.0 * 100))
+        
+        # Draw percentage
+        percent_text = f"{int(percent_val)}%"
+        percent_font = _splash_font(int(h * 0.036) * S, bold=False)
+        percent_bbox = draw.textbbox((0, 0), percent_text, font=percent_font)
+        percent_x = bar_x + bar_w + 20 * S
+        percent_y = bar_y + (bar_h - (percent_bbox[3] - percent_bbox[1])) // 2 - 4*S
+        draw.text((percent_x, percent_y), percent_text, font=percent_font, fill=(255, 255, 255, 255))
+        
+        # Draw Outline (Capsule)
+        radius = bar_h // 2
+        outline_rect = (bar_x, bar_y, bar_x + bar_w, bar_y + bar_h)
+        draw.rounded_rectangle(outline_rect, radius=radius, outline=(218, 204, 137, 255), width=int(1.5*S))
+        
+        # Draw Inner Background (Dark Green)
+        inner_rect = (bar_x + int(2*S), bar_y + int(2*S), bar_x + bar_w - int(2*S), bar_y + bar_h - int(2*S))
+        inner_radius = max(1, radius - int(2*S))
+        draw.rounded_rectangle(inner_rect, radius=inner_radius, fill=(18, 42, 28, 255))
+        
+        # Draw dynamic fill
+        fill_w = int((inner_rect[2] - inner_rect[0]) * (percent_val / 100.0))
+        if fill_w > 0:
+            fill_right = inner_rect[0] + fill_w
+            fill_box = (inner_rect[0], inner_rect[1], fill_right, inner_rect[3])
+            
             fill_mask = Image.new("L", overlay.size, 0)
             mask_draw = ImageDraw.Draw(fill_mask)
-            mask_draw.rounded_rectangle(fill_box, radius=max(1, radius - 3 * S), fill=255)
+            mask_draw.rounded_rectangle(fill_box, radius=inner_radius, fill=255)
+            
             fill_layer = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
             fill_draw = ImageDraw.Draw(fill_layer)
-            for yy in range(fill_box[1], fill_box[3] + 1):
-                t = (yy - fill_box[1]) / max(1, fill_box[3] - fill_box[1])
+            
+            phase = float(animation_phase)
+            import math
+            for xx in range(fill_box[0], fill_box[2] + 1):
+                t = (xx - fill_box[0]) / max(1, bar_w)
+                shimmer = math.sin(t * math.pi * 6 - phase) * 0.5 + 0.5
                 col = (
-                    int(255 * (1 - t) + 218 * t),
-                    int(235 * (1 - t) + 139 * t),
-                    int(103 * (1 - t) + 16 * t),
+                    min(255, int(80 * (1 - t) + 255 * t + shimmer * 10)),
+                    min(255, int(210 * (1 - t) + 245 * t + shimmer * 5)),
+                    min(255, int(150 * (1 - t) + 140 * t)),
                     255,
                 )
-                fill_draw.line((fill_box[0], yy, fill_box[2], yy), fill=col, width=1)
+                fill_draw.line((xx, fill_box[1], xx, fill_box[3]), fill=col, width=1)
+            
             fill_layer.putalpha(fill_mask)
             overlay.alpha_composite(fill_layer)
 
-        glow_x = max(bar_left + 8 * S, fill_right)
-        glow = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
-        glow_draw = ImageDraw.Draw(glow)
-        glow_draw.line((glow_x - 34 * S, panel_y, glow_x + 34 * S, panel_y), fill=(255, 238, 145, 210), width=3 * S)
-        glow_draw.line((glow_x, panel_y - 17 * S, glow_x, panel_y + 17 * S), fill=(255, 248, 205, 230), width=2 * S)
-        glow_draw.ellipse((glow_x - 5 * S, panel_y - 5 * S, glow_x + 5 * S, panel_y + 5 * S), fill=(255, 250, 217, 255))
-        glow = glow.filter(ImageFilter.GaussianBlur(radius=0.45 * S))
-        overlay.alpha_composite(glow)
-
-    status_font = _splash_font(max(15, min(22, int(w * 0.019))) * S, bold=False)
-    status_bbox = draw.textbbox((0, 0), step_text, font=status_font)
-    status_x = (W - (status_bbox[2] - status_bbox[0])) // 2
-    status_y = int(h * 0.848) * S
-    draw.text((status_x, status_y), step_text, font=status_font, fill=(218, 165, 50, 245))
+            # Glow at the tip
+            glow_x = fill_right
+            glow = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
+            glow_draw = ImageDraw.Draw(glow)
+            glow_draw.ellipse((glow_x - 12 * S, bar_y + bar_h//2 - 18 * S, glow_x + 12 * S, bar_y + bar_h//2 + 18 * S), fill=(255, 255, 200, 180))
+            glow = glow.filter(ImageFilter.GaussianBlur(radius=5 * S))
+            overlay.alpha_composite(glow)
+            
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        draw.rectangle((0, 0, W, H), fill=(200, 0, 0, 180))
+        err_font = ImageFont.load_default()
+        draw.text((20, 20), err_msg, fill=(255, 255, 255, 255), font=err_font)
 
     update_text = str(update_text or "").strip()
     if update_text:
-        update_font = _splash_font(max(11, min(15, int(w * 0.012))) * S, bold=True)
-        pill_w = min(int(w * 0.42), max(int(w * 0.27), len(update_text) * max(6, int(w * 0.007)))) * S
-        pill_h = max(28, int(h * 0.062)) * S
-        pill_x = (W - pill_w) // 2
-        pill_y = int(h * 0.900) * S
-        draw.rounded_rectangle((pill_x, pill_y, pill_x + pill_w, pill_y + pill_h), radius=16 * S, fill=(13, 23, 36, 230), outline=(152, 124, 57, 255), width=S)
-        dot = max(8, int((pill_h / S) * 0.28)) * S
-        draw.ellipse((pill_x + 14 * S, pill_y + (pill_h - dot) // 2, pill_x + 14 * S + dot, pill_y + (pill_h + dot) // 2), fill=(248, 195, 41, 255))
-        draw.text((pill_x + 14 * S + dot + 10 * S, pill_y + pill_h // 2), update_text, font=update_font, fill=(255, 233, 166, 255), anchor="lm")
+        update_font = _splash_font(max(10, min(13, int(w * 0.011))) * S, bold=False)
+        update_bbox = draw.textbbox((0, 0), update_text, font=update_font)
+        update_x = (W - (update_bbox[2] - update_bbox[0])) // 2
+        update_y = bar_y + bar_h + 10 * S
+        draw.text((update_x, update_y), update_text, font=update_font, fill=(150, 180, 150, 200))
 
     return overlay.resize((w, h), Image.LANCZOS)
 
 
-def _draw_startup_splash(canvas, w, h, progress=0, step_text="Đang khởi động hệ thống...", update_text=""):
-    canvas.delete("all")
+class _SplashVideoAnimator:
+    def __init__(self, canvas, width, height, render_frame):
+        import cv2
+
+        self.canvas = canvas
+        self.width = width
+        self.height = height
+        self.render_frame = render_frame
+        self.after_id = None
+        self.running = False
+        self.cv2 = cv2
+        video_path = _startup_asset_path(APP_SPLASH_VIDEO_MP4)
+        self.capture = cv2.VideoCapture(str(video_path))
+        fps = float(self.capture.get(cv2.CAP_PROP_FPS) or 24.0)
+        self.frame_interval = 1.0 / max(10.0, min(60.0, fps))
+        self.playback_rate = 0.82
+        self.playback_phase = 0.0
+        self.next_frame_at = None
+        self.current_frame = None
+        self.current_source_frame = None
+        self.next_video_frame = None
+        self.frame_queue = queue.Queue(maxsize=10)
+        self.decode_stop = threading.Event()
+        for _ in range(6):
+            frame = self._read_frame()
+            if frame is None:
+                break
+            if self.current_source_frame is None:
+                self.current_source_frame = frame
+                self.current_frame = frame
+            elif self.next_video_frame is None:
+                self.next_video_frame = frame
+            else:
+                self.frame_queue.put_nowait(frame)
+        self.decoder_thread = threading.Thread(
+            target=self._decode_loop,
+            name="splash-video-decoder",
+            daemon=True,
+        )
+        self.decoder_thread.start()
+
+    def _read_frame(self):
+        if not self.capture.isOpened():
+            return None
+        ok, frame = self.capture.read()
+        if not ok:
+            self.capture.set(self.cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, frame = self.capture.read()
+        if not ok:
+            return None
+        frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
+        source_h, source_w = frame.shape[:2]
+        target_ratio = self.width / self.height
+        source_ratio = source_w / source_h
+        if source_ratio > target_ratio:
+            crop_w = max(1, int(source_h * target_ratio))
+            left = max(0, (source_w - crop_w) // 2)
+            frame = frame[:, left:left + crop_w]
+        elif source_ratio < target_ratio:
+            crop_h = max(1, int(source_w / target_ratio))
+            top = max(0, (source_h - crop_h) // 2)
+            frame = frame[top:top + crop_h, :]
+        frame = self.cv2.resize(
+            frame,
+            (self.width, self.height),
+            interpolation=self.cv2.INTER_LINEAR,
+        )
+        return Image.fromarray(frame, "RGB")
+
+    def _decode_loop(self):
+        try:
+            while not self.decode_stop.is_set():
+                frame = self._read_frame()
+                if frame is None:
+                    if self.decode_stop.wait(0.02):
+                        break
+                    continue
+                while not self.decode_stop.is_set():
+                    try:
+                        self.frame_queue.put(frame, timeout=0.05)
+                        break
+                    except queue.Full:
+                        continue
+        finally:
+            try:
+                self.capture.release()
+            except Exception:
+                pass
+
+    def wait_until_ready(self, timeout=2.0):
+        return self.current_frame is not None
+
+    def _tick(self):
+        if not self.running:
+            return
+        try:
+            if not self.canvas.winfo_exists():
+                self.stop()
+                return
+            self.playback_phase += self.playback_rate
+            while self.playback_phase >= 1.0:
+                if self.next_video_frame is not None:
+                    self.current_source_frame = self.next_video_frame
+                try:
+                    self.next_video_frame = self.frame_queue.get_nowait()
+                except queue.Empty:
+                    self.next_video_frame = self.current_source_frame
+                self.playback_phase -= 1.0
+            if self.current_source_frame is not None and self.next_video_frame is not None:
+                self.current_frame = Image.blend(
+                    self.current_source_frame,
+                    self.next_video_frame,
+                    self.playback_phase,
+                )
+            self.render_frame()
+            now = time.perf_counter()
+            if self.next_frame_at is None:
+                self.next_frame_at = now + self.frame_interval
+            else:
+                self.next_frame_at += self.frame_interval
+                if self.next_frame_at < now - self.frame_interval:
+                    self.next_frame_at = now + self.frame_interval
+            delay_ms = max(1, int((self.next_frame_at - now) * 1000))
+            self.after_id = self.canvas.after(delay_ms, self._tick)
+        except Exception:
+            self.stop()
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.next_frame_at = time.perf_counter()
+        self._tick()
+
+    def stop(self):
+        self.running = False
+        self.decode_stop.set()
+        after_id = self.after_id
+        self.after_id = None
+        if after_id is not None:
+            try:
+                self.canvas.after_cancel(after_id)
+            except Exception:
+                pass
+        try:
+            if self.decoder_thread.is_alive():
+                self.decoder_thread.join(timeout=0.5)
+        except Exception:
+            pass
+
+
+def _draw_startup_splash(
+    canvas,
+    w,
+    h,
+    progress=0,
+    step_text="Đang khởi động hệ thống...",
+    update_text="",
+    video_animator=None,
+):
     progress = max(0.0, min(23.0, float(progress or 0)))
 
-    if getattr(canvas, "_splash_static_key", None) != (w, h):
+    video_frame = (
+        getattr(video_animator, "current_frame", None)
+        if video_animator is not None
+        else None
+    )
+    if video_frame is not None:
+        if getattr(canvas, "_splash_video_photo", None) is None:
+            canvas._splash_video_photo = ImageTk.PhotoImage(video_frame)
+        else:
+            canvas._splash_video_photo.paste(video_frame)
+        if getattr(canvas, "_splash_background_id", None) is None:
+            canvas._splash_background_id = canvas.create_image(
+                0,
+                0,
+                image=canvas._splash_video_photo,
+                anchor="nw",
+            )
+        else:
+            canvas.itemconfigure(
+                canvas._splash_background_id,
+                image=canvas._splash_video_photo,
+            )
+    elif getattr(canvas, "_splash_static_key", None) != (w, h):
         static_img = Image.new("RGBA", (w, h), (7, 17, 31, 255))
         bg_path = resource_path(*APP_SPLASH_BG_PNG.parts)
         if bg_path.exists():
             try:
                 bg_img = _cover_image(Image.open(bg_path), (w, h)).convert("RGBA")
-                bg_img = Image.alpha_composite(bg_img, Image.new("RGBA", (w, h), (5, 10, 18, 46)))
-                shade = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-                shade_draw = ImageDraw.Draw(shade)
-                shade_draw.rectangle((0, int(h * 0.68), w, h), fill=(0, 0, 0, 66))
-                static_img = Image.alpha_composite(bg_img, shade)
+                static_img = bg_img
             except Exception:
                 pass
 
-        logo_path = resource_path(*APP_SPLASH_LOGO_PNG.parts)
-        if not logo_path.exists():
-            logo_path = resource_path(*APP_LOGO_PNG.parts)
-        if logo_path.exists():
-            try:
-                logo = _fit_logo_for_splash(logo_path, (int(w * 0.50), int(h * 0.50)))
-                static_img.alpha_composite(logo, ((w - logo.width) // 2, int(h * 0.34) - logo.height // 2))
-            except Exception:
-                pass
         canvas._splash_static_key = (w, h)
         canvas._splash_static_photo = ImageTk.PhotoImage(static_img.convert("RGB"))
-
-    canvas.create_image(0, 0, image=canvas._splash_static_photo, anchor="nw")
+    if video_frame is None:
+        if getattr(canvas, "_splash_background_id", None) is None:
+            canvas._splash_background_id = canvas.create_image(
+                0,
+                0,
+                image=canvas._splash_static_photo,
+                anchor="nw",
+            )
+        else:
+            canvas.itemconfigure(
+                canvas._splash_background_id,
+                image=canvas._splash_static_photo,
+            )
 
     try:
-        overlay = _render_splash_overlay(w, h, progress, step_text, update_text)
-        overlay_photo = ImageTk.PhotoImage(overlay)
-        canvas._splash_overlay = overlay_photo
-        canvas.create_image(0, 0, image=overlay_photo, anchor="nw")
+        display_progress = round(progress * 2.0) / 2.0
+        overlay_key = (
+            w,
+            h,
+            display_progress,
+            str(step_text),
+            str(update_text),
+        )
+        if getattr(canvas, "_splash_overlay_key", None) != overlay_key:
+            overlay = _render_splash_overlay(
+                w,
+                h,
+                display_progress,
+                step_text,
+                update_text,
+                animation_phase=display_progress * 0.8,
+            )
+            canvas._splash_overlay = ImageTk.PhotoImage(overlay)
+            canvas._splash_overlay_key = overlay_key
+        if getattr(canvas, "_splash_overlay_id", None) is None:
+            canvas._splash_overlay_id = canvas.create_image(
+                0,
+                0,
+                image=canvas._splash_overlay,
+                anchor="nw",
+            )
+        else:
+            canvas.itemconfigure(
+                canvas._splash_overlay_id,
+                image=canvas._splash_overlay,
+            )
+        canvas.tag_raise(canvas._splash_overlay_id)
     except Exception:
         pass
+
+
+def _pulse_startup_splash(root, step_text=None, force=False):
+    try:
+        splash = getattr(root, "_startup_splash", None)
+        if splash is None:
+            return
+        if isinstance(splash, _ProcessSplashHandle):
+            splash.pulse(step_text, force=force)
+            return
+        if not splash.winfo_exists():
+            return
+
+        now = time.perf_counter()
+        last_pulse = float(getattr(splash, "_last_pulse", 0.0))
+        if not force and now - last_pulse < 0.028:
+            return
+
+        if step_text:
+            splash._step_text = str(step_text)
+        splash._last_pulse = now
+        canvas = splash._canvas
+        w, h = splash._size
+        _draw_startup_splash(
+            canvas,
+            w,
+            h,
+            getattr(splash, "_progress", 0.0),
+            getattr(splash, "_step_text", "Đang khởi động hệ thống..."),
+            getattr(splash, "_update_text", ""),
+            getattr(splash, "_video_animator", None),
+        )
+        splash.update_idletasks()
+        splash.update()
+    except Exception:
+        pass
+
+
+class _ProcessSplashHandle:
+    def __init__(self, process, command_queue, complete_event, abort_event):
+        self.process = process
+        self.command_queue = command_queue
+        self.complete_event = complete_event
+        self.abort_event = abort_event
+        self.progress = 0.0
+        self.step_text = "Đang khởi động hệ thống..."
+        self._last_pulse = 0.0
+        self._shown_at = time.perf_counter()
+
+    def _send(self, command):
+        try:
+            self.command_queue.put_nowait(command)
+        except Exception:
+            pass
+
+    def update(self, progress, step_text):
+        self.progress = max(0.0, min(23.0, float(progress or 0)))
+        self.step_text = str(step_text or self.step_text)
+        self._send(("update", self.progress, self.step_text))
+
+    def pulse(self, step_text=None, force=False):
+        now = time.perf_counter()
+        if not force and now - self._last_pulse < 0.08:
+            return
+        self._last_pulse = now
+        if step_text:
+            self.step_text = str(step_text)
+        self._send(("update", self.progress, self.step_text))
+
+    def wait_until_complete(self, timeout=2.0):
+        deadline = time.perf_counter() + max(0.0, float(timeout))
+        while time.perf_counter() < deadline:
+            try:
+                if self.complete_event.is_set() or self.abort_event.is_set():
+                    return True
+                if not self.process.is_alive():
+                    return self.abort_event.is_set()
+            except Exception:
+                return False
+            time.sleep(0.02)
+        return False
+
+    def was_aborted(self):
+        try:
+            return self.abort_event.is_set()
+        except Exception:
+            return False
+
+    def close(self):
+        # The app initialization controls longer durations; fast machines still
+        # keep the animated banner visible for at least six seconds.
+        aborted = self.was_aborted()
+        remaining = 0.0 if aborted else 6.0 - (time.perf_counter() - self._shown_at)
+        if remaining > 0:
+            time.sleep(remaining)
+        if not aborted:
+            self._send(("close", 260))
+        try:
+            self.process.join(timeout=2.0)
+        except Exception:
+            pass
+        try:
+            if self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=0.5)
+        except Exception:
+            pass
+        try:
+            self.command_queue.close()
+        except Exception:
+            pass
+
+
+def _startup_splash_process(
+    command_queue,
+    ready_event,
+    complete_event,
+    abort_event,
+    update_text,
+):
+    splash_root = None
+    try:
+        splash_root = tk.Tk()
+        splash_root.withdraw()
+        splash_root.title("GK PilePro - Đang khởi động")
+        splash_root.configure(bg="#050b14")
+        splash_root.resizable(False, False)
+        try:
+            splash_root.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            icon_file = resource_path(*APP_ICON_ICO.parts)
+            if icon_file.exists():
+                splash_root.iconbitmap(default=str(icon_file))
+        except Exception:
+            pass
+
+        sw = splash_root.winfo_screenwidth()
+        sh = splash_root.winfo_screenheight()
+        w = min(980, max(720, int(sw * 0.74)))
+        h = int(w * 9 / 16)
+        if h > int(sh * 0.78):
+            h = int(sh * 0.78)
+            w = int(h * 16 / 9)
+        splash_root.geometry(
+            f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}"
+        )
+
+        canvas = tk.Canvas(
+            splash_root,
+            width=w,
+            height=h,
+            bg="#050b14",
+            bd=0,
+            highlightthickness=0,
+        )
+        canvas.pack(fill="both", expand=True)
+        state = {
+            "progress": 0.0,
+            "target": 0.0,
+            "step_text": "Đang khởi động hệ thống...",
+            "closing": False,
+            "fade_started_at": None,
+            "fade_duration": 0.26,
+            "shown_at": time.perf_counter(),
+            "progress_duration": 6.0,
+        }
+
+        def render_frame():
+            try:
+                while True:
+                    command = command_queue.get_nowait()
+                    if not command:
+                        continue
+                    if command[0] == "close":
+                        state["closing"] = True
+                        state["fade_started_at"] = time.perf_counter()
+                        if len(command) > 1:
+                            state["fade_duration"] = max(
+                                0.08,
+                                float(command[1]) / 1000.0,
+                            )
+                        break
+                    if command[0] == "update":
+                        state["target"] = max(0.0, min(23.0, float(command[1])))
+                        state["step_text"] = str(command[2] or state["step_text"])
+            except queue.Empty:
+                pass
+            except Exception:
+                pass
+
+            if state["closing"]:
+                elapsed = time.perf_counter() - state["fade_started_at"]
+                fade = min(1.0, elapsed / state["fade_duration"])
+                try:
+                    splash_root.attributes("-alpha", max(0.0, 1.0 - fade))
+                except Exception:
+                    fade = 1.0
+                if fade >= 1.0:
+                    animator.stop()
+                    splash_root.destroy()
+                    return
+
+            elapsed_visible = time.perf_counter() - state["shown_at"]
+            timed_limit = min(
+                23.0,
+                23.0 * elapsed_visible / state["progress_duration"],
+            )
+            desired_progress = min(state["target"], timed_limit)
+            if desired_progress > state["progress"]:
+                state["progress"] = desired_progress
+            elif desired_progress < state["progress"]:
+                state["progress"] = desired_progress
+            if (
+                state["target"] >= 23.0
+                and elapsed_visible >= state["progress_duration"]
+            ):
+                state["progress"] = 23.0
+                complete_event.set()
+            _draw_startup_splash(
+                canvas,
+                w,
+                h,
+                state["progress"],
+                state["step_text"],
+                update_text,
+                animator,
+            )
+
+        def abort_application():
+            abort_event.set()
+            if not state["closing"]:
+                state["closing"] = True
+                state["fade_started_at"] = time.perf_counter()
+                state["fade_duration"] = 0.08
+
+        splash_root.protocol("WM_DELETE_WINDOW", abort_application)
+        animator = _SplashVideoAnimator(canvas, w, h, render_frame)
+        animator.wait_until_ready(timeout=2.0)
+        animator.start()
+        splash_root.update_idletasks()
+        splash_root.deiconify()
+        splash_root.lift()
+        try:
+            splash_root.focus_force()
+        except Exception:
+            pass
+        splash_root.update()
+        ready_event.set()
+        splash_root.mainloop()
+    except Exception:
+        try:
+            ready_event.set()
+        except Exception:
+            pass
+        try:
+            if "animator" in locals():
+                animator.stop()
+        except Exception:
+            pass
+        try:
+            if splash_root is not None:
+                splash_root.destroy()
+        except Exception:
+            pass
+
+
+def _start_process_startup_splash(update_text=""):
+    try:
+        context = multiprocessing.get_context("spawn")
+        command_queue = context.Queue()
+        ready_event = context.Event()
+        complete_event = context.Event()
+        abort_event = context.Event()
+        process = context.Process(
+            target=_startup_splash_process,
+            args=(
+                command_queue,
+                ready_event,
+                complete_event,
+                abort_event,
+                str(update_text or "").strip(),
+            ),
+            daemon=True,
+        )
+        process.start()
+        if not ready_event.wait(timeout=6.0) or not process.is_alive():
+            try:
+                process.terminate()
+                process.join(timeout=0.5)
+            except Exception:
+                pass
+            try:
+                command_queue.close()
+            except Exception:
+                pass
+            return None
+        return _ProcessSplashHandle(
+            process,
+            command_queue,
+            complete_event,
+            abort_event,
+        )
+    except Exception:
+        return None
 
 
 def _show_startup_splash(root, update_text=""):
@@ -5655,7 +6261,14 @@ def _show_startup_splash(root, update_text=""):
         except Exception:
             pass
         try:
-            splash.protocol("WM_DELETE_WINDOW", root.destroy)
+            def abort_fallback_application():
+                splash._aborted = True
+                animator = getattr(splash, "_video_animator", None)
+                if animator is not None:
+                    animator.stop()
+                splash.destroy()
+
+            splash.protocol("WM_DELETE_WINDOW", abort_fallback_application)
         except Exception:
             pass
         sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
@@ -5671,7 +6284,26 @@ def _show_startup_splash(root, update_text=""):
         splash._size = (w, h)
         splash._update_text = str(update_text or "").strip()
         splash._progress = 0.0
-        _draw_startup_splash(canvas, w, h, 0, "Đang khởi động hệ thống...", splash._update_text)
+        splash._step_text = "Đang khởi động hệ thống..."
+        splash._last_pulse = 0.0
+        splash._shown_at = time.perf_counter()
+        splash._aborted = False
+        splash._video_animator = _SplashVideoAnimator(
+            canvas,
+            w,
+            h,
+            lambda: _draw_startup_splash(
+                canvas,
+                w,
+                h,
+                getattr(splash, "_progress", 0.0),
+                getattr(splash, "_step_text", "Đang khởi động hệ thống..."),
+                getattr(splash, "_update_text", ""),
+                splash._video_animator,
+            ),
+        )
+        splash._video_animator.wait_until_ready(timeout=2.0)
+        splash._video_animator.start()
         splash.lift()
         try:
             splash.focus_force()
@@ -5686,12 +6318,16 @@ def _show_startup_splash(root, update_text=""):
 
 def _update_startup_splash(splash, progress, step_text):
     try:
+        if isinstance(splash, _ProcessSplashHandle):
+            splash.update(progress, step_text)
+            return
         if splash is None or not splash.winfo_exists():
             return
         canvas = splash._canvas
         w, h = splash._size
         start = float(getattr(splash, "_progress", 0.0))
         target = max(0.0, min(23.0, float(progress or 0)))
+        splash._step_text = str(step_text or "Đang khởi động hệ thống...")
         if target < start:
             start = target
         distance = abs(target - start)
@@ -5700,7 +6336,15 @@ def _update_startup_splash(splash, progress, step_text):
             t = idx / frames
             eased = 1 - pow(1 - t, 3)
             value = start + (target - start) * eased
-            _draw_startup_splash(canvas, w, h, value, step_text, getattr(splash, "_update_text", ""))
+            _draw_startup_splash(
+                canvas,
+                w,
+                h,
+                value,
+                step_text,
+                getattr(splash, "_update_text", ""),
+                getattr(splash, "_video_animator", None),
+            )
             splash._progress = value
             splash.update_idletasks()
             splash.update()
@@ -5712,10 +6356,42 @@ def _update_startup_splash(splash, progress, step_text):
 
 def _close_startup_splash(splash):
     try:
+        if isinstance(splash, _ProcessSplashHandle):
+            splash.close()
+            return
         if splash is not None and splash.winfo_exists():
+            shown_at = float(getattr(splash, "_shown_at", time.perf_counter()))
+            deadline = shown_at + 6.0
+            while splash.winfo_exists() and time.perf_counter() < deadline:
+                splash.update_idletasks()
+                splash.update()
+                time.sleep(0.01)
+            animator = getattr(splash, "_video_animator", None)
+            if animator is not None:
+                animator.stop()
             splash.destroy()
     except Exception:
         pass
+
+
+def _wait_startup_splash_complete(splash, timeout=2.5):
+    if isinstance(splash, _ProcessSplashHandle):
+        return splash.wait_until_complete(timeout=timeout)
+    try:
+        return bool(getattr(splash, "_aborted", False)) or float(
+            getattr(splash, "_progress", 0.0)
+        ) >= 23.0
+    except Exception:
+        return False
+
+
+def _startup_splash_was_aborted(splash):
+    if isinstance(splash, _ProcessSplashHandle):
+        return splash.was_aborted()
+    try:
+        return bool(getattr(splash, "_aborted", False))
+    except Exception:
+        return False
 
 
 def main():
@@ -5763,7 +6439,10 @@ def main():
                     pass
                 return
 
-        splash = _show_startup_splash(root, _load_startup_update_notice())
+        splash = _start_process_startup_splash(_load_startup_update_notice())
+        if splash is None:
+            splash = _show_startup_splash(root, _load_startup_update_notice())
+        root._startup_splash = splash
         _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
         app = App(root)
@@ -5773,11 +6452,28 @@ def main():
             pass
         _update_startup_splash(splash, 18, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 23, "Đang khởi động hệ thống...")
+        _wait_startup_splash_complete(splash, timeout=8.0)
+        if _startup_splash_was_aborted(splash):
+            root._startup_splash = None
+            try:
+                root.destroy()
+            except Exception:
+                pass
+            return
         _close_startup_splash(splash)
+        root._startup_splash = None
+        if _startup_splash_was_aborted(splash):
+            try:
+                root.destroy()
+            except Exception:
+                pass
+            return
         try:
             if not getattr(app, "member_locked", False):
                 root.deiconify()
                 root.lift()
+                root.update_idletasks()
+                root.update()
         except Exception:
             pass
 
@@ -5819,6 +6515,7 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     if "--presence-server" in sys.argv:
         try:
             sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[1:] if arg != "--presence-server"]

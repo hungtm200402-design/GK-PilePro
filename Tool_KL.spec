@@ -13,10 +13,14 @@ datas = [
     ('assets\\gk_app_icon.ico', 'assets'),
     ('assets\\gk_splash_logo.png', 'assets'),
     ('assets\\gk_splash_bg.png', 'assets'),
+    ('assets\\loading\\loading_bg.png', 'assets\\loading'),
+    ('assets\\loading\\video-loading.mp4', 'assets\\loading'),
     ('assets\\gk_ui_decor_bottom_right.png', 'assets'),
     ('assets\\gk_ui_decor_sidebar_bottom.png', 'assets'),
     ('assets\\gk_footer_decoration.png', 'assets'),
     ('assets\\gk_sidebar_decoration.png', 'assets'),
+    ('assets\\goc_phai_moi.png.png', 'assets'),
+    ('assets\\goc_trai_moi.png.png', 'assets'),
 ]
 binaries = []
 hiddenimports = []
@@ -25,6 +29,11 @@ pil_datas, pil_binaries, pil_hiddenimports = collect_all('PIL')
 datas += pil_datas
 binaries += pil_binaries
 hiddenimports += pil_hiddenimports
+
+cv2_datas, cv2_binaries, cv2_hiddenimports = collect_all('cv2')
+datas += cv2_datas
+binaries += cv2_binaries
+hiddenimports += cv2_hiddenimports
 
 env_file = Path('.env')
 if env_file.exists():

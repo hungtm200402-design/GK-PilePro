@@ -6,27 +6,27 @@ import tkinter.font as tkfont
 from tkinter import ttk
 
 
-UI_BG = "#f5f8f7"
+UI_BG = "#f9fbf8"
 
 UI_SURFACE = "#ffffff"
 
-UI_SURFACE_2 = "#f7fbf9"
+UI_SURFACE_2 = "#fcfdfc"
 
-UI_BORDER = "#e3eae7"
+UI_BORDER = "#e0e8e4"
 
-UI_TEXT = "#0f2433"
+UI_TEXT = "#0a2116"
 
-UI_MUTED = "#5c6f78"
+UI_MUTED = "#657069"
 
-UI_PRIMARY = "#007a45"
+UI_PRIMARY = "#084228"
 
-UI_PRIMARY_ACTIVE = "#006b3f"
+UI_PRIMARY_ACTIVE = "#062f1c"
 
-UI_SUCCESS = "#007a45"
+UI_SUCCESS = "#084228"
 
-UI_SUCCESS_ACTIVE = "#006b3f"
+UI_SUCCESS_ACTIVE = "#062f1c"
 
-UI_WARN = "#d88914"
+UI_WARN = "#cfa025"
 
 UI_ERROR = "#dc2626"
 
@@ -95,15 +95,15 @@ class RoundedButton(tk.Canvas):
 
         self.colors = {
 
-            "default": (UI_SURFACE, UI_TEXT, "#f4faf7", UI_BORDER),
+            "default": (UI_SURFACE, UI_TEXT, "#f2f7f4", UI_BORDER),
 
             "primary": (UI_PRIMARY, "#ffffff", UI_PRIMARY_ACTIVE, UI_PRIMARY),
 
             "success": (UI_SUCCESS, "#ffffff", UI_SUCCESS_ACTIVE, UI_SUCCESS),
 
-            "soft": ("#ffffff", UI_PRIMARY, "#eefaf4", "#d8e7e1"),
+            "soft": ("#ffffff", UI_PRIMARY, "#f0f5f2", UI_PRIMARY),
 
-            "warn": ("#fff8e8", "#c66b00", "#ffedc4", "#f0c15f"),
+            "warn": (UI_WARN, "#ffffff", "#b38920", UI_WARN),
 
         }
 
@@ -199,7 +199,7 @@ class RoundedButton(tk.Canvas):
                 text_width = max(0, int(tkfont.Font(font=font).measure(str(self.text))))
             except Exception:
                 text_width = int(len(str(self.text)) * 7 * UI_SCALE)
-            gap = scale_px(8)
+            gap = scale_px(5)
             icon_w = scale_px(16)
             total_width = icon_w + gap + text_width
             icon_x = max(scale_px(13), (self.pixel_width - total_width) // 2 + icon_w // 2)
