@@ -304,6 +304,7 @@ APP_ICON_ICO = Path("assets") / "gk_app_icon.ico"
 APP_SPLASH_LOGO_PNG = Path("assets") / "gk_splash_logo.png"
 
 APP_SPLASH_BG_PNG = Path("assets") / "loading" / "loading_bg.png"
+APP_SPLASH_BG_CLEAN_PNG = Path("assets") / "loading" / "loading_bg_clean.png"
 APP_SPLASH_VIDEO_MP4 = Path("assets") / "loading" / "video-loading.mp4"
 
 APP_UI_ICON_DIR = Path("assets") / "GK_PilePro_icon_files_no_bg" / "transparent_png"
@@ -326,7 +327,8 @@ class App:
         self.root = root
         _pulse_startup_splash(root)
 
-        root.title(APP_TITLE)
+        if getattr(root, "_startup_splash", None) is None:
+            root.title(APP_TITLE)
 
         env = load_env_values()
 
@@ -2475,30 +2477,28 @@ del "%~f0" >nul 2>nul
         except Exception:
             pass
 
-        if self.micro_ui:
-            min_win_w = min(980, max(860, sw - 110))
-            min_win_h = min(620, max(560, sh - 110))
-        elif self.dense_ui:
-            min_win_w = min(1040, max(880, sw - 90))
-            min_win_h = min(650, max(580, sh - 100))
-        else:
-            min_win_w = min(1080, max(900, sw - 80))
-            min_win_h = min(700, max(600, sh - 80))
+        min_win_w = max(760, int(sw * 0.50))
+        min_win_h = max(520, int(sh * 0.50))
 
         if self.screen_profile_mode == "auto":
-            win_w = sw
-            win_h = sh
+            win_w = max(min_win_w, int(sw * 0.76))
+            win_h = max(min_win_h, int(sh * 0.78))
         else:
             win_w = min(sw, max(min_win_w, int(sw * 0.98)))
             win_h = min(sh, max(min_win_h, int(sh * 0.985)))
         try:
-            self.root.geometry(f"{win_w}x{win_h}+0+0")
-            self.root.minsize(min_win_w, min_win_h)
-            if self.screen_profile_mode == "auto":
-                try:
-                    self.root.state("zoomed")
-                except Exception:
-                    pass
+            current_state = self.root.state()
+            startup_splash = getattr(self.root, "_startup_splash", None)
+            startup_active = bool(
+                startup_splash is not None
+                and startup_splash.winfo_exists()
+            )
+            if not startup_active and current_state != "zoomed":
+                x = max(0, (sw - win_w) // 2)
+                y = max(0, (sh - win_h) // 2)
+                self.root.geometry(f"{win_w}x{win_h}+{x}+{y}")
+            if not startup_active:
+                self.root.minsize(min_win_w, min_win_h)
         except Exception:
             pass
 
@@ -3097,6 +3097,7 @@ del "%~f0" >nul 2>nul
 
 
         shell = tk.Frame(self.root, bg=main_bg)
+        self.shell = shell
 
         shell.pack(fill="both", expand=True)
 
@@ -3184,6 +3185,7 @@ del "%~f0" >nul 2>nul
         ]
 
         for page_id, icon, text, active in nav_items:
+            _pulse_startup_splash(self.root)
 
             icon_img = self._ui_icon(icon, 20)
             nav_canvas = tk.Canvas(
@@ -3572,6 +3574,7 @@ del "%~f0" >nul 2>nul
                 for col_idx in range(len(btns)):
                     btn_grid.grid_columnconfigure(col_idx, weight=1)
                 for col_idx, (text, command, variant, icon_file) in enumerate(btns):
+                    _pulse_startup_splash(self.root)
                     icon_button(btn_grid, text, command, icon_file, width=button_width, variant=variant).grid(
                         row=0,
                         column=col_idx,
@@ -3585,6 +3588,7 @@ del "%~f0" >nul 2>nul
             for row_idx, row_btns in enumerate(rows):
 
                 for col_idx, (text, command, variant, icon_file) in enumerate(row_btns):
+                    _pulse_startup_splash(self.root)
 
                     icon_button(btn_grid, text, command, icon_file, width=button_width, variant=variant).grid(
                         row=row_idx,
@@ -3750,6 +3754,7 @@ del "%~f0" >nul 2>nul
         workspace = tk.Frame(home_body_content, bg=main_bg)
 
         workspace.pack(fill="both", expand=True)
+        _pulse_startup_splash(self.root, force=True)
 
         workflow = workspace
 
@@ -3968,6 +3973,7 @@ del "%~f0" >nul 2>nul
 
         self.table_editor = TableEditor(center_col)
         self.table_editor.on_change = self._refresh_daily_summary_panel
+        _pulse_startup_splash(self.root, force=True)
 
 
 
@@ -4013,6 +4019,7 @@ del "%~f0" >nul 2>nul
         icon_button(mapping_action_row, "Lưu mẫu", self.save_current_mapping_template, "28_panel_save.png", width=10, variant="soft").pack(anchor="e")
 
         self.mapping_editor = MappingEditor(right_col)
+        _pulse_startup_splash(self.root, force=True)
 
         stats = tk.Frame(right_col, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
         stats.pack(fill="x", pady=(10, 0))
@@ -4076,6 +4083,7 @@ del "%~f0" >nul 2>nul
 
 
         self.history_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+        _pulse_startup_splash(self.root, force=True)
 
         history_shell = card(self.history_page, padx=16 if self.compact_ui else 18, pady=14)
 
@@ -4221,6 +4229,7 @@ del "%~f0" >nul 2>nul
 
 
         self.mapping_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+        _pulse_startup_splash(self.root, force=True)
 
         mapping_shell = card(self.mapping_page, padx=16 if self.compact_ui else 18, pady=14)
 
@@ -4295,6 +4304,7 @@ del "%~f0" >nul 2>nul
         self.mapping_templates_canvas.bind("<Button-5>", self._on_mapping_mousewheel, add="+")
 
         self.excel_page = tk.Frame(content, bg=UI_BG, padx=self.main_padx, pady=self.main_pady)
+        _pulse_startup_splash(self.root, force=True)
 
         excel_shell = card(self.excel_page, padx=16 if self.compact_ui else 18, pady=14)
 
@@ -5701,18 +5711,43 @@ class _SplashVideoAnimator:
         self.render_frame = render_frame
         self.after_id = None
         self.running = False
+        self.render_suspended = False
+        self.last_error = None
         self.cv2 = cv2
         video_path = _startup_asset_path(APP_SPLASH_VIDEO_MP4)
         self.capture = cv2.VideoCapture(str(video_path))
-        fps = float(self.capture.get(cv2.CAP_PROP_FPS) or 24.0)
-        self.frame_interval = 1.0 / max(10.0, min(60.0, fps))
+        fps = max(
+            10.0,
+            min(60.0, float(self.capture.get(cv2.CAP_PROP_FPS) or 24.0)),
+        )
+        self.source_fps = fps
+        self.render_fps = max(30.0, fps)
+        self.frame_interval = 1.0 / self.render_fps
         self.playback_rate = 0.82
+        self.phase_step = (
+            self.source_fps * self.playback_rate / self.render_fps
+        )
         self.playback_phase = 0.0
         self.next_frame_at = None
         self.current_frame = None
         self.current_source_frame = None
         self.next_video_frame = None
-        self.frame_queue = queue.Queue(maxsize=10)
+        self.display_size = (self.width, self.height)
+        self._background_source = None
+        self._background_display = None
+        self._background_display_size = None
+        self._background_resample = Image.Resampling.LANCZOS
+        self._energy_mask_display = None
+        self._energy_mask_display_size = None
+        background_path = resource_path(*APP_SPLASH_BG_CLEAN_PNG.parts)
+        if not background_path.exists():
+            background_path = resource_path(*APP_SPLASH_BG_PNG.parts)
+        if background_path.exists():
+            try:
+                self._background_source = Image.open(background_path).convert("RGB")
+            except Exception:
+                self._background_source = None
+        self.frame_queue = queue.Queue(maxsize=6)
         self.decode_stop = threading.Event()
         for _ in range(6):
             frame = self._read_frame()
@@ -5742,23 +5777,109 @@ class _SplashVideoAnimator:
         if not ok:
             return None
         frame = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
-        source_h, source_w = frame.shape[:2]
-        target_ratio = self.width / self.height
-        source_ratio = source_w / source_h
-        if source_ratio > target_ratio:
-            crop_w = max(1, int(source_h * target_ratio))
-            left = max(0, (source_w - crop_w) // 2)
-            frame = frame[:, left:left + crop_w]
-        elif source_ratio < target_ratio:
-            crop_h = max(1, int(source_w / target_ratio))
-            top = max(0, (source_h - crop_h) // 2)
-            frame = frame[top:top + crop_h, :]
-        frame = self.cv2.resize(
-            frame,
-            (self.width, self.height),
-            interpolation=self.cv2.INTER_LINEAR,
-        )
+        softened = self.cv2.GaussianBlur(frame, (0, 0), 0.65)
+        frame = self.cv2.addWeighted(frame, 1.10, softened, -0.10, 0)
         return Image.fromarray(frame, "RGB")
+
+    def set_size(self, width, height, high_quality=False):
+        width = max(1, int(width))
+        height = max(1, int(height))
+        new_size = (width, height)
+        if new_size == (self.width, self.height) and not high_quality:
+            return
+        self.width = width
+        self.height = height
+        self.display_size = new_size
+        self._background_display = None
+        self._background_display_size = None
+        self._energy_mask_display = None
+        self._energy_mask_display_size = None
+        self._background_resample = (
+            Image.Resampling.LANCZOS
+            if high_quality
+            else Image.Resampling.BILINEAR
+        )
+
+    def preview_size(self, width, height):
+        """Fit the visible frame immediately while a window resize is active."""
+        width = max(1, int(width))
+        height = max(1, int(height))
+        new_size = (width, height)
+        if new_size == self.display_size:
+            return
+        self.width = width
+        self.height = height
+        self.display_size = new_size
+        self._background_display = None
+        self._background_display_size = None
+        self._energy_mask_display = None
+        self._energy_mask_display_size = None
+        self._background_resample = Image.Resampling.BILINEAR
+        if self.current_source_frame is not None:
+            self.current_frame = self._make_display_frame(
+                self.current_source_frame
+            )
+
+    def refresh_display_frame(self):
+        source_frame = self.current_source_frame
+        if source_frame is None:
+            return
+        if self.next_video_frame is not None:
+            source_frame = Image.blend(
+                source_frame,
+                self.next_video_frame,
+                self.playback_phase,
+            )
+        self.current_frame = self._make_display_frame(source_frame)
+
+    @staticmethod
+    def _cover_frame(frame, size, resample):
+        target_w, target_h = size
+        source_w, source_h = frame.size
+        scale = max(target_w / source_w, target_h / source_h)
+        resized_w = max(1, int(round(source_w * scale)))
+        resized_h = max(1, int(round(source_h * scale)))
+        frame = frame.resize((resized_w, resized_h), resample)
+        left = max(0, (resized_w - target_w) // 2)
+        top = max(0, (resized_h - target_h) // 2)
+        return frame.crop((left, top, left + target_w, top + target_h))
+
+    @staticmethod
+    def _stretch_frame(frame, size, resample):
+        return frame.resize(
+            (max(1, int(size[0])), max(1, int(size[1]))),
+            resample,
+        )
+
+    @staticmethod
+    def _cover_region(frame, size, region, resample):
+        target_w, target_h = size
+        source_w, source_h = frame.size
+        scale = max(target_w / source_w, target_h / source_h)
+        resized_w = source_w * scale
+        resized_h = source_h * scale
+        offset_x = max(0.0, (resized_w - target_w) / 2.0)
+        offset_y = max(0.0, (resized_h - target_h) / 2.0)
+        left, top, right, bottom = region
+        source_box = (
+            max(0.0, (left + offset_x) / scale),
+            max(0.0, (top + offset_y) / scale),
+            min(float(source_w), (right + offset_x) / scale),
+            min(float(source_h), (bottom + offset_y) / scale),
+        )
+        crop = frame.crop(source_box)
+        return crop.resize(
+            (max(1, right - left), max(1, bottom - top)),
+            resample,
+        )
+
+    def _make_display_frame(self, source_frame):
+        size = self.display_size
+        return self._stretch_frame(
+            source_frame,
+            size,
+            self._background_resample,
+        )
 
     def _decode_loop(self):
         try:
@@ -5790,7 +5911,7 @@ class _SplashVideoAnimator:
             if not self.canvas.winfo_exists():
                 self.stop()
                 return
-            self.playback_phase += self.playback_rate
+            self.playback_phase += self.phase_step
             while self.playback_phase >= 1.0:
                 if self.next_video_frame is not None:
                     self.current_source_frame = self.next_video_frame
@@ -5800,12 +5921,19 @@ class _SplashVideoAnimator:
                     self.next_video_frame = self.current_source_frame
                 self.playback_phase -= 1.0
             if self.current_source_frame is not None and self.next_video_frame is not None:
-                self.current_frame = Image.blend(
+                source_frame = Image.blend(
                     self.current_source_frame,
                     self.next_video_frame,
                     self.playback_phase,
                 )
-            self.render_frame()
+                self.current_frame = self._make_display_frame(source_frame)
+            elif self.current_source_frame is not None:
+                self.current_frame = self._make_display_frame(
+                    self.current_source_frame
+                )
+            if not self.render_suspended:
+                self.render_frame()
+                self.last_error = None
             now = time.perf_counter()
             if self.next_frame_at is None:
                 self.next_frame_at = now + self.frame_interval
@@ -5816,7 +5944,11 @@ class _SplashVideoAnimator:
             delay_ms = max(1, int((self.next_frame_at - now) * 1000))
             self.after_id = self.canvas.after(delay_ms, self._tick)
         except Exception:
-            self.stop()
+            self.last_error = traceback.format_exc()
+            if self.running and self.canvas.winfo_exists():
+                self.after_id = self.canvas.after(40, self._tick)
+            else:
+                self.stop()
 
     def start(self):
         if self.running:
@@ -5858,9 +5990,45 @@ def _draw_startup_splash(
         if video_animator is not None
         else None
     )
+
+    try:
+        display_progress = round(progress * 2.0) / 2.0
+        overlay_key = (
+            w,
+            h,
+            display_progress,
+            str(step_text),
+            str(update_text),
+        )
+        if getattr(canvas, "_splash_overlay_key", None) != overlay_key:
+            overlay = _render_splash_overlay(
+                w,
+                h,
+                display_progress,
+                step_text,
+                update_text,
+                animation_phase=display_progress * 0.8,
+            )
+            canvas._splash_overlay_source = overlay
+            canvas._splash_overlay_next = ImageTk.PhotoImage(
+                overlay,
+                master=canvas,
+            )
+            canvas._splash_overlay_key = overlay_key
+    except Exception:
+        pass
+
     if video_frame is not None:
-        if getattr(canvas, "_splash_video_photo", None) is None:
-            canvas._splash_video_photo = ImageTk.PhotoImage(video_frame)
+        video_photo = getattr(canvas, "_splash_video_photo", None)
+        if (
+            video_photo is None
+            or video_photo.width() != video_frame.width
+            or video_photo.height() != video_frame.height
+        ):
+            canvas._splash_video_photo = ImageTk.PhotoImage(
+                video_frame,
+                master=canvas,
+            )
         else:
             canvas._splash_video_photo.paste(video_frame)
         if getattr(canvas, "_splash_background_id", None) is None:
@@ -5877,11 +6045,21 @@ def _draw_startup_splash(
             )
     elif getattr(canvas, "_splash_static_key", None) != (w, h):
         static_img = Image.new("RGBA", (w, h), (7, 17, 31, 255))
-        bg_path = resource_path(*APP_SPLASH_BG_PNG.parts)
-        if bg_path.exists():
+        static_source = getattr(canvas, "_splash_static_source", None)
+        if static_source is None:
+            bg_path = resource_path(*APP_SPLASH_BG_PNG.parts)
+            if bg_path.exists():
+                try:
+                    static_source = Image.open(bg_path).convert("RGBA")
+                    canvas._splash_static_source = static_source
+                except Exception:
+                    static_source = None
+        if static_source is not None:
             try:
-                bg_img = _cover_image(Image.open(bg_path), (w, h)).convert("RGBA")
-                static_img = bg_img
+                static_img = static_source.resize(
+                    (max(1, int(w)), max(1, int(h))),
+                    Image.Resampling.LANCZOS,
+                ).convert("RGBA")
             except Exception:
                 pass
 
@@ -5902,37 +6080,27 @@ def _draw_startup_splash(
             )
 
     try:
-        display_progress = round(progress * 2.0) / 2.0
-        overlay_key = (
-            w,
-            h,
-            display_progress,
-            str(step_text),
-            str(update_text),
+        overlay_photo = (
+            getattr(canvas, "_splash_overlay_next", None)
+            or getattr(canvas, "_splash_overlay", None)
         )
-        if getattr(canvas, "_splash_overlay_key", None) != overlay_key:
-            overlay = _render_splash_overlay(
-                w,
-                h,
-                display_progress,
-                step_text,
-                update_text,
-                animation_phase=display_progress * 0.8,
-            )
-            canvas._splash_overlay = ImageTk.PhotoImage(overlay)
-            canvas._splash_overlay_key = overlay_key
+        if overlay_photo is None:
+            return
         if getattr(canvas, "_splash_overlay_id", None) is None:
             canvas._splash_overlay_id = canvas.create_image(
                 0,
                 0,
-                image=canvas._splash_overlay,
+                image=overlay_photo,
                 anchor="nw",
             )
         else:
             canvas.itemconfigure(
                 canvas._splash_overlay_id,
-                image=canvas._splash_overlay,
+                image=overlay_photo,
+                state="normal",
             )
+        canvas._splash_overlay = overlay_photo
+        canvas._splash_overlay_next = None
         canvas.tag_raise(canvas._splash_overlay_id)
     except Exception:
         pass
@@ -5957,6 +6125,10 @@ def _pulse_startup_splash(root, step_text=None, force=False):
         if step_text:
             splash._step_text = str(step_text)
         splash._last_pulse = now
+        try:
+            splash.lift()
+        except Exception:
+            pass
         canvas = splash._canvas
         w, h = splash._size
         _draw_startup_splash(
@@ -6028,7 +6200,7 @@ class _ProcessSplashHandle:
         # The app initialization controls longer durations; fast machines still
         # keep the animated banner visible for at least six seconds.
         aborted = self.was_aborted()
-        remaining = 0.0 if aborted else 6.0 - (time.perf_counter() - self._shown_at)
+        remaining = 0.0 if aborted else 5.5 - (time.perf_counter() - self._shown_at)
         if remaining > 0:
             time.sleep(remaining)
         if not aborted:
@@ -6049,6 +6221,35 @@ class _ProcessSplashHandle:
             pass
 
 
+def _prepare_fixed_maximized_splash(window):
+    """Maximize once, then lock the splash at the resulting client size."""
+    alpha_hidden = False
+    try:
+        window.attributes("-alpha", 0.0)
+        alpha_hidden = True
+    except Exception:
+        pass
+    try:
+        window.resizable(True, True)
+        window.state("zoomed")
+    except Exception:
+        sw = max(1, window.winfo_screenwidth())
+        sh = max(1, window.winfo_screenheight())
+        window.geometry(f"{sw}x{sh}+0+0")
+    window.deiconify()
+    window.update_idletasks()
+    width = max(1, window.winfo_width())
+    height = max(1, window.winfo_height())
+    window.withdraw()
+    window.resizable(False, False)
+    if alpha_hidden:
+        try:
+            window.attributes("-alpha", 1.0)
+        except Exception:
+            pass
+    return width, height
+
+
 def _startup_splash_process(
     command_queue,
     ready_event,
@@ -6062,7 +6263,6 @@ def _startup_splash_process(
         splash_root.withdraw()
         splash_root.title("GK PilePro - Đang khởi động")
         splash_root.configure(bg="#050b14")
-        splash_root.resizable(False, False)
         try:
             splash_root.attributes("-topmost", True)
         except Exception:
@@ -6074,16 +6274,7 @@ def _startup_splash_process(
         except Exception:
             pass
 
-        sw = splash_root.winfo_screenwidth()
-        sh = splash_root.winfo_screenheight()
-        w = min(980, max(720, int(sw * 0.74)))
-        h = int(w * 9 / 16)
-        if h > int(sh * 0.78):
-            h = int(sh * 0.78)
-            w = int(h * 16 / 9)
-        splash_root.geometry(
-            f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}"
-        )
+        w, h = _prepare_fixed_maximized_splash(splash_root)
 
         canvas = tk.Canvas(
             splash_root,
@@ -6102,7 +6293,7 @@ def _startup_splash_process(
             "fade_started_at": None,
             "fade_duration": 0.26,
             "shown_at": time.perf_counter(),
-            "progress_duration": 6.0,
+            "progress_duration": 5.5,
         }
 
         def render_frame():
@@ -6246,38 +6437,89 @@ def _start_process_startup_splash(update_text=""):
 
 def _show_startup_splash(root, update_text=""):
     try:
-        splash = tk.Toplevel(root)
-        splash.title("GK PilePro - Đang khởi động")
-        splash.configure(bg="#050b14")
-        splash.resizable(False, False)
+        root.title("GK PilePro - Đang khởi động")
+        root.configure(bg="#050b14")
+        root.resizable(True, True)
+        sw = max(1, root.winfo_screenwidth())
+        sh = max(1, root.winfo_screenheight())
+        normal_w = max(760, int(sw * 0.76))
+        normal_h = max(520, int(sh * 0.78))
+        normal_x = max(0, (sw - normal_w) // 2)
+        normal_y = max(0, (sh - normal_h) // 2)
+        root.geometry(f"{normal_w}x{normal_h}+{normal_x}+{normal_y}")
+        root.minsize(max(760, int(sw * 0.50)), max(520, int(sh * 0.50)))
         try:
-            splash.attributes("-topmost", True)
+            root.state("zoomed")
         except Exception:
-            pass
+            root.geometry(f"{sw}x{sh}+0+0")
         try:
             icon_file = resource_path(*APP_ICON_ICO.parts)
             if icon_file.exists():
-                splash.iconbitmap(default=str(icon_file))
+                root.iconbitmap(default=str(icon_file))
         except Exception:
             pass
-        try:
-            def abort_fallback_application():
-                splash._aborted = True
-                animator = getattr(splash, "_video_animator", None)
-                if animator is not None:
-                    animator.stop()
-                splash.destroy()
 
-            splash.protocol("WM_DELETE_WINDOW", abort_fallback_application)
-        except Exception:
-            pass
-        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-        w = min(980, max(720, int(sw * 0.74)))
-        h = int(w * 9 / 16)
-        if h > int(sh * 0.78):
-            h = int(sh * 0.78)
-            w = int(h * 16 / 9)
-        splash.geometry(f"{w}x{h}+{max(0, (sw - w) // 2)}+{max(0, (sh - h) // 2)}")
+        root.deiconify()
+        root.update_idletasks()
+
+        def set_loading_resize_lock(locked):
+            if os.name != "nt":
+                return
+            try:
+                import ctypes
+
+                user32 = ctypes.windll.user32
+                hwnd = user32.GetParent(root.winfo_id()) or root.winfo_id()
+                get_style = user32.GetWindowLongPtrW
+                set_style = user32.SetWindowLongPtrW
+                style = int(get_style(hwnd, -16))
+                if not hasattr(root, "_splash_original_style"):
+                    root._splash_original_style = style
+                if locked:
+                    # Keep maximize/restore controls, but remove live border
+                    # resizing while the video splash is active.
+                    style = (style & ~0x00040000) | 0x00010000
+                else:
+                    style = int(root._splash_original_style)
+                set_style(hwnd, -16, style)
+                user32.SetWindowPos(
+                    hwnd,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0x0001 | 0x0002 | 0x0004 | 0x0020,
+                )
+            except Exception:
+                pass
+
+        def set_loading_window_transitions(disabled):
+            if os.name != "nt":
+                return
+            try:
+                import ctypes
+
+                hwnd = (
+                    ctypes.windll.user32.GetParent(root.winfo_id())
+                    or root.winfo_id()
+                )
+                value = ctypes.c_int(1 if disabled else 0)
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd,
+                    3,
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+            except Exception:
+                pass
+
+        set_loading_resize_lock(False)
+        set_loading_window_transitions(False)
+        w = max(1, root.winfo_width())
+        h = max(1, root.winfo_height())
+        splash = tk.Frame(root, bg="#050b14", bd=0, highlightthickness=0)
+        splash.place(x=0, y=0, relwidth=1, relheight=1)
         canvas = tk.Canvas(splash, width=w, height=h, bg="#050b14", bd=0, highlightthickness=0)
         canvas.pack(fill="both", expand=True)
         splash._canvas = canvas
@@ -6286,31 +6528,238 @@ def _show_startup_splash(root, update_text=""):
         splash._progress = 0.0
         splash._step_text = "Đang khởi động hệ thống..."
         splash._last_pulse = 0.0
-        splash._shown_at = time.perf_counter()
+        splash._shown_at = None
         splash._aborted = False
-        splash._video_animator = _SplashVideoAnimator(
-            canvas,
-            w,
-            h,
-            lambda: _draw_startup_splash(
+        splash._resize_after_id = None
+        splash._resize_quality_after_id = None
+        splash._resize_sharp_after_id = None
+        splash._resize_active = False
+        splash._resize_preview_source = None
+        splash._resize_overlay_source = None
+        splash._pending_resize = None
+        splash._last_configure_size = (w, h)
+        splash._set_loading_resize_lock = set_loading_resize_lock
+        splash._set_loading_window_transitions = set_loading_window_transitions
+        splash._raise_after_id = None
+
+        def render_current_frame():
+            current_w, current_h = splash._size
+            _draw_startup_splash(
                 canvas,
-                w,
-                h,
+                current_w,
+                current_h,
                 getattr(splash, "_progress", 0.0),
                 getattr(splash, "_step_text", "Đang khởi động hệ thống..."),
                 getattr(splash, "_update_text", ""),
                 splash._video_animator,
-            ),
+            )
+
+        splash._video_animator = _SplashVideoAnimator(
+            canvas,
+            w,
+            h,
+            render_current_frame,
         )
+
+        def sharpen_resize():
+            splash._resize_sharp_after_id = None
+            if not splash.winfo_exists():
+                return
+            new_w = max(1, canvas.winfo_width())
+            new_h = max(1, canvas.winfo_height())
+            splash._video_animator.set_size(new_w, new_h, high_quality=True)
+            splash._video_animator.refresh_display_frame()
+            render_current_frame()
+
+        def finish_resize(high_quality=True):
+            splash._resize_quality_after_id = None
+            if not splash.winfo_exists():
+                return
+            resize_after_id = getattr(splash, "_resize_after_id", None)
+            if resize_after_id is not None:
+                try:
+                    canvas.after_cancel(resize_after_id)
+                except Exception:
+                    pass
+                splash._resize_after_id = None
+            new_w = max(1, canvas.winfo_width())
+            new_h = max(1, canvas.winfo_height())
+            splash._pending_resize = None
+            splash._size = (new_w, new_h)
+            canvas._splash_video_photo = None
+            canvas._splash_static_key = None
+            canvas._splash_overlay_key = None
+            splash._video_animator.set_size(
+                new_w,
+                new_h,
+                high_quality=high_quality,
+            )
+            splash._video_animator.refresh_display_frame()
+            splash._video_animator.render_suspended = False
+            render_current_frame()
+            if getattr(canvas, "_splash_overlay_id", None) is not None:
+                canvas.itemconfigure(canvas._splash_overlay_id, state="normal")
+                canvas.tag_raise(canvas._splash_overlay_id)
+            splash._resize_preview_source = None
+            splash._resize_overlay_source = None
+            splash._resize_active = False
+            if not high_quality:
+                sharp_after_id = getattr(
+                    splash,
+                    "_resize_sharp_after_id",
+                    None,
+                )
+                if sharp_after_id is not None:
+                    try:
+                        canvas.after_cancel(sharp_after_id)
+                    except Exception:
+                        pass
+                splash._resize_sharp_after_id = canvas.after(
+                    170,
+                    sharpen_resize,
+                )
+
+        def apply_live_resize(new_w, new_h):
+            if not splash.winfo_exists():
+                return
+            new_w = max(1, int(new_w))
+            new_h = max(1, int(new_h))
+            if (new_w, new_h) == splash._size:
+                return
+            splash._size = (new_w, new_h)
+            preview_source = splash._resize_preview_source
+            if preview_source is None:
+                return
+            preview = preview_source.resize(
+                (new_w, new_h),
+                Image.Resampling.BILINEAR,
+            )
+            canvas._splash_video_photo = ImageTk.PhotoImage(
+                preview,
+                master=canvas,
+            )
+            canvas.itemconfigure(
+                canvas._splash_background_id,
+                image=canvas._splash_video_photo,
+            )
+            overlay_source = splash._resize_overlay_source
+            if overlay_source is not None:
+                overlay_preview = overlay_source.resize(
+                    (new_w, new_h),
+                    Image.Resampling.BILINEAR,
+                )
+                canvas._splash_overlay = ImageTk.PhotoImage(
+                    overlay_preview,
+                    master=canvas,
+                )
+                if getattr(canvas, "_splash_overlay_id", None) is None:
+                    canvas._splash_overlay_id = canvas.create_image(
+                        0,
+                        0,
+                        image=canvas._splash_overlay,
+                        anchor="nw",
+                    )
+                else:
+                    canvas.itemconfigure(
+                        canvas._splash_overlay_id,
+                        image=canvas._splash_overlay,
+                        state="normal",
+                    )
+                canvas.tag_raise(canvas._splash_overlay_id)
+
+        def flush_live_resize():
+            splash._resize_after_id = None
+            pending_resize = splash._pending_resize
+            if pending_resize is None or not splash.winfo_exists():
+                return
+            splash._pending_resize = None
+            apply_live_resize(*pending_resize)
+
+        def schedule_resize(event):
+            if event.widget is not canvas:
+                return
+            previous_w, previous_h = splash._last_configure_size
+            splash._last_configure_size = (event.width, event.height)
+            width_jump = abs(event.width - previous_w) >= max(180, previous_w * 0.16)
+            height_jump = abs(event.height - previous_h) >= max(120, previous_h * 0.14)
+            system_window_transition = width_jump or height_jump
+            splash._video_animator.render_suspended = True
+            if splash._resize_preview_source is None:
+                current_frame = getattr(
+                    splash._video_animator,
+                    "current_frame",
+                    None,
+                )
+                overlay_source = getattr(
+                    canvas,
+                    "_splash_overlay_source",
+                    None,
+                )
+                if current_frame is not None:
+                    splash._resize_preview_source = current_frame.convert(
+                        "RGB"
+                    )
+                    splash._resize_overlay_source = overlay_source
+            splash._pending_resize = (event.width, event.height)
+            if splash._resize_after_id is None:
+                splash._resize_after_id = canvas.after(16, flush_live_resize)
+            quality_after_id = getattr(splash, "_resize_quality_after_id", None)
+            if quality_after_id is not None:
+                try:
+                    canvas.after_cancel(quality_after_id)
+                except Exception:
+                    pass
+            splash._resize_quality_after_id = canvas.after(
+                180 if system_window_transition else 140,
+                lambda fast=system_window_transition: finish_resize(
+                    high_quality=not fast
+                ),
+            )
+
+        def abort_fallback_application():
+            splash._aborted = True
+            after_id = getattr(splash, "_resize_after_id", None)
+            if after_id is not None:
+                try:
+                    canvas.after_cancel(after_id)
+                except Exception:
+                    pass
+            quality_after_id = getattr(splash, "_resize_quality_after_id", None)
+            if quality_after_id is not None:
+                try:
+                    canvas.after_cancel(quality_after_id)
+                except Exception:
+                    pass
+            sharp_after_id = getattr(splash, "_resize_sharp_after_id", None)
+            if sharp_after_id is not None:
+                try:
+                    canvas.after_cancel(sharp_after_id)
+                except Exception:
+                    pass
+            raise_after_id = getattr(splash, "_raise_after_id", None)
+            if raise_after_id is not None:
+                try:
+                    canvas.after_cancel(raise_after_id)
+                except Exception:
+                    pass
+            splash._video_animator.stop()
+            set_loading_resize_lock(False)
+            set_loading_window_transitions(False)
+            root.destroy()
+
+        splash._abort_application = abort_fallback_application
+        root.protocol("WM_DELETE_WINDOW", abort_fallback_application)
+        canvas.bind("<Configure>", schedule_resize, add="+")
         splash._video_animator.wait_until_ready(timeout=2.0)
         splash._video_animator.start()
         splash.lift()
         try:
-            splash.focus_force()
+            root.focus_force()
         except Exception:
             pass
-        splash.update_idletasks()
-        splash.update()
+        root.update_idletasks()
+        root.update()
+        splash._shown_at = time.perf_counter()
         return splash
     except Exception:
         return None
@@ -6331,25 +6780,17 @@ def _update_startup_splash(splash, progress, step_text):
         if target < start:
             start = target
         distance = abs(target - start)
-        frames = max(8, min(22, int(distance * 2.2)))
-        for idx in range(1, frames + 1):
-            t = idx / frames
-            eased = 1 - pow(1 - t, 3)
-            value = start + (target - start) * eased
-            _draw_startup_splash(
-                canvas,
-                w,
-                h,
-                value,
-                step_text,
-                getattr(splash, "_update_text", ""),
-                getattr(splash, "_video_animator", None),
-            )
-            splash._progress = value
-            splash.update_idletasks()
-            splash.update()
-            time.sleep(0.012)
         splash._progress = target
+        _draw_startup_splash(
+            canvas,
+            w,
+            h,
+            target,
+            step_text,
+            getattr(splash, "_update_text", ""),
+            getattr(splash, "_video_animator", None),
+        )
+        splash.update_idletasks()
     except Exception:
         pass
 
@@ -6361,7 +6802,7 @@ def _close_startup_splash(splash):
             return
         if splash is not None and splash.winfo_exists():
             shown_at = float(getattr(splash, "_shown_at", time.perf_counter()))
-            deadline = shown_at + 6.0
+            deadline = shown_at + 5.5
             while splash.winfo_exists() and time.perf_counter() < deadline:
                 splash.update_idletasks()
                 splash.update()
@@ -6369,6 +6810,44 @@ def _close_startup_splash(splash):
             animator = getattr(splash, "_video_animator", None)
             if animator is not None:
                 animator.stop()
+            resize_lock = getattr(splash, "_set_loading_resize_lock", None)
+            if resize_lock is not None:
+                resize_lock(False)
+            transitions = getattr(
+                splash,
+                "_set_loading_window_transitions",
+                None,
+            )
+            if transitions is not None:
+                transitions(False)
+            try:
+                splash.master.resizable(True, True)
+            except Exception:
+                pass
+            after_id = getattr(splash, "_resize_after_id", None)
+            if after_id is not None:
+                try:
+                    splash.after_cancel(after_id)
+                except Exception:
+                    pass
+            quality_after_id = getattr(splash, "_resize_quality_after_id", None)
+            if quality_after_id is not None:
+                try:
+                    splash.after_cancel(quality_after_id)
+                except Exception:
+                    pass
+            sharp_after_id = getattr(splash, "_resize_sharp_after_id", None)
+            if sharp_after_id is not None:
+                try:
+                    splash.after_cancel(sharp_after_id)
+                except Exception:
+                    pass
+            raise_after_id = getattr(splash, "_raise_after_id", None)
+            if raise_after_id is not None:
+                try:
+                    splash.after_cancel(raise_after_id)
+                except Exception:
+                    pass
             splash.destroy()
     except Exception:
         pass
@@ -6383,6 +6862,18 @@ def _wait_startup_splash_complete(splash, timeout=2.5):
         ) >= 23.0
     except Exception:
         return False
+
+
+def _prime_startup_splash(splash, duration=1.2):
+    if splash is None or isinstance(splash, _ProcessSplashHandle):
+        return
+    deadline = time.perf_counter() + max(0.0, float(duration))
+    while splash.winfo_exists() and time.perf_counter() < deadline:
+        if getattr(splash, "_aborted", False):
+            return
+        splash.update_idletasks()
+        splash.update()
+        time.sleep(0.008)
 
 
 def _startup_splash_was_aborted(splash):
@@ -6439,17 +6930,28 @@ def main():
                     pass
                 return
 
-        splash = _start_process_startup_splash(_load_startup_update_notice())
-        if splash is None:
-            splash = _show_startup_splash(root, _load_startup_update_notice())
+        splash = _show_startup_splash(root, _load_startup_update_notice())
         root._startup_splash = splash
         _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
+        _prime_startup_splash(splash)
+        if _startup_splash_was_aborted(splash):
+            root._startup_splash = None
+            try:
+                root.destroy()
+            except Exception:
+                pass
+            return
         app = App(root)
-        try:
-            root.withdraw()
-        except Exception:
-            pass
+        if splash is not None and splash.winfo_exists():
+            try:
+                root.protocol(
+                    "WM_DELETE_WINDOW",
+                    splash._abort_application,
+                )
+                splash.lift()
+            except Exception:
+                pass
         _update_startup_splash(splash, 18, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 23, "Đang khởi động hệ thống...")
         _wait_startup_splash_complete(splash, timeout=8.0)
@@ -6460,6 +6962,34 @@ def main():
             except Exception:
                 pass
             return
+        shell = getattr(app, "shell", None)
+        startup_window_state = {}
+        try:
+            root.configure(bg=UI_BG)
+            if shell is not None and shell.winfo_exists():
+                if not shell.winfo_manager():
+                    shell.pack(fill="both", expand=True)
+                shell.update_idletasks()
+            root.update_idletasks()
+            window_w = max(1, root.winfo_width())
+            window_h = max(1, root.winfo_height())
+            screen_w = max(1, root.winfo_screenwidth())
+            screen_h = max(1, root.winfo_screenheight())
+            startup_window_state = {
+                "state": root.state(),
+                "geometry": (
+                    f"{window_w}x{window_h}"
+                    f"+{root.winfo_x()}+{root.winfo_y()}"
+                ),
+                "restored": (
+                    window_w < int(screen_w * 0.92)
+                    or window_h < int(screen_h * 0.92)
+                ),
+            }
+            if splash is not None and splash.winfo_exists():
+                splash.lift()
+        except Exception:
+            pass
         _close_startup_splash(splash)
         root._startup_splash = None
         if _startup_splash_was_aborted(splash):
@@ -6469,11 +6999,45 @@ def main():
                 pass
             return
         try:
+            root.configure(bg=UI_BG)
+            root.title(APP_TITLE)
+            if startup_window_state.get("state") == "iconic":
+                root.iconify()
+            elif startup_window_state.get("restored"):
+                root.state("normal")
+                root.geometry(startup_window_state["geometry"])
+            if shell is not None and shell.winfo_exists():
+                if not shell.winfo_manager():
+                    shell.pack(fill="both", expand=True)
+                shell.tkraise()
+            root.update_idletasks()
+            root.update()
+            root.after_idle(
+                lambda: (
+                    shell.tkraise()
+                    if shell is not None and shell.winfo_exists()
+                    else None
+                )
+            )
+        except Exception:
+            pass
+        try:
+            if is_admin_build():
+                root.protocol("WM_DELETE_WINDOW", app._on_admin_window_close)
+            else:
+                root.protocol("WM_DELETE_WINDOW", root.destroy)
+        except Exception:
+            pass
+        try:
             if not getattr(app, "member_locked", False):
-                root.deiconify()
-                root.lift()
+                current_state = root.state()
+                if current_state == "withdrawn":
+                    root.deiconify()
+                if current_state != "iconic":
+                    root.lift()
                 root.update_idletasks()
-                root.update()
+                if root.state() != "iconic":
+                    root.update()
         except Exception:
             pass
 
