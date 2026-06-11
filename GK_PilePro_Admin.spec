@@ -23,6 +23,7 @@ datas = [
     ('assets\\decor_part1_solid.png', 'assets'),
     ('assets\\decor_part2_solid.png', 'assets'),
     ('assets\\decor_part3_solid.png', 'assets'),
+    ('assets\\goc_phai_moi.png.png', 'assets'),
     ('assets\\goc_trai_moi.png.png', 'assets'),
 ]
 binaries = []

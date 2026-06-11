@@ -1391,7 +1391,14 @@ class App:
             pass
 
         if hasattr(self, "_footer_decor_lbl") and self._footer_decor_lbl:
-            self._footer_decor_lbl.lift()
+            decor_widgets = self._footer_decor_lbl
+            if not isinstance(decor_widgets, (list, tuple)):
+                decor_widgets = (decor_widgets,)
+            for widget in decor_widgets:
+                try:
+                    widget.lift()
+                except Exception:
+                    pass
 
         return "break"
 
@@ -2491,7 +2498,10 @@ del "%~f0" >nul 2>nul
             startup_splash = getattr(self.root, "_startup_splash", None)
             startup_active = bool(
                 startup_splash is not None
-                and startup_splash.winfo_exists()
+                and (
+                    isinstance(startup_splash, _ProcessSplashHandle)
+                    or startup_splash.winfo_exists()
+                )
             )
             if not startup_active and current_state != "zoomed":
                 x = max(0, (sw - win_w) // 2)
@@ -2587,22 +2597,49 @@ del "%~f0" >nul 2>nul
 
         try:
 
-            logo_path = resource_path(*APP_LOGO_PNG.parts)
-            detailed_base = build_detailed_app_icon(logo_path, 256) if logo_path.exists() else build_simplified_taskbar_icon(256)
+            logo_path = resource_path(*APP_TASKBAR_PNG.parts)
+            detailed_base = Image.open(logo_path).convert("RGBA") if logo_path.exists() else build_simplified_taskbar_icon(256)
+
+            def taskbar_icon(size):
+                source = detailed_base
+                if size <= 24:
+                    source = source.crop(
+                        (
+                            0,
+                            int(source.height * 0.18),
+                            source.width,
+                            int(source.height * 0.74),
+                        )
+                    )
+                canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+                fit_ratio = {
+                    16: 1.00,
+                    32: 0.84,
+                    48: 0.76,
+                }.get(size, 0.72)
+                fit = max(1, int(size * fit_ratio))
+                source.thumbnail((fit, fit), Image.Resampling.LANCZOS)
+                canvas.alpha_composite(
+                    source,
+                    ((size - source.width) // 2, (size - source.height) // 2),
+                )
+                if size <= 48:
+                    return sharp_icon_image_small(canvas, (size, size))
+                return sharp_icon_image(canvas, (size, size))
 
             icon_imgs = [
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 16) if logo_path.exists() else sharp_icon_image_small(detailed_base, (16, 16))),
+                ImageTk.PhotoImage(taskbar_icon(16)),
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 32) if logo_path.exists() else sharp_icon_image_small(detailed_base, (32, 32))),
+                ImageTk.PhotoImage(taskbar_icon(32)),
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 48) if logo_path.exists() else sharp_icon_image_small(detailed_base, (48, 48))),
+                ImageTk.PhotoImage(taskbar_icon(48)),
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 64) if logo_path.exists() else sharp_icon_image_small(detailed_base, (64, 64))),
+                ImageTk.PhotoImage(taskbar_icon(64)),
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 128) if logo_path.exists() else sharp_icon_image_small(detailed_base, (128, 128))),
+                ImageTk.PhotoImage(taskbar_icon(128)),
 
-                ImageTk.PhotoImage(build_icon_variant(logo_path, 256) if logo_path.exists() else sharp_icon_image(detailed_base, (256, 256))),
+                ImageTk.PhotoImage(taskbar_icon(256)),
 
             ]
 
@@ -3341,31 +3378,69 @@ del "%~f0" >nul 2>nul
             )
             self._log_btn.pack(anchor="center")
 
-        # Dynamically resizing left decor to fill remaining space without vertical stretch
+        # Keep only the visible lower decoration; the sidebar itself supplies the background.
         try:
             left_img_path = resource_path(*Path(APP_DECOR_SIDEBAR_BOTTOM).parts)
             if left_img_path.exists():
                 self._left_raw_img = Image.open(left_img_path).convert("RGBA")
-                # Get the top-left pixel color to fill the empty space seamlessly
-                top_color = self._left_raw_img.getpixel((0, 0))
-                hex_color = "#{:02x}{:02x}{:02x}".format(top_color[0], top_color[1], top_color[2])
-                
-                self.sidebar_canvas = tk.Canvas(sidebar, bg=hex_color, highlightthickness=0, bd=0)
-                self.sidebar_canvas.pack(side="bottom", fill="both", expand=True)
-                self._left_tk_img = None
-                
-                def on_sidebar_resize(event):
-                    if event.width > 2 and event.height > 2:
-                        # Only scale width to fill horizontally, keep aspect ratio or height
-                        img_ratio = self._left_raw_img.width / self._left_raw_img.height
-                        new_h = int(event.width / img_ratio)
-                        resized = self._left_raw_img.resize((event.width, new_h), Image.Resampling.LANCZOS)
-                        self._left_tk_img = ImageTk.PhotoImage(resized)
-                        self.sidebar_canvas.delete("all")
-                        # Place image at the very bottom
-                        self.sidebar_canvas.create_image(0, event.height, image=self._left_tk_img, anchor="sw")
-                
-                self.sidebar_canvas.bind("<Configure>", on_sidebar_resize)
+
+                source_rgb = self._left_raw_img.convert("RGB")
+                source_px = source_rgb.load()
+                alpha_mask = Image.new("L", source_rgb.size, 0)
+                alpha_px = alpha_mask.load()
+                source_w = source_rgb.width
+                source_h = source_rgb.height
+                for y in range(source_h):
+                    edge_pixels = [
+                        source_px[x, y]
+                        for x in list(range(min(12, source_w)))
+                        + list(range(max(0, source_w - 12), source_w))
+                    ]
+                    row_bg = tuple(
+                        sum(pixel[channel] for pixel in edge_pixels) / len(edge_pixels)
+                        for channel in range(3)
+                    )
+                    for x in range(source_w):
+                        pixel = source_px[x, y]
+                        background_distance = max(
+                            abs(pixel[channel] - row_bg[channel])
+                            for channel in range(3)
+                        )
+                        subject_alpha = max(
+                            0.0,
+                            min(1.0, (background_distance - 3.0) / 14.0),
+                        )
+                        alpha_px[x, y] = int(255 * subject_alpha)
+                alpha_mask = alpha_mask.filter(ImageFilter.GaussianBlur(0.65))
+                self._left_raw_img.putalpha(alpha_mask)
+
+                img_ratio = self._left_raw_img.width / self._left_raw_img.height
+                decor_w = max(1, int(self.sidebar_w))
+                decor_h = max(1, int(decor_w / img_ratio))
+                resized = self._left_raw_img.resize((decor_w, decor_h), Image.Resampling.LANCZOS)
+                self._left_tk_img = ImageTk.PhotoImage(resized)
+                self.sidebar_canvas = tk.Canvas(
+                    shell,
+                    width=decor_w,
+                    height=decor_h,
+                    bg=sidebar_bg,
+                    highlightthickness=0,
+                    bd=0,
+                )
+                self.sidebar_canvas.create_image(
+                    decor_w // 2,
+                    decor_h,
+                    image=self._left_tk_img,
+                    anchor="s",
+                )
+                self.sidebar_canvas.place(
+                    x=0,
+                    rely=1.0,
+                    width=decor_w,
+                    height=decor_h,
+                    anchor="sw",
+                )
+                self.sidebar_canvas.lift()
         except Exception:
             pass
 
@@ -3485,45 +3560,65 @@ del "%~f0" >nul 2>nul
         footer_item("Trạng thái", variable=self.footer_status_var, dot=True, value_color=UI_SUCCESS)
         footer_item("Thời gian", variable=self.footer_time_var)
         footer_item("Ngày", variable=self.footer_date_var, separator=False)
-        def _load_and_fade(img_path):
+        def _load_footer_decor():
             try:
-                from PIL import ImageChops
-                p = resource_path(*Path("assets").joinpath(img_path).parts)
-                if not p.exists(): return None
+                p = resource_path(*APP_DECOR_BOTTOM_RIGHT.parts)
+                if not p.exists():
+                    return None
                 img = Image.open(p).convert("RGBA")
-                w, h = img.size
-                alpha = img.split()[3]
-                mask = Image.new("L", (w, h), 255)
-                pixels = mask.load()
-                for x in range(w):
-                    fx = min(1.0, x / max(1, w * 0.25))
-                    for y in range(h):
-                        fy = min(1.0, y / max(1, h * 0.25))
-                        # Eased fade
-                        f = 1 - pow(1 - (fx * fy), 2)
-                        pixels[x, y] = int(255 * f)
-                img.putalpha(ImageChops.multiply(alpha, mask))
-                self._ui_images.append(ImageTk.PhotoImage(img))
-                return self._ui_images[-1]
+                img = img.resize((551, 110), Image.Resampling.LANCZOS)
+                alpha = img.getchannel("A")
+                slices = []
+                slice_width = 4
+                for left in range(0, img.width, slice_width):
+                    right = min(img.width, left + slice_width)
+                    band_alpha = alpha.crop((left, 0, right, img.height))
+                    bbox = band_alpha.getbbox()
+                    if bbox is None:
+                        continue
+                    top = max(0, bbox[1] - 1)
+                    piece = img.crop((left, top, right, img.height))
+                    tk_piece = ImageTk.PhotoImage(piece)
+                    self._ui_images.append(tk_piece)
+                    slices.append((left, top, tk_piece, piece.width, piece.height))
+                return slices
             except Exception:
                 return None
 
-        part1_img = _load_and_fade("decor_part1_solid.png")
-        part2_img = _load_and_fade("decor_part2_solid.png")
-        part3_img = _load_and_fade("decor_part3_solid.png")
+        footer_decor_slices = _load_footer_decor()
+        if footer_decor_slices:
+            decor_w, decor_h = 551, 110
+            def _install_footer_decor():
+                try:
+                    if getattr(self, "_footer_decor_lbl", None) is not None:
+                        return
+                    pieces = []
+                    for left, top, tk_piece, width, height in footer_decor_slices:
+                        piece = tk.Label(
+                            main,
+                            image=tk_piece,
+                            bg=UI_SURFACE,
+                            bd=0,
+                            highlightthickness=0,
+                            padx=0,
+                            pady=0,
+                        )
+                        piece.place(
+                            relx=1.0,
+                            rely=1.0,
+                            x=left - decor_w,
+                            y=top - decor_h,
+                            width=width,
+                            height=height,
+                            anchor="nw",
+                        )
+                        piece.lift()
+                        pieces.append(piece)
+                    self._footer_decor_lbl = pieces
+                except Exception:
+                    pass
 
-        if part1_img and part2_img and part3_img:
-            self._decor_lbl1 = tk.Label(main, image=part1_img, bg=UI_SURFACE, bd=0, highlightthickness=0, padx=0, pady=0)
-            self._decor_lbl1.place(relx=1.0, rely=1.0, y=-96, anchor="se")
-            self._decor_lbl1.lift()
-
-            self._decor_lbl2 = tk.Label(main, image=part2_img, bg=main_bg, bd=0, highlightthickness=0, padx=0, pady=0)
-            self._decor_lbl2.place(relx=1.0, rely=1.0, y=-66, anchor="se")
-            self._decor_lbl2.lift()
-
-            self._decor_lbl3 = tk.Label(main, image=part3_img, bg=UI_SURFACE, bd=0, highlightthickness=0, padx=0, pady=0)
-            self._decor_lbl3.place(relx=1.0, rely=1.0, y=0, anchor="se")
-            self._decor_lbl3.lift()
+            self._raise_footer_decor = _install_footer_decor
         self.root.after(250, self._refresh_footer_clock)
 
         _pulse_startup_splash(self.root, "Đang tải màn hình chính...")
@@ -4440,6 +4535,8 @@ del "%~f0" >nul 2>nul
 
 
         self.show_home_page()
+        if hasattr(self, "_raise_footer_decor"):
+            self.root.after_idle(self._raise_footer_decor)
 
 
 
@@ -5586,13 +5683,26 @@ def _render_splash_overlay(w, h, progress, step_text, update_text, animation_pha
     try:
         # We now have a clean background image, so we draw everything from scratch.
         # Use a nice responsive scale based on window width
-        bar_w = int(w * 0.30) * S
-        bar_h = int(h * 0.035) * S
-        bar_x = int((W - bar_w) / 2)
+        bar_w = int(w * 0.23) * S
+        bar_h = max(8 * S, int(h * 0.018) * S)
         bar_y = int(H * 0.65)
+
+        # Calculate progress value and center the bar/percentage as one group.
+        percent_val = max(0.0, min(100.0, float(progress) / 23.0 * 100))
+        percent_text = f"{int(percent_val)}%"
+        loading_font_size = max(13, int(h * 0.023)) * S
+        percent_font = _splash_font(loading_font_size, bold=False)
+        percent_bbox = draw.textbbox((0, 0), percent_text, font=percent_font)
+        percent_w = percent_bbox[2] - percent_bbox[0]
+        percent_h = percent_bbox[3] - percent_bbox[1]
+        percent_gap = 18 * S
+        group_w = bar_w + percent_gap + percent_w
+        bar_x = int((W - group_w) / 2)
+        percent_x = bar_x + bar_w + percent_gap
+        percent_y = bar_y + (bar_h - percent_h) // 2 - percent_bbox[1]
         
         # Draw text "Đang khởi động hệ thống..."
-        status_font = _splash_font(max(15, int(h * 0.030)) * S, bold=True)
+        status_font = _splash_font(loading_font_size, bold=True)
         status_bbox = draw.textbbox(
             (0, 0),
             step_text,
@@ -5600,22 +5710,8 @@ def _render_splash_overlay(w, h, progress, step_text, update_text, animation_pha
             stroke_width=max(1, S),
         )
         status_x = int((W - (status_bbox[2] - status_bbox[0])) / 2)
-        status_y = bar_y - int(bar_h * 1.45)
-        text_pad_x = 14 * S
-        text_pad_y = 6 * S
-        text_box = (
-            status_x - text_pad_x,
-            status_y - text_pad_y,
-            status_x + (status_bbox[2] - status_bbox[0]) + text_pad_x,
-            status_y + (status_bbox[3] - status_bbox[1]) + text_pad_y,
-        )
-        draw.rounded_rectangle(
-            text_box,
-            radius=10 * S,
-            fill=(4, 24, 17, 178),
-            outline=(120, 222, 170, 150),
-            width=max(1, S),
-        )
+        status_h = status_bbox[3] - status_bbox[1]
+        status_y = bar_y - status_h - 14 * S
         draw.text(
             (status_x, status_y),
             step_text,
@@ -5624,16 +5720,8 @@ def _render_splash_overlay(w, h, progress, step_text, update_text, animation_pha
             stroke_width=max(1, S),
             stroke_fill=(0, 38, 25, 255),
         )
-        
-        # Calculate progress value
-        percent_val = max(0.0, min(100.0, float(progress) / 23.0 * 100))
-        
+
         # Draw percentage
-        percent_text = f"{int(percent_val)}%"
-        percent_font = _splash_font(int(h * 0.036) * S, bold=False)
-        percent_bbox = draw.textbbox((0, 0), percent_text, font=percent_font)
-        percent_x = bar_x + bar_w + 20 * S
-        percent_y = bar_y + (bar_h - (percent_bbox[3] - percent_bbox[1])) // 2 - 4*S
         draw.text((percent_x, percent_y), percent_text, font=percent_font, fill=(255, 255, 255, 255))
         
         # Draw Outline (Capsule)
@@ -5679,8 +5767,8 @@ def _render_splash_overlay(w, h, progress, step_text, update_text, animation_pha
             glow_x = fill_right
             glow = Image.new("RGBA", overlay.size, (0, 0, 0, 0))
             glow_draw = ImageDraw.Draw(glow)
-            glow_draw.ellipse((glow_x - 12 * S, bar_y + bar_h//2 - 18 * S, glow_x + 12 * S, bar_y + bar_h//2 + 18 * S), fill=(255, 255, 200, 180))
-            glow = glow.filter(ImageFilter.GaussianBlur(radius=5 * S))
+            glow_draw.ellipse((glow_x - 8 * S, bar_y + bar_h//2 - 12 * S, glow_x + 8 * S, bar_y + bar_h//2 + 12 * S), fill=(255, 255, 200, 165))
+            glow = glow.filter(ImageFilter.GaussianBlur(radius=4 * S))
             overlay.alpha_composite(glow)
             
     except Exception as e:
@@ -5712,7 +5800,13 @@ class _SplashVideoAnimator:
         self.after_id = None
         self.running = False
         self.render_suspended = False
+        self.resize_active = False
+        self.pending_size = None
         self.last_error = None
+        self._fixed_foreground_display = None
+        self._fixed_foreground_size = None
+        self._fixed_foreground_mask = None
+        self._fixed_foreground_mask_size = None
         self.cv2 = cv2
         video_path = _startup_asset_path(APP_SPLASH_VIDEO_MP4)
         self.capture = cv2.VideoCapture(str(video_path))
@@ -5736,6 +5830,10 @@ class _SplashVideoAnimator:
         self._background_source = None
         self._background_display = None
         self._background_display_size = None
+        self._fixed_foreground_display = None
+        self._fixed_foreground_size = None
+        self._fixed_foreground_mask = None
+        self._fixed_foreground_mask_size = None
         self._background_resample = Image.Resampling.LANCZOS
         self._energy_mask_display = None
         self._energy_mask_display_size = None
@@ -5792,6 +5890,10 @@ class _SplashVideoAnimator:
         self.display_size = new_size
         self._background_display = None
         self._background_display_size = None
+        self._fixed_foreground_display = None
+        self._fixed_foreground_size = None
+        self._fixed_foreground_mask = None
+        self._fixed_foreground_mask_size = None
         self._energy_mask_display = None
         self._energy_mask_display_size = None
         self._background_resample = (
@@ -5815,10 +5917,13 @@ class _SplashVideoAnimator:
         self._energy_mask_display = None
         self._energy_mask_display_size = None
         self._background_resample = Image.Resampling.BILINEAR
-        if self.current_source_frame is not None:
-            self.current_frame = self._make_display_frame(
-                self.current_source_frame
-            )
+        self.resize_active = True
+
+    def request_size(self, width, height):
+        self.pending_size = (
+            max(1, int(width)),
+            max(1, int(height)),
+        )
 
     def refresh_display_frame(self):
         source_frame = self.current_source_frame
@@ -5875,10 +5980,43 @@ class _SplashVideoAnimator:
 
     def _make_display_frame(self, source_frame):
         size = self.display_size
-        return self._stretch_frame(
-            source_frame,
+        display_frame = source_frame.resize(
             size,
             self._background_resample,
+        )
+
+        if self._background_source is None:
+            return display_frame
+        if self._fixed_foreground_size != size:
+            self._fixed_foreground_display = self._background_source.resize(
+                size,
+                Image.Resampling.LANCZOS,
+            )
+            self._fixed_foreground_size = size
+        if self._fixed_foreground_mask_size != size:
+            width, height = size
+            mask = Image.new("L", size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rounded_rectangle(
+                (
+                    int(width * 0.24),
+                    int(height * 0.025),
+                    int(width * 0.76),
+                    int(height * 0.59),
+                ),
+                radius=max(18, int(min(width, height) * 0.035)),
+                fill=255,
+            )
+            self._fixed_foreground_mask = mask.filter(
+                ImageFilter.GaussianBlur(
+                    max(8, int(min(width, height) * 0.018))
+                )
+            )
+            self._fixed_foreground_mask_size = size
+        return Image.composite(
+            self._fixed_foreground_display,
+            display_frame,
+            self._fixed_foreground_mask,
         )
 
     def _decode_loop(self):
@@ -5911,6 +6049,10 @@ class _SplashVideoAnimator:
             if not self.canvas.winfo_exists():
                 self.stop()
                 return
+            pending_size = self.pending_size
+            if pending_size is not None:
+                self.pending_size = None
+                self.preview_size(*pending_size)
             self.playback_phase += self.phase_step
             while self.playback_phase >= 1.0:
                 if self.next_video_frame is not None:
@@ -5992,7 +6134,7 @@ def _draw_startup_splash(
     )
 
     try:
-        display_progress = round(progress * 2.0) / 2.0
+        display_progress = round(progress * 20.0) / 20.0
         overlay_key = (
             w,
             h,
@@ -6367,6 +6509,13 @@ def _startup_splash_process(
         splash_root.protocol("WM_DELETE_WINDOW", abort_application)
         animator = _SplashVideoAnimator(canvas, w, h, render_frame)
         animator.wait_until_ready(timeout=2.0)
+        animator.set_size(w, h, high_quality=True)
+        animator.refresh_display_frame()
+        render_frame()
+        try:
+            splash_root.attributes("-alpha", 0.0)
+        except Exception:
+            pass
         animator.start()
         splash_root.update_idletasks()
         splash_root.deiconify()
@@ -6376,6 +6525,7 @@ def _startup_splash_process(
         except Exception:
             pass
         splash_root.update()
+        _animate_window_alpha(splash_root, 0.0, 1.0, 240)
         ready_event.set()
         splash_root.mainloop()
     except Exception:
@@ -6435,6 +6585,27 @@ def _start_process_startup_splash(update_text=""):
         return None
 
 
+def _animate_window_alpha(root, start, end, duration_ms):
+    duration = max(1, int(duration_ms)) / 1000.0
+    started_at = time.perf_counter()
+    while root.winfo_exists():
+        progress = min(
+            1.0,
+            (time.perf_counter() - started_at) / duration,
+        )
+        eased = 0.5 - 0.5 * math.cos(progress * math.pi)
+        alpha = start + (end - start) * eased
+        try:
+            root.attributes("-alpha", max(0.0, min(1.0, alpha)))
+            root.update_idletasks()
+            root.update()
+        except Exception:
+            break
+        if progress >= 1.0:
+            break
+        time.sleep(0.008)
+
+
 def _show_startup_splash(root, update_text=""):
     try:
         root.title("GK PilePro - Đang khởi động")
@@ -6459,7 +6630,6 @@ def _show_startup_splash(root, update_text=""):
         except Exception:
             pass
 
-        root.deiconify()
         root.update_idletasks()
 
         def set_loading_resize_lock(locked):
@@ -6515,7 +6685,7 @@ def _show_startup_splash(root, update_text=""):
                 pass
 
         set_loading_resize_lock(False)
-        set_loading_window_transitions(False)
+        set_loading_window_transitions(True)
         w = max(1, root.winfo_width())
         h = max(1, root.winfo_height())
         splash = tk.Frame(root, bg="#050b14", bd=0, highlightthickness=0)
@@ -6526,6 +6696,8 @@ def _show_startup_splash(root, update_text=""):
         splash._size = (w, h)
         splash._update_text = str(update_text or "").strip()
         splash._progress = 0.0
+        splash._display_progress = 0.0
+        splash._progress_updated_at = time.perf_counter()
         splash._step_text = "Đang khởi động hệ thống..."
         splash._last_pulse = 0.0
         splash._shown_at = None
@@ -6544,11 +6716,27 @@ def _show_startup_splash(root, update_text=""):
 
         def render_current_frame():
             current_w, current_h = splash._size
+            now = time.perf_counter()
+            last_update = float(
+                getattr(splash, "_progress_updated_at", now)
+            )
+            elapsed = min(0.10, max(0.0, now - last_update))
+            splash._progress_updated_at = now
+            target = float(getattr(splash, "_progress", 0.0))
+            displayed = float(
+                getattr(splash, "_display_progress", target)
+            )
+            smoothing_rate = 7.5 if target >= 23.0 else 5.5
+            smoothing = 1.0 - math.exp(-smoothing_rate * elapsed)
+            displayed += (target - displayed) * smoothing
+            if abs(target - displayed) < 0.01:
+                displayed = target
+            splash._display_progress = displayed
             _draw_startup_splash(
                 canvas,
                 current_w,
                 current_h,
-                getattr(splash, "_progress", 0.0),
+                displayed,
                 getattr(splash, "_step_text", "Đang khởi động hệ thống..."),
                 getattr(splash, "_update_text", ""),
                 splash._video_animator,
@@ -6567,6 +6755,7 @@ def _show_startup_splash(root, update_text=""):
                 return
             new_w = max(1, canvas.winfo_width())
             new_h = max(1, canvas.winfo_height())
+            splash._video_animator.pending_size = None
             splash._video_animator.set_size(new_w, new_h, high_quality=True)
             splash._video_animator.refresh_display_frame()
             render_current_frame()
@@ -6594,8 +6783,10 @@ def _show_startup_splash(root, update_text=""):
                 new_h,
                 high_quality=high_quality,
             )
+            splash._video_animator.pending_size = None
             splash._video_animator.refresh_display_frame()
             splash._video_animator.render_suspended = False
+            splash._video_animator.resize_active = False
             render_current_frame()
             if getattr(canvas, "_splash_overlay_id", None) is not None:
                 canvas.itemconfigure(canvas._splash_overlay_id, state="normal")
@@ -6627,45 +6818,8 @@ def _show_startup_splash(root, update_text=""):
             if (new_w, new_h) == splash._size:
                 return
             splash._size = (new_w, new_h)
-            preview_source = splash._resize_preview_source
-            if preview_source is None:
-                return
-            preview = preview_source.resize(
-                (new_w, new_h),
-                Image.Resampling.BILINEAR,
-            )
-            canvas._splash_video_photo = ImageTk.PhotoImage(
-                preview,
-                master=canvas,
-            )
-            canvas.itemconfigure(
-                canvas._splash_background_id,
-                image=canvas._splash_video_photo,
-            )
-            overlay_source = splash._resize_overlay_source
-            if overlay_source is not None:
-                overlay_preview = overlay_source.resize(
-                    (new_w, new_h),
-                    Image.Resampling.BILINEAR,
-                )
-                canvas._splash_overlay = ImageTk.PhotoImage(
-                    overlay_preview,
-                    master=canvas,
-                )
-                if getattr(canvas, "_splash_overlay_id", None) is None:
-                    canvas._splash_overlay_id = canvas.create_image(
-                        0,
-                        0,
-                        image=canvas._splash_overlay,
-                        anchor="nw",
-                    )
-                else:
-                    canvas.itemconfigure(
-                        canvas._splash_overlay_id,
-                        image=canvas._splash_overlay,
-                        state="normal",
-                    )
-                canvas.tag_raise(canvas._splash_overlay_id)
+            canvas._splash_overlay_key = None
+            splash._video_animator.request_size(new_w, new_h)
 
         def flush_live_resize():
             splash._resize_after_id = None
@@ -6683,23 +6837,6 @@ def _show_startup_splash(root, update_text=""):
             width_jump = abs(event.width - previous_w) >= max(180, previous_w * 0.16)
             height_jump = abs(event.height - previous_h) >= max(120, previous_h * 0.14)
             system_window_transition = width_jump or height_jump
-            splash._video_animator.render_suspended = True
-            if splash._resize_preview_source is None:
-                current_frame = getattr(
-                    splash._video_animator,
-                    "current_frame",
-                    None,
-                )
-                overlay_source = getattr(
-                    canvas,
-                    "_splash_overlay_source",
-                    None,
-                )
-                if current_frame is not None:
-                    splash._resize_preview_source = current_frame.convert(
-                        "RGB"
-                    )
-                    splash._resize_overlay_source = overlay_source
             splash._pending_resize = (event.width, event.height)
             if splash._resize_after_id is None:
                 splash._resize_after_id = canvas.after(16, flush_live_resize)
@@ -6751,14 +6888,23 @@ def _show_startup_splash(root, update_text=""):
         root.protocol("WM_DELETE_WINDOW", abort_fallback_application)
         canvas.bind("<Configure>", schedule_resize, add="+")
         splash._video_animator.wait_until_ready(timeout=2.0)
+        splash._video_animator.set_size(w, h, high_quality=True)
+        splash._video_animator.refresh_display_frame()
+        render_current_frame()
+        try:
+            root.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+        root.deiconify()
+        root.update_idletasks()
+        root.update()
         splash._video_animator.start()
         splash.lift()
         try:
             root.focus_force()
         except Exception:
             pass
-        root.update_idletasks()
-        root.update()
+        _animate_window_alpha(root, 0.0, 1.0, 240)
         splash._shown_at = time.perf_counter()
         return splash
     except Exception:
@@ -6779,13 +6925,12 @@ def _update_startup_splash(splash, progress, step_text):
         splash._step_text = str(step_text or "Đang khởi động hệ thống...")
         if target < start:
             start = target
-        distance = abs(target - start)
         splash._progress = target
         _draw_startup_splash(
             canvas,
             w,
             h,
-            target,
+            getattr(splash, "_display_progress", start),
             step_text,
             getattr(splash, "_update_text", ""),
             getattr(splash, "_video_animator", None),
@@ -6807,6 +6952,18 @@ def _close_startup_splash(splash):
                 splash.update_idletasks()
                 splash.update()
                 time.sleep(0.01)
+            progress_deadline = time.perf_counter() + 1.2
+            while (
+                splash.winfo_exists()
+                and float(getattr(splash, "_display_progress", 0.0)) < 22.95
+                and time.perf_counter() < progress_deadline
+            ):
+                splash.update_idletasks()
+                splash.update()
+                time.sleep(0.008)
+            root = splash.master
+            _animate_window_alpha(root, 1.0, 0.0, 320)
+            root._startup_needs_fade_in = True
             animator = getattr(splash, "_video_animator", None)
             if animator is not None:
                 animator.stop()
@@ -6930,7 +7087,10 @@ def main():
                     pass
                 return
 
-        splash = _show_startup_splash(root, _load_startup_update_notice())
+        update_notice = _load_startup_update_notice()
+        splash = _start_process_startup_splash(update_notice)
+        if splash is None:
+            splash = _show_startup_splash(root, update_notice)
         root._startup_splash = splash
         _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
@@ -6943,7 +7103,11 @@ def main():
                 pass
             return
         app = App(root)
-        if splash is not None and splash.winfo_exists():
+        if (
+            splash is not None
+            and not isinstance(splash, _ProcessSplashHandle)
+            and splash.winfo_exists()
+        ):
             try:
                 root.protocol(
                     "WM_DELETE_WINDOW",
@@ -6971,25 +7135,42 @@ def main():
                     shell.pack(fill="both", expand=True)
                 shell.update_idletasks()
             root.update_idletasks()
-            window_w = max(1, root.winfo_width())
-            window_h = max(1, root.winfo_height())
-            screen_w = max(1, root.winfo_screenwidth())
-            screen_h = max(1, root.winfo_screenheight())
-            startup_window_state = {
-                "state": root.state(),
-                "geometry": (
-                    f"{window_w}x{window_h}"
-                    f"+{root.winfo_x()}+{root.winfo_y()}"
-                ),
-                "restored": (
-                    window_w < int(screen_w * 0.92)
-                    or window_h < int(screen_h * 0.92)
-                ),
-            }
-            if splash is not None and splash.winfo_exists():
+            if isinstance(splash, _ProcessSplashHandle):
+                startup_window_state = {
+                    "state": "zoomed",
+                    "geometry": "",
+                    "restored": False,
+                }
+            else:
+                window_w = max(1, root.winfo_width())
+                window_h = max(1, root.winfo_height())
+                screen_w = max(1, root.winfo_screenwidth())
+                screen_h = max(1, root.winfo_screenheight())
+                startup_window_state = {
+                    "state": root.state(),
+                    "geometry": (
+                        f"{window_w}x{window_h}"
+                        f"+{root.winfo_x()}+{root.winfo_y()}"
+                    ),
+                    "restored": (
+                        window_w < int(screen_w * 0.92)
+                        or window_h < int(screen_h * 0.92)
+                    ),
+                }
+            if (
+                splash is not None
+                and not isinstance(splash, _ProcessSplashHandle)
+                and splash.winfo_exists()
+            ):
                 splash.lift()
         except Exception:
             pass
+        if isinstance(splash, _ProcessSplashHandle):
+            try:
+                root.attributes("-alpha", 0.0)
+            except Exception:
+                pass
+            root._startup_needs_fade_in = True
         _close_startup_splash(splash)
         root._startup_splash = None
         if _startup_splash_was_aborted(splash):
@@ -7001,24 +7182,31 @@ def main():
         try:
             root.configure(bg=UI_BG)
             root.title(APP_TITLE)
-            if startup_window_state.get("state") == "iconic":
+            startup_state = startup_window_state.get("state")
+            if startup_state == "iconic":
                 root.iconify()
-            elif startup_window_state.get("restored"):
-                root.state("normal")
-                root.geometry(startup_window_state["geometry"])
+            else:
+                root.deiconify()
+                if startup_state == "zoomed":
+                    root.state("zoomed")
+                elif startup_window_state.get("restored"):
+                    root.state("normal")
+                    root.geometry(startup_window_state["geometry"])
             if shell is not None and shell.winfo_exists():
                 if not shell.winfo_manager():
                     shell.pack(fill="both", expand=True)
                 shell.tkraise()
             root.update_idletasks()
-            root.update()
-            root.after_idle(
-                lambda: (
-                    shell.tkraise()
-                    if shell is not None and shell.winfo_exists()
-                    else None
-                )
-            )
+            if startup_state != "iconic":
+                root.lift()
+                root.focus_force()
+                root.update()
+            if (
+                startup_state != "iconic"
+                and getattr(root, "_startup_needs_fade_in", False)
+            ):
+                root._startup_needs_fade_in = False
+                _animate_window_alpha(root, 0.0, 1.0, 300)
         except Exception:
             pass
         try:
