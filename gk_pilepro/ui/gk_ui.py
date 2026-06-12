@@ -81,6 +81,75 @@ def ui_font(size=None, bold=False):
     return (family, base, "normal")
 
 
+class RoundedPanel(tk.Canvas):
+
+    def __init__(
+        self,
+        parent,
+        height,
+        fill="#052e1d",
+        border="#16745a",
+        radius=12,
+        padding=12,
+    ):
+        self.panel_height = scale_px(height)
+        self.fill_color = fill
+        self.border_color = border
+        self.radius = scale_px(radius)
+        self.padding = scale_px(padding)
+        super().__init__(
+            parent,
+            height=self.panel_height,
+            bg=parent.cget("bg"),
+            bd=0,
+            highlightthickness=0,
+        )
+        self.body = tk.Frame(self, bg=fill)
+        self._body_window = self.create_window(
+            self.padding,
+            self.padding,
+            anchor="nw",
+            window=self.body,
+        )
+        self.bind("<Configure>", self._redraw)
+
+    def _round_rect(self, x1, y1, x2, y2, radius, **kwargs):
+        points = [
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        ]
+        return self.create_polygon(
+            points,
+            smooth=True,
+            splinesteps=24,
+            **kwargs,
+        )
+
+    def _redraw(self, _event=None):
+        width = max(2, self.winfo_width())
+        height = max(2, self.winfo_height())
+        self.delete("panel_shape")
+        self._round_rect(
+            1,
+            1,
+            width - 1,
+            height - 1,
+            self.radius,
+            fill=self.fill_color,
+            outline=self.border_color,
+            width=max(1, scale_px(1)),
+            tags="panel_shape",
+        )
+        self.tag_lower("panel_shape")
+        self.coords(self._body_window, self.padding, self.padding)
+        self.itemconfigure(
+            self._body_window,
+            width=max(1, width - self.padding * 2),
+            height=max(1, height - self.padding * 2),
+        )
+
+
 
 class RoundedButton(tk.Canvas):
 

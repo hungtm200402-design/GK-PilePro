@@ -280,6 +280,7 @@ from gk_pilepro.ui.gk_ui import (
     configure_ui_metrics,
     scale_px,
     ui_font,
+    RoundedPanel,
     RoundedButton,
     ui_button,
     RoundedMappingLabel,
@@ -297,7 +298,7 @@ APP_TITLE = "GK PilePro"
 
 APP_LOGO_PNG = Path("assets") / "gk_logo.png"
 
-APP_TASKBAR_PNG = Path("assets") / "gk_app_icon.png"
+APP_TASKBAR_PNG = Path("assets") / "gk_taskbar_icon.png"
 
 APP_ICON_ICO = Path("assets") / "gk_app_icon.ico"
 
@@ -308,6 +309,7 @@ APP_SPLASH_BG_CLEAN_PNG = Path("assets") / "loading" / "loading_bg_clean.png"
 APP_SPLASH_VIDEO_MP4 = Path("assets") / "loading" / "video-loading.mp4"
 
 APP_UI_ICON_DIR = Path("assets") / "GK_PilePro_icon_files_no_bg" / "transparent_png"
+APP_SIDEBAR_ICON_DIR = Path("assets") / "sidebar_icon_white_outline_transparent" / "canvas_128"
 
 APP_DECOR_BOTTOM_RIGHT = Path("assets") / "goc_phai_moi.png.png"
 
@@ -318,6 +320,263 @@ SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upp
 
 
 
+
+
+def _ocr_value_kind(value):
+    text = str(value or "").strip()
+    if not text:
+        return "blank"
+    compact = text.replace(" ", "")
+    numeric = compact.replace("%", "")
+    if "," in numeric and "." in numeric:
+        if numeric.rfind(",") > numeric.rfind("."):
+            numeric = numeric.replace(".", "").replace(",", ".")
+        else:
+            numeric = numeric.replace(",", "")
+    elif "," in numeric:
+        numeric = numeric.replace(",", ".")
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", numeric):
+        return "number"
+    if (
+        re.fullmatch(r"\d{1,2}[/.-]\d{1,2}(?:[/.-]\d{2,4})?", compact)
+        or re.fullmatch(r"\d{4}[/.-]\d{1,2}[/.-]\d{1,2}", compact)
+    ):
+        return "date"
+    return "text"
+
+
+def _ocr_number(value):
+    text = str(value or "").strip().replace(" ", "").replace("%", "")
+    if not text:
+        return None
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        text = text.replace(",", ".")
+    if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", text):
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _ocr_column_index(columns, accepted_names):
+    accepted = {norm(name) for name in accepted_names}
+    return next(
+        (idx for idx, name in enumerate(columns) if norm(name) in accepted),
+        None,
+    )
+
+
+def _ocr_pile_type_looks_valid(value):
+    compact = re.sub(r"[\s._/-]+", "", str(value or "").strip()).upper()
+    if not compact:
+        return True
+    return bool(
+        re.fullmatch(r"(?:D|PHC|PC|P|C)?\d{2,4}(?:[A-Z]{0,3})?", compact)
+    )
+
+
+def _validate_ocr_table_data(table):
+    columns = [str(c or "").strip() for c in (table or {}).get("columns", [])]
+    raw_rows = list((table or {}).get("rows", []) or [])
+    width = len(columns)
+    rows = [
+        list(row) if isinstance(row, (list, tuple)) else [row]
+        for row in raw_rows
+    ]
+    if not columns or not rows:
+        return {
+            "accuracy": 0.0,
+            "row_count": len(rows),
+            "invalid_rows": [],
+            "issues": [],
+            "checks": 0,
+            "passed": 0,
+        }
+
+    normalized = [
+        row[:width] + [""] * max(0, width - len(row))
+        for row in rows
+    ]
+    profiles = []
+    for col_idx, name in enumerate(columns):
+        values = [str(row[col_idx] or "").strip() for row in normalized]
+        non_empty = [value for value in values if value]
+        kinds = [_ocr_value_kind(value) for value in non_empty]
+        name_norm = norm(name)
+        expected = None
+        if any(token in name_norm for token in ("ngay", "date")):
+            expected = "date"
+        elif any(
+            token in name_norm
+            for token in (
+                "stt", "so thu tu", "no", "khoi luong", "so luong",
+                "chieu dai", "do dai", "do sau", "luc", "tai", "d1",
+                "d2", "d3", "d4", "d5", "d6", "depth", "length",
+                "quantity", "weight", "load",
+            )
+        ):
+            expected = "number"
+        elif len(non_empty) >= 3:
+            numeric_ratio = kinds.count("number") / len(kinds)
+            date_ratio = kinds.count("date") / len(kinds)
+            if numeric_ratio >= 0.80:
+                expected = "number"
+            elif date_ratio >= 0.80:
+                expected = "date"
+        profiles.append(
+            {
+                "expected": expected,
+                "required": (
+                    len(non_empty) >= 3
+                    and len(non_empty) / max(1, len(normalized)) >= 0.85
+                ),
+            }
+        )
+
+    issues = []
+    checks = 0
+    passed = 0
+    stt_idx = next(
+        (
+            idx
+            for idx, name in enumerate(columns)
+            if norm(name) in {"stt", "so thu tu", "no", "no."}
+        ),
+        None,
+    )
+    previous_stt = None
+    pile_type_idx = _ocr_column_index(
+        columns,
+        {"loại cọc", "loai coc", "pile type", "type of pile"},
+    )
+    segment_indexes = [
+        idx
+        for idx, name in enumerate(columns)
+        if norm(name) in {"d1", "d2", "d3", "d4", "d5", "d6"}
+    ]
+    length_idx = _ocr_column_index(
+        columns,
+        {
+            "chiều dài cọc",
+            "chieu dai coc",
+            "chiều dài tổ hợp",
+            "chieu dai to hop",
+            "tổng tổ hợp",
+            "tong to hop",
+            "length of pile",
+            "total of pile detail length",
+        },
+    )
+    for row_idx, (original, row) in enumerate(zip(rows, normalized), start=1):
+        row_messages = []
+        if len(original) != width:
+            row_messages.append(
+                f"số ô {len(original)} không khớp {width} cột"
+            )
+        checks += 1
+        if any(str(value or "").strip() for value in row):
+            passed += 1
+        else:
+            row_messages.append("dòng trống hoàn toàn")
+
+        for col_idx, (name, profile) in enumerate(zip(columns, profiles)):
+            value = str(row[col_idx] or "").strip()
+            if profile["required"]:
+                checks += 1
+                if value:
+                    passed += 1
+                else:
+                    row_messages.append(f"cột '{name}' bị trống")
+                    continue
+            if value and profile["expected"]:
+                checks += 1
+                actual = _ocr_value_kind(value)
+                if actual == profile["expected"]:
+                    passed += 1
+                else:
+                    expected_label = (
+                        "ngày" if profile["expected"] == "date" else "số"
+                    )
+                    row_messages.append(
+                        f"cột '{name}' cần dạng {expected_label}: '{value}'"
+                    )
+
+        if stt_idx is not None:
+            value = str(row[stt_idx] or "").strip()
+            if value:
+                checks += 1
+                try:
+                    current_stt = int(float(value.replace(",", ".")))
+                except ValueError:
+                    current_stt = None
+                if current_stt is None:
+                    row_messages.append(
+                        f"cột '{columns[stt_idx]}' không phải số: '{value}'"
+                    )
+                elif previous_stt is not None and current_stt != previous_stt + 1:
+                    row_messages.append(
+                        f"STT không liên tục ({previous_stt} → {current_stt})"
+                    )
+                else:
+                    passed += 1
+                if current_stt is not None:
+                    previous_stt = current_stt
+
+        if pile_type_idx is not None:
+            pile_type = str(row[pile_type_idx] or "").strip()
+            if pile_type:
+                checks += 1
+                if _ocr_pile_type_looks_valid(pile_type):
+                    passed += 1
+                else:
+                    row_messages.append(
+                        f"loại cọc có giá trị bất thường: '{pile_type}'"
+                    )
+
+        if length_idx is not None and len(segment_indexes) >= 2:
+            segment_values = [
+                _ocr_number(row[idx])
+                for idx in segment_indexes
+                if str(row[idx] or "").strip()
+            ]
+            pile_length = _ocr_number(row[length_idx])
+            if len(segment_values) >= 2 and pile_length is not None:
+                checks += 1
+                segment_total = sum(
+                    value for value in segment_values if value is not None
+                )
+                all_segments_numeric = all(
+                    value is not None for value in segment_values
+                )
+                tolerance = max(0.05, abs(pile_length) * 0.005)
+                if (
+                    all_segments_numeric
+                    and abs(segment_total - pile_length) <= tolerance
+                ):
+                    passed += 1
+                elif all_segments_numeric:
+                    row_messages.append(
+                        f"tổng D1...D6 = {segment_total:g} không khớp "
+                        f"chiều dài cọc = {pile_length:g}"
+                    )
+
+        if row_messages:
+            issues.append({"row": row_idx, "messages": row_messages})
+
+    return {
+        "accuracy": round(100.0 * passed / max(1, checks), 1),
+        "row_count": len(rows),
+        "invalid_rows": [item["row"] for item in issues],
+        "issues": issues,
+        "checks": checks,
+        "passed": passed,
+    }
 
 
 class App:
@@ -565,7 +824,8 @@ class App:
             self._last_status_tone = tone
 
             if hasattr(self, "status") and self.status is not None:
-                self.status.config(text=message, fg=color)
+                sidebar_color = "#31d181" if tone == "success" else color
+                self.status.config(text=message, fg=sidebar_color)
 
             footer_status = getattr(self, "footer_status_var", None)
             if footer_status is not None:
@@ -1591,64 +1851,219 @@ class App:
 
     def _draw_nav_icon(self, canvas, page_name, x, y, color):
         try:
-            s = scale_px(18)
+            s = scale_px(20)
             lw = max(2, scale_px(2))
             left = x - s // 2
             top = y - s // 2
             right = x + s // 2
             bottom = y + s // 2
+            thin = max(1, lw - 1)
+
             if page_name == "home":
-                canvas.create_line(left + 1, y, x, top + 1, right - 1, y, fill=color, width=lw, capstyle="round", joinstyle="round")
-                canvas.create_line(left + 4, y, left + 4, bottom - 2, right - 4, bottom - 2, right - 4, y, fill=color, width=lw, capstyle="round", joinstyle="round")
-                canvas.create_line(x - 3, bottom - 2, x - 3, y + 5, x + 3, y + 5, x + 3, bottom - 2, fill=color, width=max(1, lw - 1))
+                canvas.create_line(
+                    left + 1, y - 1, x, top + 1, right - 1, y - 1,
+                    fill=color, width=lw, capstyle="round", joinstyle="round",
+                )
+                canvas.create_line(
+                    left + 4, y - 2, left + 4, bottom - 1,
+                    right - 4, bottom - 1, right - 4, y - 2,
+                    fill=color, width=lw, capstyle="round", joinstyle="round",
+                )
+                canvas.create_line(
+                    x - 3, bottom - 1, x - 3, y + 4,
+                    x + 3, y + 4, x + 3, bottom - 1,
+                    fill=color, width=thin, joinstyle="round",
+                )
             elif page_name == "excel":
-                canvas.create_rectangle(left + 3, top + 2, right - 2, bottom - 2, outline=color, width=lw)
-                canvas.create_line(left + 7, top + 2, left + 7, bottom - 2, fill=color, width=max(1, lw - 1))
-                for yy in (top + 7, top + 12):
-                    canvas.create_line(left + 3, yy, right - 2, yy, fill=color, width=max(1, lw - 1))
+                canvas.create_rectangle(
+                    left + 4, top + 1, right - 1, bottom - 1,
+                    outline=color, width=lw,
+                )
+                canvas.create_line(
+                    left + 9, top + 1, left + 9, bottom - 1,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    left + 9, top + 7, right - 1, top + 7,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    left + 9, top + 13, right - 1, top + 13,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    left + 1, y - 4, left + 7, y + 4,
+                    fill=color, width=lw, capstyle="round",
+                )
+                canvas.create_line(
+                    left + 7, y - 4, left + 1, y + 4,
+                    fill=color, width=lw, capstyle="round",
+                )
             elif page_name == "history":
-                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
-                canvas.create_line(x, y, x, top + 6, fill=color, width=lw, capstyle="round")
-                canvas.create_line(x, y, x + 5, y + 4, fill=color, width=lw, capstyle="round")
+                canvas.create_oval(
+                    left + 1, top + 1, right - 1, bottom - 1,
+                    outline=color, width=lw,
+                )
+                canvas.create_line(
+                    x, y, x, top + 5,
+                    fill=color, width=lw, capstyle="round",
+                )
+                canvas.create_line(
+                    x, y, x + 5, y + 3,
+                    fill=color, width=lw, capstyle="round",
+                )
             elif page_name == "mapping":
-                for idx, yy in enumerate((top + 4, y, bottom - 4)):
-                    canvas.create_rectangle(left + 2, yy - 3, left + 7, yy + 2, outline=color, width=max(1, lw - 1))
-                    canvas.create_line(left + 10, yy, right - 1, yy, fill=color, width=lw, capstyle="round")
+                canvas.create_rectangle(
+                    left + 2, top + 2, right - 2, bottom - 2,
+                    outline=color, width=lw,
+                )
+                canvas.create_line(
+                    left + 2, top + 7, right - 2, top + 7,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    x - 2, top + 7, x - 2, bottom - 2,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    left + 2, y + 4, right - 2, y + 4,
+                    fill=color, width=thin,
+                )
+                canvas.create_line(
+                    x + 2, top + 4, right - 5, top + 4,
+                    fill=color, width=thin, capstyle="round",
+                )
             elif page_name == "settings":
-                canvas.create_oval(left + 5, top + 5, right - 5, bottom - 5, outline=color, width=lw)
-                for dx, dy in ((0, -8), (0, 8), (-8, 0), (8, 0), (-6, -6), (6, -6), (-6, 6), (6, 6)):
-                    canvas.create_line(x + dx * 0.72, y + dy * 0.72, x + dx, y + dy, fill=color, width=lw, capstyle="round")
+                canvas.create_oval(
+                    x - scale_px(4), y - scale_px(4),
+                    x + scale_px(4), y + scale_px(4),
+                    outline=color, width=lw,
+                )
+                canvas.create_oval(
+                    left + 3, top + 3, right - 3, bottom - 3,
+                    outline=color, width=thin,
+                )
+                for angle in range(0, 360, 45):
+                    radians = math.radians(angle)
+                    inner_x = x + math.cos(radians) * scale_px(7)
+                    inner_y = y + math.sin(radians) * scale_px(7)
+                    outer_x = x + math.cos(radians) * scale_px(10)
+                    outer_y = y + math.sin(radians) * scale_px(10)
+                    canvas.create_line(
+                        inner_x, inner_y, outer_x, outer_y,
+                        fill=color, width=lw, capstyle="round",
+                    )
             elif page_name == "help":
-                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
-                canvas.create_text(x, y - 2, text="?", fill=color, font=ui_font(13, bold=True))
+                canvas.create_oval(
+                    left + 1, top + 1, right - 1, bottom - 1,
+                    outline=color, width=lw,
+                )
+                canvas.create_arc(
+                    x - scale_px(4), top + scale_px(5),
+                    x + scale_px(4), y + scale_px(3),
+                    start=15, extent=210, style="arc",
+                    outline=color, width=lw,
+                )
+                canvas.create_line(
+                    x, y + scale_px(2), x, y + scale_px(5),
+                    fill=color, width=lw, capstyle="round",
+                )
+                canvas.create_oval(
+                    x - thin, bottom - scale_px(4) - thin,
+                    x + thin, bottom - scale_px(4) + thin,
+                    fill=color, outline=color,
+                )
             else:
-                canvas.create_oval(left + 2, top + 2, right - 2, bottom - 2, outline=color, width=lw)
-                canvas.create_text(x, y, text="i", fill=color, font=ui_font(12, bold=True))
+                canvas.create_oval(
+                    left + 1, top + 1, right - 1, bottom - 1,
+                    outline=color, width=lw,
+                )
+                canvas.create_line(
+                    x, y - scale_px(1), x, bottom - scale_px(5),
+                    fill=color, width=lw, capstyle="round",
+                )
+                canvas.create_oval(
+                    x - thin, top + scale_px(4) - thin,
+                    x + thin, top + scale_px(4) + thin,
+                    fill=color, outline=color,
+                )
         except Exception:
             pass
 
 
-    def _draw_nav_item(self, page_name):
+    def _draw_nav_item(self, page_name, configured_width=None):
         try:
             widgets = self.nav_widgets.get(page_name, {})
             canvas = widgets.get("canvas")
             if canvas is None:
                 return
             canvas.delete("all")
-            width = max(160, int(canvas.winfo_width() or self.sidebar_w - 20))
+            measured_width = int(configured_width or canvas.winfo_width())
+            width = (
+                measured_width
+                if measured_width > 1
+                else max(1, int(self.sidebar_w - scale_px(22)))
+            )
             height = max(42, int(canvas.winfo_height() or scale_px(44)))
             active = bool(widgets.get("active"))
             hovered = bool(widgets.get("hovered"))
-            bg = "#0a4a2f" if active else ("#083522" if hovered else "#042115")
-            text_color = "#ffffff" if active else "#8da396"
-            icon_color = "#d4af37" if active else "#8da396"
-            self._nav_round_rect(canvas, 1, 1, width - 1, height - 1, radius=scale_px(10), fill=bg, outline=bg)
+            bg = "#0a4a38" if active else ("#083b2d" if hovered else "#042115")
+            text_color = "#FFFFFF" if active else "#D9E9E4"
+            icon_img = widgets.get(
+                "icon_active" if active else ("icon_hover" if hovered else "icon_inactive")
+            )
             if active:
-                self._nav_round_rect(canvas, scale_px(4), (height - scale_px(24)) // 2, scale_px(8), (height + scale_px(24)) // 2, radius=scale_px(2), fill="#d4af37", outline="#d4af37")
-            icon_x = scale_px(34)
-            self._draw_nav_icon(canvas, page_name, icon_x, height // 2, icon_color)
+                nav_bg = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+                nav_pixels = nav_bg.load()
+                start_rgb = (15, 141, 109)
+                end_rgb = (8, 82, 62)
+                for x in range(width):
+                    ratio = x / max(1, width - 1)
+                    color = tuple(
+                        round(start + (end - start) * ratio)
+                        for start, end in zip(start_rgb, end_rgb)
+                    )
+                    for y in range(height):
+                        nav_pixels[x, y] = (*color, 255)
+                mask = Image.new("L", (width, height), 0)
+                ImageDraw.Draw(mask).rounded_rectangle(
+                    (1, 1, width - 2, height - 2),
+                    radius=scale_px(10),
+                    fill=255,
+                )
+                nav_bg.putalpha(mask)
+                bg_img = ImageTk.PhotoImage(nav_bg)
+                widgets["background_img"] = bg_img
+                canvas.create_image(0, 0, image=bg_img, anchor="nw")
+            else:
+                self._nav_round_rect(
+                    canvas, 1, 1, width - 1, height - 1,
+                    radius=scale_px(10), fill=bg, outline=bg
+                )
+            if active:
+                self._nav_round_rect(
+                    canvas,
+                    scale_px(4),
+                    (height - scale_px(24)) // 2,
+                    scale_px(8),
+                    (height + scale_px(24)) // 2,
+                    radius=scale_px(2),
+                    fill="#F6C640",
+                    outline="#F6C640",
+                )
+            icon_x = scale_px(36)
+            if icon_img is not None:
+                canvas.create_image(icon_x, height // 2, image=icon_img)
+            else:
+                self._draw_nav_icon(
+                    canvas,
+                    page_name,
+                    icon_x,
+                    height // 2,
+                    "#F6C640" if active else ("#F2F7F5" if hovered else "#D7E7E1"),
+                )
             canvas.create_text(
-                icon_x + scale_px(24),
+                icon_x + scale_px(26),
                 height // 2,
                 text=widgets.get("text", ""),
                 fill=text_color,
@@ -2568,17 +2983,46 @@ del "%~f0" >nul 2>nul
     def setup_window_icon(self):
 
         icon_file = resource_path(*APP_ICON_ICO.parts)
+        self._window_icon_file = icon_file
 
         self._apply_window_icon(icon_file)
 
         try:
 
             self.root.after(250, lambda: self._apply_window_icon(icon_file))
+            self.root.bind_class("Toplevel", "<Map>", self._apply_toplevel_icon, add="+")
 
         except Exception:
 
             pass
 
+
+
+    def _apply_toplevel_icon(self, event):
+
+        window = getattr(event, "widget", None)
+        if not isinstance(window, tk.Toplevel):
+            return
+
+        def apply_icon():
+            try:
+                icon_file = getattr(self, "_window_icon_file", None)
+                if icon_file and icon_file.exists():
+                    window.iconbitmap(default=str(icon_file))
+                    window.wm_iconbitmap(default=str(icon_file))
+            except Exception:
+                pass
+            try:
+                icon_imgs = getattr(self, "window_icon_imgs", None)
+                if icon_imgs:
+                    window.iconphoto(True, *icon_imgs)
+            except Exception:
+                pass
+
+        try:
+            window.after_idle(apply_icon)
+        except Exception:
+            apply_icon()
 
 
     def _apply_window_icon(self, icon_file):
@@ -2601,28 +3045,25 @@ del "%~f0" >nul 2>nul
             detailed_base = Image.open(logo_path).convert("RGBA") if logo_path.exists() else build_simplified_taskbar_icon(256)
 
             def taskbar_icon(size):
-                source = detailed_base
-                if size <= 24:
-                    source = source.crop(
-                        (
-                            0,
-                            int(source.height * 0.18),
-                            source.width,
-                            int(source.height * 0.74),
-                        )
-                    )
+                from PIL import ImageEnhance
+
+                source = detailed_base.copy()
+                bbox = source.getchannel("A").getbbox()
+                if bbox:
+                    source = source.crop(bbox)
+                if size <= 32:
+                    source = ImageEnhance.Color(source).enhance(1.24)
+                    source = ImageEnhance.Brightness(source).enhance(1.16)
+                    source = ImageEnhance.Contrast(source).enhance(1.28)
                 canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
-                fit_ratio = {
-                    16: 1.00,
-                    32: 0.84,
-                    48: 0.76,
-                }.get(size, 0.72)
-                fit = max(1, int(size * fit_ratio))
-                source.thumbnail((fit, fit), Image.Resampling.LANCZOS)
+                fit = size if size <= 32 else max(1, int(size * 0.98))
+                source = source.resize((fit, fit), Image.Resampling.LANCZOS)
                 canvas.alpha_composite(
                     source,
                     ((size - source.width) // 2, (size - source.height) // 2),
                 )
+                if size <= 32:
+                    return canvas.filter(ImageFilter.UnsharpMask(radius=0.55, percent=280, threshold=0))
                 if size <= 48:
                     return sharp_icon_image_small(canvas, (size, size))
                 return sharp_icon_image(canvas, (size, size))
@@ -2630,6 +3071,10 @@ del "%~f0" >nul 2>nul
             icon_imgs = [
 
                 ImageTk.PhotoImage(taskbar_icon(16)),
+
+                ImageTk.PhotoImage(taskbar_icon(20)),
+
+                ImageTk.PhotoImage(taskbar_icon(24)),
 
                 ImageTk.PhotoImage(taskbar_icon(32)),
 
@@ -2997,6 +3442,37 @@ del "%~f0" >nul 2>nul
     def _ui_icon(self, filename, size=22):
         return self._ui_asset_image(APP_UI_ICON_DIR / filename, (size, size))
 
+    def _sidebar_icon(self, filename, size=20, color=None):
+        try:
+            path = resource_path(*(APP_SIDEBAR_ICON_DIR / filename).parts)
+            if not path.exists():
+                path = Path(__file__).resolve().parent / APP_SIDEBAR_ICON_DIR / filename
+            if not path.exists():
+                return None
+            img = Image.open(path).convert("RGBA")
+            target_size = scale_px(size)
+            img = img.resize(
+                (target_size, target_size),
+                Image.Resampling.LANCZOS,
+            )
+            if color:
+                target = tuple(
+                    int(color[index:index + 2], 16)
+                    for index in (1, 3, 5)
+                )
+                alpha = img.getchannel("A")
+                luminance = img.convert("RGB").convert("L")
+                channels = [
+                    luminance.point(lambda value, component=component: value * component // 255)
+                    for component in target
+                ]
+                img = Image.merge("RGBA", (*channels, alpha))
+            tk_img = ImageTk.PhotoImage(img)
+            self._ui_images.append(tk_img)
+            return tk_img
+        except Exception:
+            return None
+
     def _footer_server_state(self):
         try:
             url = resolve_presence_server_url(getattr(self, "presence_server_var", tk.StringVar(value=DEFAULT_PRESENCE_SERVER_URL)).get())
@@ -3032,12 +3508,30 @@ del "%~f0" >nul 2>nul
         except Exception:
             pass
 
-    def _refresh_mapping_stats(self):
+    def _refresh_mapping_stats(self, stats=None, schedule=True):
         try:
-            vars_ = list(getattr(getattr(self, "mapping_editor", None), "mapping_vars", []) or [])
-            total = len(vars_)
-            mapped = sum(1 for var in vars_ if str(var.get() or "").strip())
-            unmapped = max(0, total - mapped)
+            editor = getattr(self, "mapping_editor", None)
+            if not isinstance(stats, dict):
+                if editor is not None and hasattr(editor, "get_mapping_stats"):
+                    stats = editor.get_mapping_stats()
+                else:
+                    mapping = (
+                        editor.get_mapping()
+                        if editor is not None and hasattr(editor, "get_mapping")
+                        else []
+                    )
+                    total = len(mapping)
+                    mapped = sum(
+                        1 for excel_col in mapping if excel_col is not None
+                    )
+                    stats = {
+                        "mapped": mapped,
+                        "unmapped": max(0, total - mapped),
+                        "total": total,
+                    }
+            mapped = max(0, int(stats.get("mapped", 0)))
+            unmapped = max(0, int(stats.get("unmapped", 0)))
+            total = max(0, int(stats.get("total", mapped + unmapped)))
             if getattr(self, "mapping_stat_mapped_var", None) is not None:
                 self.mapping_stat_mapped_var.set(str(mapped))
             if getattr(self, "mapping_stat_unmapped_var", None) is not None:
@@ -3046,10 +3540,11 @@ del "%~f0" >nul 2>nul
                 self.mapping_stat_total_var.set(str(total))
         except Exception:
             pass
-        try:
-            self.root.after(1000, self._refresh_mapping_stats)
-        except Exception:
-            pass
+        if schedule:
+            try:
+                self.root.after(1000, self._refresh_mapping_stats)
+            except Exception:
+                pass
 
 
 
@@ -3063,9 +3558,9 @@ del "%~f0" >nul 2>nul
         self._ui_images = []
         sidebar_bg = "#042115"
         sidebar_bg_2 = "#083522"
-        sidebar_active = "#0a4a2f"
+        sidebar_active = "#0f8d6d"
         sidebar_text = "#ffffff"
-        sidebar_muted = "#8da396"
+        sidebar_muted = "#D9E9E4"
         sidebar_card = "#052e1d"
         main_bg = UI_BG
 
@@ -3166,7 +3661,6 @@ del "%~f0" >nul 2>nul
 
 
         brand = tk.Frame(sidebar, bg=sidebar_bg)
-
         brand.pack(fill="x", pady=(0, 12 if self.tiny_ui else 18))
 
         logo_file = resource_path(*APP_LOGO_PNG.parts)
@@ -3186,16 +3680,7 @@ del "%~f0" >nul 2>nul
                 logo_source.thumbnail((self.logo_max[0] - scale_px(16), self.logo_max[1] - scale_px(16)), Image.LANCZOS)
 
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
-
                 tk.Label(brand, image=self.app_logo_img, bg=sidebar_bg).pack(anchor="center")
-                tk.Label(
-                    brand,
-                    text="NỀN MÓNG\nGIA KHÁNH",
-                    bg=sidebar_bg,
-                    fg="#ffffff",
-                    font=ui_font(10, bold=True),
-                    justify="center",
-                ).pack(anchor="center", pady=(4, 0))
 
         except Exception:
 
@@ -3205,26 +3690,28 @@ del "%~f0" >nul 2>nul
 
         nav_items = [
 
-            ("home", "04_sidebar_home.png", "Trang chủ", True),
+            ("home", "home_active_128.png", "Trang chủ", True),
 
-            ("excel", "05_sidebar_excel.png", "Excel", False),
+            ("excel", "excel_128.png", "Excel", False),
 
-            ("history", "06_sidebar_history.png", "Lịch sử", False),
+            ("history", "history_128.png", "Lịch sử", False),
 
-            ("mapping", "07_sidebar_mapping.png", "Mẫu mapping", False),
+            ("mapping", "mapping_128.png", "Mẫu mapping", False),
 
-            ("settings", "08_sidebar_settings.png", "Cài đặt", False),
+            ("settings", "settings_128.png", "Cài đặt", False),
 
-            ("help", "09_sidebar_help.png", "Trợ giúp", False),
+            ("help", "help_128.png", "Trợ giúp", False),
 
-            ("about", "10_sidebar_info.png", "Giới thiệu", False),
+            ("about", "info_128.png", "Giới thiệu", False),
 
         ]
 
         for page_id, icon, text, active in nav_items:
             _pulse_startup_splash(self.root)
 
-            icon_img = self._ui_icon(icon, 20)
+            icon_inactive = self._sidebar_icon(icon, 24, "#D7E7E1")
+            icon_hover = self._sidebar_icon(icon, 24, "#F2F7F5")
+            icon_active = self._sidebar_icon(icon, 24, "#F6C640")
             nav_canvas = tk.Canvas(
                 sidebar,
                 height=scale_px(44),
@@ -3233,11 +3720,18 @@ del "%~f0" >nul 2>nul
                 highlightthickness=0,
                 cursor="hand2",
             )
-            nav_canvas.pack(fill="x", pady=3)
+            nav_canvas.pack(
+                fill="x",
+                padx=(0, scale_px(8)),
+                pady=3,
+            )
 
             self.nav_widgets[page_id] = {
                 "canvas": nav_canvas,
-                "icon_img": icon_img,
+                "icon_file": icon,
+                "icon_inactive": icon_inactive,
+                "icon_hover": icon_hover,
+                "icon_active": icon_active,
                 "text": text,
                 "active": active,
                 "hovered": False,
@@ -3273,42 +3767,65 @@ del "%~f0" >nul 2>nul
 
             nav_canvas.bind("<Enter>", lambda _e, p=page_id: (self.nav_widgets[p].update({"hovered": True}), self._draw_nav_item(p)))
             nav_canvas.bind("<Leave>", lambda _e, p=page_id: (self.nav_widgets[p].update({"hovered": False}), self._draw_nav_item(p)))
-            nav_canvas.bind("<Configure>", lambda _e, p=page_id: self._draw_nav_item(p))
+            nav_canvas.bind(
+                "<Configure>",
+                lambda event, p=page_id: self._draw_nav_item(p, event.width),
+            )
             self.root.after_idle(lambda p=page_id: self._draw_nav_item(p))
 
 
 
-        status_card = tk.Frame(sidebar, bg=sidebar_card, highlightthickness=1, highlightbackground="#083522")
+        status_card = RoundedPanel(
+            sidebar,
+            height=72,
+            fill=sidebar_bg,
+            border="#16745a",
+            radius=12,
+            padding=12,
+        )
         status_card.pack(fill="x", pady=(12, 0))
-        status_inner = tk.Frame(status_card, bg=sidebar_card, padx=12, pady=10)
-        status_inner.pack(fill="both", expand=True)
-        tk.Label(status_inner, text="Kết nối server", bg=sidebar_card, fg="#ffffff", font=ui_font(10, bold=True)).pack(anchor="w", pady=(0, 6))
+        status_inner = status_card.body
+        status_title = tk.Frame(status_inner, bg=sidebar_bg)
+        status_title.pack(fill="x")
+        tk.Label(status_title, text="Kết nối server", bg=sidebar_bg, fg="#ffffff", font=ui_font(10, bold=True)).pack(side="left")
+        tk.Label(status_title, text="●", bg=sidebar_bg, fg="#31d181", font=ui_font(9, bold=True)).pack(side="left", padx=(5, 0))
         self.status = tk.Label(
             status_inner,
-            text="● Đã kết nối",
+            text="Đã kết nối",
             anchor="w",
-            fg=UI_SUCCESS,
-            bg=sidebar_card,
+            fg="#31d181",
+            bg=sidebar_bg,
             font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 9, bold=True),
             wraplength=max(88, self.sidebar_w - 62),
-            justify="center",
+            justify="left",
         )
-        self.status.pack(fill="both", expand=True)
+        self.status.pack(fill="x", pady=(5, 0))
 
         sidebar_spacer = tk.Frame(sidebar, bg=sidebar_bg, height=8 if (self.tiny_ui or self.micro_ui) else 12)
-
         sidebar_spacer.pack(fill="x")
 
-        user_box = card(sidebar, padx=4 if (self.tiny_ui or self.micro_ui) else 5, pady=3 if (self.tiny_ui or self.micro_ui) else 5)
-
-        user_box.configure(bg=sidebar_card, highlightbackground="#083522")
-
-        user_box.pack(fill="x", pady=(8 if is_admin_build() else 6, 0))
-        user_box.pack_propagate(False)
-
-        user_inner = tk.Frame(user_box, bg=sidebar_card)
-
-        user_inner.pack(fill="both", expand=True)
+        if is_admin_build():
+            user_box = RoundedPanel(
+                sidebar,
+                height=142,
+                fill=sidebar_card,
+                border="#16745a",
+                radius=12,
+                padding=12,
+            )
+            user_box.pack(fill="x", pady=(8, 0))
+            user_inner = user_box.body
+        else:
+            user_box = card(
+                sidebar,
+                padx=4 if (self.tiny_ui or self.micro_ui) else 5,
+                pady=3 if (self.tiny_ui or self.micro_ui) else 5,
+            )
+            user_box.configure(bg=sidebar_card, highlightbackground="#083522")
+            user_box.pack(fill="x", pady=(6, 0))
+            user_box.pack_propagate(False)
+            user_inner = tk.Frame(user_box, bg=sidebar_card)
+            user_inner.pack(fill="both", expand=True)
 
         member_content = tk.Frame(user_inner, bg=sidebar_card)
 
@@ -3325,8 +3842,30 @@ del "%~f0" >nul 2>nul
             highlightthickness=0,
         )
         avatar.pack(side="left", padx=(0, 9))
-        avatar.create_oval(scale_px(2), scale_px(2), scale_px(34), scale_px(34), fill="#a8d8c7", outline="#a8d8c7")
-        avatar.create_text(scale_px(18), scale_px(18), text="A", fill="#0d5c44", font=ui_font(12, bold=True))
+        admin_avatar_img = self._sidebar_icon("admin_avatar_128.png", 34)
+        if admin_avatar_img is not None:
+            avatar.create_image(
+                scale_px(18),
+                scale_px(18),
+                image=admin_avatar_img,
+            )
+            self.sidebar_admin_avatar_img = admin_avatar_img
+        else:
+            avatar.create_oval(
+                scale_px(2),
+                scale_px(2),
+                scale_px(34),
+                scale_px(34),
+                fill="#9fc9bb" if is_admin_build() else "#a8d8c7",
+                outline="#b8ddd1" if is_admin_build() else "#a8d8c7",
+            )
+            avatar.create_text(
+                scale_px(18),
+                scale_px(18),
+                text="A",
+                fill="#ffffff" if is_admin_build() else "#0d5c44",
+                font=ui_font(12, bold=True),
+            )
         member_text = tk.Frame(member_row, bg=sidebar_card)
         member_text.pack(side="left", fill="x", expand=True)
         self.sidebar_member_role_label = tk.Label(
@@ -3343,9 +3882,12 @@ del "%~f0" >nul 2>nul
         self.sidebar_member_name_label = tk.Label(
             member_text,
             text=self.user_name,
-            font=ui_font(9 if (self.tiny_ui or self.micro_ui) else 10),
+            font=ui_font(
+                9 if (self.tiny_ui or self.micro_ui) else 10,
+                bold=is_admin_build(),
+            ),
             bg=sidebar_card,
-            fg=sidebar_muted,
+            fg="#ffffff" if is_admin_build() else sidebar_muted,
             justify="left",
             anchor="w",
             wraplength=max(96, self.sidebar_w - 76),
@@ -3362,7 +3904,7 @@ del "%~f0" >nul 2>nul
                 admin_btn_row,
                 "Duyệt máy",
                 self.open_admin_approval_panel,
-                width=10 if (self.tiny_ui or self.micro_ui) else 11,
+                width=14,
                 variant="warn",
             ).pack(anchor="center")
 
@@ -3377,72 +3919,6 @@ del "%~f0" >nul 2>nul
                 variant="soft",
             )
             self._log_btn.pack(anchor="center")
-
-        # Keep only the visible lower decoration; the sidebar itself supplies the background.
-        try:
-            left_img_path = resource_path(*Path(APP_DECOR_SIDEBAR_BOTTOM).parts)
-            if left_img_path.exists():
-                self._left_raw_img = Image.open(left_img_path).convert("RGBA")
-
-                source_rgb = self._left_raw_img.convert("RGB")
-                source_px = source_rgb.load()
-                alpha_mask = Image.new("L", source_rgb.size, 0)
-                alpha_px = alpha_mask.load()
-                source_w = source_rgb.width
-                source_h = source_rgb.height
-                for y in range(source_h):
-                    edge_pixels = [
-                        source_px[x, y]
-                        for x in list(range(min(12, source_w)))
-                        + list(range(max(0, source_w - 12), source_w))
-                    ]
-                    row_bg = tuple(
-                        sum(pixel[channel] for pixel in edge_pixels) / len(edge_pixels)
-                        for channel in range(3)
-                    )
-                    for x in range(source_w):
-                        pixel = source_px[x, y]
-                        background_distance = max(
-                            abs(pixel[channel] - row_bg[channel])
-                            for channel in range(3)
-                        )
-                        subject_alpha = max(
-                            0.0,
-                            min(1.0, (background_distance - 3.0) / 14.0),
-                        )
-                        alpha_px[x, y] = int(255 * subject_alpha)
-                alpha_mask = alpha_mask.filter(ImageFilter.GaussianBlur(0.65))
-                self._left_raw_img.putalpha(alpha_mask)
-
-                img_ratio = self._left_raw_img.width / self._left_raw_img.height
-                decor_w = max(1, int(self.sidebar_w))
-                decor_h = max(1, int(decor_w / img_ratio))
-                resized = self._left_raw_img.resize((decor_w, decor_h), Image.Resampling.LANCZOS)
-                self._left_tk_img = ImageTk.PhotoImage(resized)
-                self.sidebar_canvas = tk.Canvas(
-                    shell,
-                    width=decor_w,
-                    height=decor_h,
-                    bg=sidebar_bg,
-                    highlightthickness=0,
-                    bd=0,
-                )
-                self.sidebar_canvas.create_image(
-                    decor_w // 2,
-                    decor_h,
-                    image=self._left_tk_img,
-                    anchor="s",
-                )
-                self.sidebar_canvas.place(
-                    x=0,
-                    rely=1.0,
-                    width=decor_w,
-                    height=decor_h,
-                    anchor="sw",
-                )
-                self.sidebar_canvas.lift()
-        except Exception:
-            pass
 
         _pulse_startup_splash(self.root)
         main = tk.Frame(shell, bg=main_bg, padx=self.main_padx, pady=self.main_pady)
@@ -3557,7 +4033,6 @@ del "%~f0" >nul 2>nul
 
         footer_item("Phiên bản", static_text="1.0.0")
         footer_item("Máy chủ", variable=self.footer_server_var, dot=True, value_color=UI_SUCCESS)
-        footer_item("Trạng thái", variable=self.footer_status_var, dot=True, value_color=UI_SUCCESS)
         footer_item("Thời gian", variable=self.footer_time_var)
         footer_item("Ngày", variable=self.footer_date_var, separator=False)
         def _load_footer_decor():
@@ -3793,13 +4268,6 @@ del "%~f0" >nul 2>nul
         self.template_combo["values"] = ["Bảng bất kỳ - tự nhận cột"]
 
         self.template_combo.pack(side="left")
-
-        status_pill = tk.Frame(filter_top, bg=UI_SURFACE)
-        status_pill.pack(side="right", padx=(12, 4))
-        tk.Label(status_pill, text="●", bg=UI_SURFACE, fg=UI_SUCCESS, font=ui_font(10, bold=True)).pack(side="left", padx=(0, 7))
-        tk.Label(status_pill, text="Trạng thái:", bg=UI_SURFACE, fg=UI_MUTED, font=ui_font(10, bold=True)).pack(side="left")
-        self.filter_status_var = tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng"))
-        tk.Label(status_pill, textvariable=self.filter_status_var, bg=UI_SURFACE, fg=UI_TEXT, font=ui_font(10, bold=True), padx=6, pady=5).pack(side="left", padx=(2, 0))
 
         if self.main_content_scroll or self.short_ui or self.dense_ui or self.tiny_ui or self.micro_ui:
             home_body_shell = tk.Frame(self.home_page, bg=UI_BG)
@@ -4066,8 +4534,25 @@ del "%~f0" >nul 2>nul
         panel_heading(center_col, "26_panel_table_grid.png", "PREVIEW BẢNG")
         tk.Label(center_col, text="Kiểm tra và sửa dữ liệu trước khi đưa vào Excel", font=ui_font(10), bg=UI_SURFACE, fg=UI_MUTED).pack(anchor="w", pady=(2, 8))
 
+        self.ocr_validation_var = tk.StringVar(
+            value="Kiểm tra OCR: chưa có dữ liệu"
+        )
+        self.ocr_validation_label = tk.Label(
+            center_col,
+            textvariable=self.ocr_validation_var,
+            font=ui_font(10, bold=True),
+            bg="#eef7f3",
+            fg=UI_MUTED,
+            anchor="w",
+            justify="left",
+            padx=10,
+            pady=6,
+            wraplength=760,
+        )
+        self.ocr_validation_label.pack(fill="x", pady=(0, 8))
+
         self.table_editor = TableEditor(center_col)
-        self.table_editor.on_change = self._refresh_daily_summary_panel
+        self.table_editor.on_change = self._on_ocr_table_change
         _pulse_startup_splash(self.root, force=True)
 
 
@@ -4114,6 +4599,9 @@ del "%~f0" >nul 2>nul
         icon_button(mapping_action_row, "Lưu mẫu", self.save_current_mapping_template, "28_panel_save.png", width=10, variant="soft").pack(anchor="e")
 
         self.mapping_editor = MappingEditor(right_col)
+        self.mapping_editor.on_mapping_change = (
+            lambda stats: self._refresh_mapping_stats(stats, schedule=False)
+        )
         _pulse_startup_splash(self.root, force=True)
 
         stats = tk.Frame(right_col, bg=UI_SURFACE, highlightthickness=1, highlightbackground=UI_BORDER)
@@ -4147,7 +4635,7 @@ del "%~f0" >nul 2>nul
                         if spacer is not None:
                             spacer.configure(height=6)
                         member_box = getattr(self, "_sidebar_member_box", None)
-                        if member_box is not None:
+                        if member_box is not None and not isinstance(member_box, RoundedPanel):
                             member_box.configure(height=122 if (self.tiny_ui or self.micro_ui) else 136)
                     except Exception:
                         pass
@@ -4576,6 +5064,81 @@ del "%~f0" >nul 2>nul
 
             pass
 
+
+    def _current_ocr_validation_report(self):
+        editor = getattr(self, "table_editor", None)
+        table = editor.get_current_table() if editor is not None else None
+        report = _validate_ocr_table_data(table)
+        self._ocr_validation_report = report
+        return report
+
+    @staticmethod
+    def _format_ocr_validation_details(report, max_rows=12):
+        issues = list((report or {}).get("issues", []) or [])
+        lines = []
+        for item in issues[:max_rows]:
+            messages = "; ".join(item.get("messages", [])[:3])
+            lines.append(f"Dòng {item.get('row')}: {messages}")
+        if len(issues) > max_rows:
+            lines.append(f"... và {len(issues) - max_rows} dòng khác")
+        return "\n".join(lines)
+
+    def _refresh_ocr_validation(self):
+        report = self._current_ocr_validation_report()
+        invalid_rows = report.get("invalid_rows", [])
+        editor = getattr(self, "table_editor", None)
+        if editor is not None and hasattr(editor, "set_invalid_rows"):
+            editor.set_invalid_rows(invalid_rows)
+
+        label = getattr(self, "ocr_validation_label", None)
+        value_var = getattr(self, "ocr_validation_var", None)
+        if value_var is None:
+            return report
+        if report.get("row_count", 0) <= 0:
+            value_var.set("Kiểm tra OCR: chưa có dữ liệu")
+            if label is not None:
+                label.configure(bg="#eef7f3", fg=UI_MUTED)
+            return report
+
+        accuracy = report.get("accuracy", 0.0)
+        if invalid_rows:
+            shown = ", ".join(str(row) for row in invalid_rows[:12])
+            suffix = (
+                f" (+{len(invalid_rows) - 12})"
+                if len(invalid_rows) > 12
+                else ""
+            )
+            value_var.set(
+                f"Độ hợp lệ dữ liệu OCR: {accuracy:.1f}% | "
+                f"Dòng cần kiểm tra: {shown}{suffix}"
+            )
+            if label is not None:
+                label.configure(bg="#fff4e5", fg=UI_ERROR)
+        else:
+            value_var.set(
+                f"Độ hợp lệ dữ liệu OCR: {accuracy:.1f}% | "
+                f"{report.get('row_count', 0)} dòng hợp lệ"
+            )
+            if label is not None:
+                label.configure(bg="#eaf8f1", fg=UI_SUCCESS)
+        return report
+
+    def _on_ocr_table_change(self, tables=None):
+        self._refresh_daily_summary_panel(tables)
+        self._refresh_ocr_validation()
+
+    def _confirm_ocr_validation_before_export(self):
+        report = self._refresh_ocr_validation()
+        if not report.get("invalid_rows"):
+            return True
+        details = self._format_ocr_validation_details(report)
+        return messagebox.askyesno(
+            "Dữ liệu OCR cần kiểm tra",
+            f"Độ hợp lệ dữ liệu: {report.get('accuracy', 0.0):.1f}%\n"
+            f"Có {len(report.get('invalid_rows', []))} dòng nghi sai:\n\n"
+            f"{details}\n\n"
+            "Bạn vẫn muốn xuất dữ liệu này vào Excel?",
+        )
 
     def _refresh_daily_summary_panel(self, tables=None):
 
@@ -5525,6 +6088,22 @@ from gk_pilepro.gk_overrides import install_app_overrides
 
 
 install_app_overrides(App)
+
+
+_fill_excel_without_ocr_validation = App.fill_excel
+
+
+def _fill_excel_with_ocr_validation(self):
+    if not self._confirm_ocr_validation_before_export():
+        self._set_status(
+            "Đã dừng xuất Excel để kiểm tra lại các dòng OCR nghi sai.",
+            "warn",
+        )
+        return
+    return _fill_excel_without_ocr_validation(self)
+
+
+App.fill_excel = _fill_excel_with_ocr_validation
 
 
 def _canvas_round_rect(canvas, x1, y1, x2, y2, radius=12, **kwargs):

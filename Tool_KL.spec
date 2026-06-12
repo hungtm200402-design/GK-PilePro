@@ -63,6 +63,10 @@ for folder, target in (
     add_tree(tcl_root / folder, target)
 
 add_tree(Path('assets') / 'GK_PilePro_icon_files_no_bg', Path('assets') / 'GK_PilePro_icon_files_no_bg')
+add_tree(
+    Path('assets') / 'sidebar_icon_white_outline_transparent' / 'canvas_128',
+    Path('assets') / 'sidebar_icon_white_outline_transparent' / 'canvas_128',
+)
 
 python_dlls = Path(sys.base_prefix) / 'DLLs'
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):

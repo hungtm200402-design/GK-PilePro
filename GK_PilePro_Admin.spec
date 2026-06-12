@@ -11,6 +11,8 @@ datas = [
     ('assets\\gk_logo.png', 'assets'),
     ('assets\\tool_kl_logo.png', 'assets'),
     ('assets\\gk_app_icon.png', 'assets'),
+    ('assets\\gk_icon_emblem.png', 'assets'),
+    ('assets\\gk_taskbar_icon.png', 'assets'),
     ('assets\\gk_app_icon.ico', 'assets'),
     ('assets\\gk_splash_logo.png', 'assets'),
     ('assets\\gk_splash_bg.png', 'assets'),
@@ -59,6 +61,11 @@ add_tree(datas, tcl_root / 'tcl8.6', 'tcl_data')
 add_tree(datas, tcl_root / 'tk8.6', '_tk_data')
 add_tree(datas, tcl_root / 'tk8.6', 'tk_data')
 add_tree(datas, Path('assets') / 'GK_PilePro_icon_files_no_bg', Path('assets') / 'GK_PilePro_icon_files_no_bg')
+add_tree(
+    datas,
+    Path('assets') / 'sidebar_icon_white_outline_transparent' / 'canvas_128',
+    Path('assets') / 'sidebar_icon_white_outline_transparent' / 'canvas_128',
+)
 
 python_dlls = Path(sys.base_prefix) / 'DLLs'
 for dll_name in ('_tkinter.pyd', 'tcl86t.dll', 'tk86t.dll'):

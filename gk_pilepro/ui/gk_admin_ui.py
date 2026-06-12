@@ -7,6 +7,8 @@ import unicodedata
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
+from PIL import Image, ImageFilter, ImageTk
+
 from gk_pilepro.gk_core import (
     delete_admin_approved_machine,
     fetch_presence_error_logs,
@@ -36,6 +38,7 @@ from gk_pilepro.ui.gk_ui import (
     UI_SURFACE,
     UI_SURFACE_2,
     UI_TEXT,
+    RoundedPanel,
     RoundedMappingEntry,
     ui_button,
     ui_font,
@@ -47,11 +50,11 @@ def norm(text):
     return re.sub(r"\s+", " ", value).strip().lower()
 
 
-SIDEBAR_BG = "#053f32"
-SIDEBAR_CARD = "#0b5a45"
-SIDEBAR_ACTIVE = "#0f8d6d"
-SIDEBAR_TEXT = "#d8f3e8"
-SIDEBAR_MUTED = "#9fcec0"
+SIDEBAR_BG = "#042115"
+SIDEBAR_CARD = "#052e1d"
+SIDEBAR_ACTIVE = "#0a4a2f"
+SIDEBAR_TEXT = "#ffffff"
+SIDEBAR_MUTED = "#8da396"
 MAIN_BG = "#edf7f8"
 
 
@@ -505,65 +508,179 @@ def open_admin_approval_panel(self):
     sidebar.pack_propagate(False)
 
     brand = tk.Frame(sidebar, bg=SIDEBAR_BG)
-    brand.pack(fill="x", pady=(0, 16))
-    try:
-        if hasattr(self, 'app_logo_img') and self.app_logo_img is not None:
-            tk.Label(brand, image=self.app_logo_img, bg=SIDEBAR_BG).pack(anchor="center", pady=(14, 0))
-    except Exception:
-        pass
 
     nav_items = [
-        ("home", "04_sidebar_home.png", "Trang chủ", True),
-        ("excel", "05_sidebar_excel.png", "Excel", False),
-        ("history", "06_sidebar_history.png", "Lịch sử", False),
-        ("mapping", "07_sidebar_mapping.png", "Mẫu mapping", False),
-        ("settings", "08_sidebar_settings.png", "Cài đặt", False),
-        ("help", "09_sidebar_help.png", "Trợ giúp", False),
-        ("about", "10_sidebar_info.png", "Giới thiệu", False),
+        ("home", "home_96.png", "Trang chủ", True),
+        ("excel", "excel_96.png", "Excel", False),
+        ("history", "history_96.png", "Lịch sử", False),
+        ("mapping", "mapping_96.png", "Mẫu mapping", False),
+        ("settings", "settings_96.png", "Cài đặt", False),
+        ("help", "help_96.png", "Trợ giúp", False),
+        ("about", "info_96.png", "Giới thiệu", False),
     ]
 
     for page_id, icon, text, active in nav_items:
-        bg = SIDEBAR_ACTIVE if active else SIDEBAR_BG
-        fg = "#ffffff" if active else SIDEBAR_TEXT
-        border = SIDEBAR_ACTIVE if active else SIDEBAR_CARD
-        row = tk.Frame(sidebar, bg=bg, padx=0, pady=0, highlightthickness=1, highlightbackground=border, cursor="hand2")
-        row.pack(fill="x", padx=16, pady=2)
-        inner = tk.Frame(row, bg=bg, padx=12, pady=7, cursor="hand2")
-        inner.pack(fill="both", expand=True)
-        icon_img = _admin_ui_icon(self, icon, 20)
-        _admin_img_label(inner, icon_img, bg, width=24, cursor="hand2").pack(side="left", padx=(0, 9))
-        lbl = tk.Label(inner, text=text, font=ui_font(11, bold=active), bg=bg, fg=fg, anchor="w", cursor="hand2")
-        lbl.pack(side="left", fill="x", expand=True)
-        for widget in (row, inner, lbl):
-            widget.bind("<Button-1>", lambda e: close_panel())
+        icon_img = self._sidebar_icon(icon, 20)
+        nav_canvas = tk.Canvas(
+            sidebar,
+            height=44,
+            bg=SIDEBAR_BG,
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        nav_canvas.pack(fill="x", padx=16, pady=2)
 
-    # Sidebar bottom section - keep the admin block fixed and visually identical.
-    member_info = tk.Frame(
+        def draw_admin_nav(_event=None, canvas=nav_canvas, label=text, selected=active, image=icon_img):
+            canvas.delete("all")
+            width = max(150, canvas.winfo_width())
+            height = max(42, canvas.winfo_height())
+            fill = "#14936f" if selected else SIDEBAR_BG
+            text_color = "#ffffff" if selected else "#edf7f3"
+            icon_color = "#f4d342" if selected else "#a7c7bd"
+            self._nav_round_rect(
+                canvas,
+                1,
+                1,
+                width - 1,
+                height - 1,
+                radius=10,
+                fill=fill,
+                outline=fill,
+            )
+            if selected:
+                self._nav_round_rect(
+                    canvas,
+                    3,
+                    9,
+                    7,
+                    height - 9,
+                    radius=2,
+                    fill="#f4d342",
+                    outline="#f4d342",
+                )
+            icon_x = 26
+            if image is not None:
+                canvas.create_image(icon_x, height // 2, image=image)
+            canvas.create_text(
+                icon_x + 24,
+                height // 2,
+                text=label,
+                fill=text_color,
+                font=ui_font(11, bold=True),
+                anchor="w",
+            )
+
+        nav_canvas.bind("<Configure>", draw_admin_nav)
+        nav_canvas.bind("<Button-1>", lambda _event: close_panel())
+        panel.after_idle(draw_admin_nav)
+
+    tk.Frame(sidebar, bg=SIDEBAR_BG).pack(fill="both", expand=True)
+
+    member_info_panel = RoundedPanel(
         sidebar,
-        bg=SIDEBAR_CARD,
-        padx=10,
-        pady=12,
-        highlightthickness=1,
-        highlightbackground="#19765d",
+        height=126,
+        fill=SIDEBAR_CARD,
+        border="#16745a",
+        radius=12,
+        padding=12,
     )
-    member_info.pack(side="bottom", fill="x", padx=12, pady=(0, 14))
-    tk.Label(member_info, text="Quản trị viên", font=ui_font(10, bold=True), bg=SIDEBAR_CARD, fg="#ffffff").pack(anchor="center")
-    tk.Label(member_info, text="Admin", font=ui_font(9), bg=SIDEBAR_CARD, fg=SIDEBAR_MUTED).pack(anchor="center", pady=(4, 10))
-    ui_button(member_info, "Duyệt máy", lambda: None, width=14, variant="warn").pack(anchor="center")
-    ui_button(member_info, "Backup Excel", self.open_admin_backup_panel, width=14, variant="soft").pack(anchor="center", pady=(8, 0))
+    member_info_panel.pack(side="bottom", fill="x", padx=16, pady=(0, 14))
+    member_info = member_info_panel.body
+    member_row = tk.Frame(member_info, bg=SIDEBAR_CARD)
+    member_row.pack(fill="x")
+    avatar = tk.Canvas(
+        member_row,
+        width=38,
+        height=38,
+        bg=SIDEBAR_CARD,
+        bd=0,
+        highlightthickness=0,
+    )
+    avatar.pack(side="left", padx=(0, 9))
+    avatar.create_oval(1, 1, 37, 37, fill="#9fc9bb", outline="#b8ddd1")
+    avatar.create_text(19, 19, text="A", fill="#ffffff", font=ui_font(12, bold=True))
+    member_text = tk.Frame(member_row, bg=SIDEBAR_CARD)
+    member_text.pack(side="left", fill="x", expand=True)
+    tk.Label(member_text, text="Quản trị viên", font=ui_font(10, bold=True), bg=SIDEBAR_CARD, fg="#ffffff").pack(anchor="w")
+    tk.Label(member_text, text="Admin", font=ui_font(10, bold=True), bg=SIDEBAR_CARD, fg="#ffffff").pack(anchor="w", pady=(2, 0))
+    ui_button(member_info, "Duyệt máy", lambda: None, width=14, variant="warn").pack(anchor="center", pady=(10, 0))
 
-    # Stats box in sidebar (quick glance)
     stat_total_var = tk.StringVar(value="Đang tải...")
     stat_time_var = tk.StringVar(value="Cập nhật: --:--:--")
-    stats_box = tk.Frame(sidebar, bg=SIDEBAR_CARD, highlightthickness=1, highlightbackground="#19765d")
-    stats_box.pack(side="bottom", fill="x", padx=8, pady=(0, 8))
-    tk.Label(stats_box, text="Kết nối server ●", bg=SIDEBAR_CARD, fg="#ffffff", font=ui_font(9, bold=True), anchor="w").pack(padx=10, pady=(8, 0), anchor="w")
-    tk.Label(stats_box, textvariable=stat_total_var, bg=SIDEBAR_CARD, fg="#30d083", font=ui_font(9, bold=True), anchor="w").pack(padx=10, pady=(4, 0), anchor="w")
-    tk.Label(stats_box, textvariable=stat_time_var, bg=SIDEBAR_CARD, fg=SIDEBAR_MUTED, font=ui_font(8), anchor="w").pack(padx=10, pady=(2, 8), anchor="w")
+    stats_panel = RoundedPanel(
+        sidebar,
+        height=72,
+        fill=SIDEBAR_BG,
+        border="#16745a",
+        radius=12,
+        padding=12,
+    )
+    stats_panel.pack(side="bottom", fill="x", padx=16, pady=(0, 12))
+    stats_box = stats_panel.body
+    title_row = tk.Frame(stats_box, bg=SIDEBAR_BG)
+    title_row.pack(fill="x")
+    tk.Label(title_row, text="Kết nối server", bg=SIDEBAR_BG, fg="#ffffff", font=ui_font(10, bold=True), anchor="w").pack(side="left")
+    tk.Label(title_row, text="●", bg=SIDEBAR_BG, fg="#31d181", font=ui_font(9, bold=True)).pack(side="left", padx=(5, 0))
+    tk.Label(stats_box, text="Đã kết nối", bg=SIDEBAR_BG, fg="#31d181", font=ui_font(9, bold=True), anchor="w").pack(pady=(5, 0), anchor="w")
     try:
-        side_decor = self._ui_asset_image("assets/gk_sidebar_decoration.png", (210, 160), alpha=0.9)
-        if side_decor is not None:
-            tk.Label(sidebar, image=side_decor, bg=SIDEBAR_BG, bd=0).pack(side="bottom", fill="x", pady=(8, 0))
+        side_decor_path = resource_path("assets", "goc_trai_moi.png.png")
+        if side_decor_path.exists():
+            side_decor_source = Image.open(side_decor_path).convert("RGBA")
+            source_rgb = side_decor_source.convert("RGB")
+            source_px = source_rgb.load()
+            alpha_mask = Image.new("L", source_rgb.size, 0)
+            alpha_px = alpha_mask.load()
+            source_w, source_h = source_rgb.size
+            for y in range(source_h):
+                edge_pixels = [
+                    source_px[x, y]
+                    for x in list(range(min(12, source_w)))
+                    + list(range(max(0, source_w - 12), source_w))
+                ]
+                row_bg = tuple(
+                    sum(pixel[channel] for pixel in edge_pixels) / len(edge_pixels)
+                    for channel in range(3)
+                )
+                for x in range(source_w):
+                    pixel = source_px[x, y]
+                    distance = max(
+                        abs(pixel[channel] - row_bg[channel])
+                        for channel in range(3)
+                    )
+                    alpha_px[x, y] = int(
+                        255 * max(0.0, min(1.0, (distance - 3.0) / 14.0))
+                    )
+            side_decor_source.putalpha(
+                alpha_mask.filter(ImageFilter.GaussianBlur(0.65))
+            )
+            decor_w = sidebar_w
+            decor_h = max(
+                1,
+                int(decor_w * side_decor_source.height / side_decor_source.width),
+            )
+            side_decor = ImageTk.PhotoImage(
+                side_decor_source.resize(
+                    (decor_w, decor_h),
+                    Image.Resampling.LANCZOS,
+                )
+            )
+            self._ui_images.append(side_decor)
+            side_decor_label = tk.Label(
+                sidebar,
+                image=side_decor,
+                bg=SIDEBAR_BG,
+                bd=0,
+                highlightthickness=0,
+            )
+            side_decor_label.place(
+                x=0,
+                rely=1.0,
+                width=sidebar_w,
+                height=decor_h,
+                anchor="sw",
+            )
+            side_decor_label.lower()
     except Exception:
         pass
 
@@ -605,8 +722,18 @@ def open_admin_approval_panel(self):
     approval_body = tk.Frame(main_content, bg=MAIN_BG)
     approval_body.pack(fill="both", expand=True)
 
-    footer = tk.Frame(main_content, bg="#f8fcff", padx=12, pady=7, highlightthickness=1, highlightbackground="#dbe8f1", highlightcolor="#dbe8f1")
+    footer = tk.Frame(
+        main_content,
+        height=112,
+        bg="#f8fcff",
+        highlightthickness=1,
+        highlightbackground="#dbe8f1",
+        highlightcolor="#dbe8f1",
+    )
     footer.pack(fill="x", side="bottom", pady=(8, 0))
+    footer.pack_propagate(False)
+    footer_info = tk.Frame(footer, bg="#f8fcff")
+    footer_info.pack(side="left", fill="y", padx=(12, 0))
     try:
         footer_server_var = getattr(self, "footer_server_var", tk.StringVar(value=self._footer_server_state()))
         footer_status_var = getattr(self, "footer_status_var", tk.StringVar(value=getattr(self, "_last_status_text", "Sẵn sàng")))
@@ -619,7 +746,7 @@ def open_admin_approval_panel(self):
         footer_date_var = tk.StringVar(value=datetime.now().strftime("%d/%m/%Y"))
 
     def footer_item(label, variable=None, text=None, dot=False):
-        item = tk.Frame(footer, bg="#f8fcff")
+        item = tk.Frame(footer_info, bg="#f8fcff")
         item.pack(side="left", padx=(0, 20))
         if dot:
             tk.Label(item, text="●", bg="#f8fcff", fg=UI_SUCCESS, font=ui_font(9, bold=True)).pack(side="left", padx=(0, 5))
@@ -635,9 +762,18 @@ def open_admin_approval_panel(self):
     footer_item("Thời gian", variable=footer_time_var)
     footer_item("Ngày", variable=footer_date_var)
     try:
-        admin_decor = self._ui_asset_image("assets/gk_footer_decoration.png", (260, 96), alpha=0.62)
+        admin_decor = self._ui_asset_image(
+            "assets/goc_phai_moi.png.png",
+            (551, 110),
+        )
         if admin_decor is not None:
-            tk.Label(footer, image=admin_decor, bg="#f8fcff", bd=0).pack(side="right", padx=(12, 0))
+            tk.Label(
+                footer,
+                image=admin_decor,
+                bg="#f8fcff",
+                bd=0,
+                highlightthickness=0,
+            ).pack(side="right", anchor="se")
     except Exception:
         pass
 

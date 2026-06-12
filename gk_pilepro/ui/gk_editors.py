@@ -94,6 +94,7 @@ class MappingEditor(tk.Frame):
         self.display_to_col = {}
 
         self.col_to_display = {}
+        self.on_mapping_change = None
 
         self._layout_width = 0
 
@@ -325,7 +326,7 @@ class MappingEditor(tk.Frame):
 
 
 
-    def clear(self):
+    def clear(self, notify=True):
 
         for w in self.inner.winfo_children():
 
@@ -352,6 +353,8 @@ class MappingEditor(tk.Frame):
         except Exception:
 
             pass
+        if notify:
+            self._notify_mapping_change()
 
 
 
@@ -417,7 +420,7 @@ class MappingEditor(tk.Frame):
             except Exception:
                 selected_values = []
 
-        self.clear()
+        self.clear(notify=False)
 
         self.table_cols = list(table_cols or [])
 
@@ -453,6 +456,7 @@ class MappingEditor(tk.Frame):
             self.canvas.update_idletasks()
             self.canvas.configure(scrollregion=self.canvas.bbox("all"))
             self.canvas.yview_moveto(0)
+            self._notify_mapping_change()
             return
 
         excel_choices = self._make_excel_choices(self.excel_headers)
@@ -577,6 +581,7 @@ class MappingEditor(tk.Frame):
 
 
             self.mapping_vars.append(var)
+            var.trace_add("write", self._on_mapping_var_changed)
 
 
 
@@ -585,6 +590,7 @@ class MappingEditor(tk.Frame):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
         self.canvas.yview_moveto(0)
+        self._notify_mapping_change()
 
 
 
@@ -606,6 +612,27 @@ class MappingEditor(tk.Frame):
 
         return out
 
+    def get_mapping_stats(self):
+        mapping = self.get_mapping()
+        total = len(mapping)
+        mapped = sum(1 for excel_col in mapping if excel_col is not None)
+        return {
+            "mapped": mapped,
+            "unmapped": max(0, total - mapped),
+            "total": total,
+        }
+
+    def _on_mapping_var_changed(self, *_args):
+        self._notify_mapping_change()
+
+    def _notify_mapping_change(self):
+        callback = getattr(self, "on_mapping_change", None)
+        if callable(callback):
+            try:
+                callback(self.get_mapping_stats())
+            except Exception:
+                pass
+
 
 class TableEditor(tk.Frame):
 
@@ -621,6 +648,7 @@ class TableEditor(tk.Frame):
 
         self.active_cell = None
         self.on_change = None
+        self.invalid_rows = set()
 
 
 
@@ -689,6 +717,11 @@ class TableEditor(tk.Frame):
         self.tree.tag_configure("preview_odd", background="#ffffff", foreground="#1f2933")
 
         self.tree.tag_configure("preview_even", background="#f7faf9", foreground="#1f2933")
+        self.tree.tag_configure(
+            "preview_invalid",
+            background="#fff0f0",
+            foreground="#b42318",
+        )
 
         self.v_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self._tree_yview, style="Vertical.TScrollbar")
 
@@ -1008,11 +1041,29 @@ class TableEditor(tk.Frame):
 
             rr = row[:len(cols)] + [""] * max(0, len(cols) - len(row))
 
-            tag = "preview_even" if idx % 2 else "preview_odd"
+            tag = (
+                "preview_invalid"
+                if idx + 1 in self.invalid_rows
+                else ("preview_even" if idx % 2 else "preview_odd")
+            )
 
             self.tree.insert("", "end", values=rr, tags=(tag,))
 
         self.tree.after_idle(self._refresh_preview_grid)
+
+    def set_invalid_rows(self, row_numbers):
+        self.invalid_rows = {
+            int(row)
+            for row in (row_numbers or [])
+            if str(row).strip().isdigit() and int(row) > 0
+        }
+        for idx, item in enumerate(self.tree.get_children()):
+            tag = (
+                "preview_invalid"
+                if idx + 1 in self.invalid_rows
+                else ("preview_even" if idx % 2 else "preview_odd")
+            )
+            self.tree.item(item, tags=(tag,))
 
 
 
