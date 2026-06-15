@@ -1286,6 +1286,12 @@ def merge_ocr_tables_for_continuous_read(tables):
 
                 "titles": [],
 
+                "row_source_indexes": [],
+
+                "row_bboxes": [],
+
+                "cell_bboxes": [],
+
             }
 
             groups.append(found)
@@ -1297,8 +1303,12 @@ def merge_ocr_tables_for_continuous_read(tables):
             found["titles"].append(title)
 
         width = len(found["columns"])
+        row_source_indexes = list(table.get("_row_source_indexes") or [])
+        table_source_index = table.get("_source_image_index")
+        row_bboxes = list(table.get("_row_bboxes") or [])
+        cell_bboxes = list(table.get("_cell_bboxes") or [])
 
-        for row in rows:
+        for row_idx, row in enumerate(rows):
 
             rr = list(row)
 
@@ -1307,6 +1317,18 @@ def merge_ocr_tables_for_continuous_read(tables):
                 rr += [""] * (width - len(rr))
 
             found["rows"].append(rr[:width])
+            source_index = (
+                row_source_indexes[row_idx]
+                if row_idx < len(row_source_indexes)
+                else table_source_index
+            )
+            found["row_source_indexes"].append(source_index)
+            found["row_bboxes"].append(
+                row_bboxes[row_idx] if row_idx < len(row_bboxes) else None
+            )
+            found["cell_bboxes"].append(
+                cell_bboxes[row_idx] if row_idx < len(cell_bboxes) else []
+            )
 
     merged = []
 
@@ -1344,7 +1366,16 @@ def merge_ocr_tables_for_continuous_read(tables):
 
             title = f"Bảng dữ liệu đã gộp ({len(group['titles'])} phần)"
 
-        merged.append({"title": title, "columns": cols, "rows": rows})
+        merged.append(
+            {
+                "title": title,
+                "columns": cols,
+                "rows": rows,
+                "_row_source_indexes": list(group["row_source_indexes"]),
+                "_row_bboxes": list(group["row_bboxes"]),
+                "_cell_bboxes": list(group["cell_bboxes"]),
+            }
+        )
 
     merged.sort(key=lambda t: (len(t.get("columns") or []), len(t.get("rows") or [])), reverse=True)
 
@@ -2314,6 +2345,12 @@ def _v23_run_gemini(self):
 
             tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
 
+            for table in tables_one or []:
+                if isinstance(table, dict):
+                    row_count = len(table.get("rows") or [])
+                    table["_source_image_index"] = idx - 1
+                    table["_source_image_path"] = str(image_path)
+                    table["_row_source_indexes"] = [idx - 1] * row_count
             all_tables.extend(tables_one or [])
 
             raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")

@@ -252,6 +252,64 @@ def extract_json(text):
     raise ValueError("Không parse được JSON từ AI.")
 
 
+OCR_BBOX_PROMPT = """
+
+YÊU CẦU TỌA ĐỘ BẮT BUỘC ĐỂ ĐỐI CHIẾU:
+- Trong mỗi table, ngoài title/columns/rows, trả thêm `row_bboxes` và `cell_bboxes`.
+- `row_bboxes` có một phần tử cho mỗi row.
+- `cell_bboxes` có một hàng cho mỗi row và một phần tử cho mỗi column.
+- Mỗi bbox có dạng [x1, y1, x2, y2], chuẩn hóa theo kích thước ảnh từ 0 đến 1000.
+- x tăng từ trái sang phải; y tăng từ trên xuống dưới.
+- cell bbox phải ôm sát vùng chữ/số tạo ra giá trị OCR của đúng ô.
+- row bbox ôm toàn bộ vùng chữ của đúng dòng.
+- Nếu không xác định được tọa độ thì trả null đúng vị trí, không bịa.
+
+Ví dụ bổ sung trong một table:
+"row_bboxes": [[50,200,950,260]],
+"cell_bboxes": [[[50,200,200,260],[200,200,500,260],[500,200,950,260]]]
+"""
+
+
+def _normalize_ocr_bbox(value):
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        coords = [max(0.0, min(1000.0, float(item))) for item in value]
+    except (TypeError, ValueError):
+        return None
+    x1, y1, x2, y2 = coords
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return coords
+
+
+def _extract_ocr_bbox_metadata(table, row_count, column_count):
+    raw_rows = list(table.get("row_bboxes") or [])
+    raw_cells = list(table.get("cell_bboxes") or [])
+    row_bboxes = [
+        _normalize_ocr_bbox(raw_rows[row_idx])
+        if row_idx < len(raw_rows)
+        else None
+        for row_idx in range(row_count)
+    ]
+    cell_bboxes = []
+    for row_idx in range(row_count):
+        source_cells = (
+            raw_cells[row_idx]
+            if row_idx < len(raw_cells) and isinstance(raw_cells[row_idx], list)
+            else []
+        )
+        cell_bboxes.append(
+            [
+                _normalize_ocr_bbox(source_cells[col_idx])
+                if col_idx < len(source_cells)
+                else None
+                for col_idx in range(column_count)
+            ]
+        )
+    return row_bboxes, cell_bboxes
+
+
 
 def build_prompt():
 
@@ -263,9 +321,11 @@ Bạn là công cụ đọc bảng từ ảnh để nhập Excel. Nhiệm vụ l
 
 NGUYÊN TẮC BẮT BUỘC:
 
-1. Chỉ đọc dữ liệu nằm TRONG BẢNG chính.
+1. Đọc dữ liệu nằm TRONG BẢNG chính.
 
-2. Không đọc chữ ngoài bảng, chữ ký, tên người ký, tiêu đề dưới cuối trang.
+2. Ngoài bảng, chỉ đọc trường ngày của chứng từ như "NGÀY THI CÔNG",
+   "NGÀY ÉP", "NGÀY THÁNG" hoặc "DATE" để trả về `document_date`.
+   Không đọc chữ ký, tên người ký hoặc tiêu đề dưới cuối trang.
 
 3. Không tự bịa dữ liệu.
 
@@ -460,6 +520,8 @@ QUY TẮC TỔ HỢP CỌC CỰC KỲ QUAN TRỌNG:
 Output JSON thuần, không markdown, không giải thích:
 
 {
+
+  "document_date": "ngày thi công/ép đọc từ phần đầu ảnh, chuẩn DD/MM/YYYY; không có thì để rỗng",
 
   "tables": [
 
@@ -774,7 +836,7 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
 
     tried = []
 
-    prompt = build_prompt_phieu_coc(excel_columns)
+    prompt = build_prompt_phieu_coc(excel_columns) + OCR_BBOX_PROMPT
 
 
 
@@ -811,6 +873,20 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
                 if "tables" not in data:
 
                     raise ValueError("AI không trả về khóa tables.")
+
+                document_date = normalize_vietnam_date(
+                    clean_text(
+                        data.get("document_date")
+                        or data.get("ngay_thi_cong")
+                        or data.get("ngay_ep")
+                        or ""
+                    )
+                )
+                if not re.search(
+                    r"\b\d{1,2}/\d{1,2}(/\d{2,4})?\b",
+                    str(document_date or ""),
+                ):
+                    document_date = ""
 
 
 
@@ -855,8 +931,43 @@ def call_gemini_phieu_coc(image_path, api_key, model_name, excel_columns=None):
 
 
                     if columns and norm_rows:
-
-                        tables.append({"title": title, "columns": columns, "rows": norm_rows})
+                        row_bboxes, cell_bboxes = _extract_ocr_bbox_metadata(
+                            t,
+                            len(norm_rows),
+                            len(columns),
+                        )
+                        has_date_column = any(
+                            any(
+                                token in norm(column)
+                                for token in (
+                                    "ngay thi cong",
+                                    "ngay ep",
+                                    "ngay",
+                                    "date",
+                                )
+                            )
+                            for column in columns
+                        )
+                        if document_date and not has_date_column:
+                            columns = ["Ngày thi công"] + columns
+                            norm_rows = [
+                                [document_date] + list(row)
+                                for row in norm_rows
+                            ]
+                            cell_bboxes = [
+                                [None] + list(row_cells)
+                                for row_cells in cell_bboxes
+                            ]
+                        tables.append(
+                            {
+                                "title": title,
+                                "columns": columns,
+                                "rows": norm_rows,
+                                "_document_date": document_date,
+                                "_row_bboxes": row_bboxes,
+                                "_cell_bboxes": cell_bboxes,
+                            }
+                        )
 
 
 
@@ -964,7 +1075,7 @@ def call_gemini(image_path, api_key, model_name):
 
                     model=model,
 
-                    contents=[build_prompt(), image],
+                    contents=[build_prompt() + OCR_BBOX_PROMPT, image],
 
                     config=types.GenerateContentConfig(
 
@@ -985,6 +1096,20 @@ def call_gemini(image_path, api_key, model_name):
                 if "tables" not in data:
 
                     raise ValueError("AI không trả về khóa tables.")
+
+                document_date = normalize_vietnam_date(
+                    clean_text(
+                        data.get("document_date")
+                        or data.get("ngay_thi_cong")
+                        or data.get("ngay_ep")
+                        or ""
+                    )
+                )
+                if not re.search(
+                    r"\b\d{1,2}/\d{1,2}(/\d{2,4})?\b",
+                    str(document_date or ""),
+                ):
+                    document_date = ""
 
 
 
@@ -1029,8 +1154,43 @@ def call_gemini(image_path, api_key, model_name):
 
 
                     if columns and norm_rows:
-
-                        tables.append({"title": title, "columns": columns, "rows": norm_rows})
+                        row_bboxes, cell_bboxes = _extract_ocr_bbox_metadata(
+                            t,
+                            len(norm_rows),
+                            len(columns),
+                        )
+                        has_date_column = any(
+                            any(
+                                token in norm(column)
+                                for token in (
+                                    "ngay thi cong",
+                                    "ngay ep",
+                                    "ngay",
+                                    "date",
+                                )
+                            )
+                            for column in columns
+                        )
+                        if document_date and not has_date_column:
+                            columns = ["Ngày thi công"] + columns
+                            norm_rows = [
+                                [document_date] + list(row)
+                                for row in norm_rows
+                            ]
+                            cell_bboxes = [
+                                [None] + list(row_cells)
+                                for row_cells in cell_bboxes
+                            ]
+                        tables.append(
+                            {
+                                "title": title,
+                                "columns": columns,
+                                "rows": norm_rows,
+                                "_document_date": document_date,
+                                "_row_bboxes": row_bboxes,
+                                "_cell_bboxes": cell_bboxes,
+                            }
+                        )
 
 
 
@@ -3610,6 +3770,18 @@ def build_static_jacking_daily_summary_lines(tables):
             return best_idx
         return None
 
+    def _find_preferred_header_col(cols, preferred_names, avoid=None):
+
+        avoid = set(avoid or [])
+        normalized_names = [norm(name) for name in preferred_names]
+        for preferred in normalized_names:
+            for idx, column in enumerate(cols):
+                if idx in avoid:
+                    continue
+                if norm(column) == preferred:
+                    return idx
+        return None
+
     def _infer_date_from_table(candidate, rows):
 
         probes = [
@@ -3663,14 +3835,27 @@ def build_static_jacking_daily_summary_lines(tables):
 
         date_idx = _find_smart_col(cols, rows, date_aliases, _score_date_cell, bonus_words=("ngay", "date"))
         pile_idx = _find_smart_col(cols, rows, pile_aliases, _score_pile_cell, avoid={date_idx} - {None}, bonus_words=("tim", "coc", "pile"))
-        depth_idx = _find_smart_col(
+        depth_idx = _find_preferred_header_col(
             cols,
-            rows,
-            depth_aliases,
-            _score_depth_cell,
+            (
+                "Chiều sâu ép thực tế (m)",
+                "Chiều sâu ép thực tế",
+                "Chiều sâu thực tế",
+                "Độ sâu ép thực tế",
+                "Actual pressing depth",
+                "Actual depth",
+            ),
             avoid={date_idx, pile_idx} - {None},
-            bonus_words=("thuc te", "chieu sau", "do sau", "depth", "ep"),
         )
+        if depth_idx is None:
+            depth_idx = _find_smart_col(
+                cols,
+                rows,
+                depth_aliases,
+                _score_depth_cell,
+                avoid={date_idx, pile_idx} - {None},
+                bonus_words=("thuc te", "chieu sau", "do sau", "depth", "ep"),
+            )
 
         if date_idx is None:
             date_idx, _ = _find_by_data_score(rows, len(cols), _score_date_cell)
@@ -3738,6 +3923,8 @@ def build_static_jacking_daily_summary_lines(tables):
     else:
 
         summary_lines.append("Tổng hợp theo ngày từ toàn bộ dữ liệu đã đọc")
+
+    summary_lines.append(f"Tổng số ngày: {len(grouped)}")
 
     for date_value, bucket in sorted(grouped.items(), key=lambda item: _summary_date_sort_key(item[0])):
 
@@ -5695,6 +5882,12 @@ def merge_ocr_tables_for_continuous_read(tables):
 
                 "titles": [],
 
+                "row_source_indexes": [],
+
+                "row_bboxes": [],
+
+                "cell_bboxes": [],
+
             }
 
             groups.append(found)
@@ -5706,8 +5899,12 @@ def merge_ocr_tables_for_continuous_read(tables):
             found["titles"].append(title)
 
         width = len(found["columns"])
+        row_source_indexes = list(table.get("_row_source_indexes") or [])
+        table_source_index = table.get("_source_image_index")
+        row_bboxes = list(table.get("_row_bboxes") or [])
+        cell_bboxes = list(table.get("_cell_bboxes") or [])
 
-        for row in rows:
+        for row_idx, row in enumerate(rows):
 
             rr = list(row)
 
@@ -5716,6 +5913,18 @@ def merge_ocr_tables_for_continuous_read(tables):
                 rr += [""] * (width - len(rr))
 
             found["rows"].append(rr[:width])
+            source_index = (
+                row_source_indexes[row_idx]
+                if row_idx < len(row_source_indexes)
+                else table_source_index
+            )
+            found["row_source_indexes"].append(source_index)
+            found["row_bboxes"].append(
+                row_bboxes[row_idx] if row_idx < len(row_bboxes) else None
+            )
+            found["cell_bboxes"].append(
+                cell_bboxes[row_idx] if row_idx < len(cell_bboxes) else []
+            )
 
     merged = []
 
@@ -5753,7 +5962,16 @@ def merge_ocr_tables_for_continuous_read(tables):
 
             title = f"Bảng dữ liệu đã gộp ({len(group['titles'])} phần)"
 
-        merged.append({"title": title, "columns": cols, "rows": rows})
+        merged.append(
+            {
+                "title": title,
+                "columns": cols,
+                "rows": rows,
+                "_row_source_indexes": list(group["row_source_indexes"]),
+                "_row_bboxes": list(group["row_bboxes"]),
+                "_cell_bboxes": list(group["cell_bboxes"]),
+            }
+        )
 
     merged.sort(key=lambda t: (len(t.get("columns") or []), len(t.get("rows") or [])), reverse=True)
 

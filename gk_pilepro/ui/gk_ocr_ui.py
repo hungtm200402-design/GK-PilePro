@@ -129,6 +129,12 @@ def run_gemini_phieu_coc(self):
 
             )
 
+            for table in tables_one or []:
+                if isinstance(table, dict):
+                    row_count = len(table.get("rows") or [])
+                    table["_source_image_index"] = idx - 1
+                    table["_source_image_path"] = str(image_path)
+                    table["_row_source_indexes"] = [idx - 1] * row_count
             all_tables.extend(tables_one or [])
             raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
 
@@ -556,6 +562,65 @@ def open_current_preview_image(self, event=None):
     return "break"
 
 
+def _source_image_context_for_selection(self, context=None):
+
+    paths = list(getattr(self, "image_paths", None) or [])
+
+    if not paths:
+
+        return None, None
+
+    editor = getattr(self, "table_editor", None)
+    if context is None and editor is not None:
+        context = editor.get_selected_context()
+
+    table = editor.get_current_table() if editor is not None else None
+    row_index = int((context or {}).get("row_index", 0))
+    column_index = int((context or {}).get("column_index", 0))
+    row_sources = list((table or {}).get("_row_source_indexes") or [])
+    source_index = (
+        row_sources[row_index]
+        if 0 <= row_index < len(row_sources)
+        else (table or {}).get("_source_image_index")
+    )
+
+    row_bboxes = list((table or {}).get("_row_bboxes") or [])
+    bbox = (
+        row_bboxes[row_index]
+        if 0 <= row_index < len(row_bboxes)
+        else None
+    )
+
+    try:
+        index = max(0, min(int(source_index), len(paths) - 1))
+    except (TypeError, ValueError):
+        index = max(
+            0,
+            min(int(getattr(self, "preview_image_index", 0) or 0), len(paths) - 1),
+        )
+    return index, bbox
+
+
+def show_source_image_for_selection(self, context=None, open_viewer=False):
+
+    source_index, bbox = self._source_image_context_for_selection(context)
+
+    if source_index is None:
+
+        return
+
+    self._show_preview_image_index(source_index)
+    path = self.get_current_preview_image_path()
+    editor = getattr(self, "table_editor", None)
+    if editor is not None and hasattr(editor, "show_source_row_crop"):
+        editor.show_source_row_crop(path, bbox, context=context)
+
+    if open_viewer:
+
+        if path:
+            self.open_image_viewer(path, focus_bbox=bbox)
+
+
 def set_image_path(self, path, status_prefix="Đã chọn ảnh: "):
 
     self.set_image_paths([path], status_prefix=status_prefix)
@@ -605,7 +670,7 @@ def append_image_paths(self, paths, status_prefix="Đã thêm ảnh: "):
     self.set_image_paths(combined, status_prefix=status_prefix)
 
 
-def open_image_viewer(self, path):
+def open_image_viewer(self, path, focus_bbox=None):
 
     paths = list(getattr(self, "image_paths", None) or [])
 
@@ -630,10 +695,9 @@ def open_image_viewer(self, path):
             if state["win"].winfo_exists():
 
                 state["index"] = start_index
+                state["focus_bbox"] = focus_bbox
 
                 state["win"].lift()
-
-                state["win"].focus_force()
 
                 if callable(getattr(self, "_viewer_set_index", None)):
 
@@ -649,11 +713,6 @@ def open_image_viewer(self, path):
     win.title(f"Xem ảnh - {Path(path).name}")
     win.configure(bg=UI_BG)
     win.transient(self.root)
-
-    try:
-        win.grab_set()
-    except Exception:
-        pass
 
     sw = max(640, int(self.root.winfo_screenwidth() * 0.8))
     sh = max(480, int(self.root.winfo_screenheight() * 0.8))
@@ -671,6 +730,10 @@ def open_image_viewer(self, path):
         font=ui_font(12, bold=True),
         anchor="w",
     ).pack(fill="x", anchor="w")
+
+    toolbar = tk.Frame(outer, bg=UI_BG)
+    toolbar.pack(fill="x", pady=(8, 0))
+    zoom_var = tk.StringVar(value="100%")
 
     canvas_frame = tk.Frame(outer, bg=UI_BG)
     canvas_frame.pack(fill="both", expand=True, pady=(10, 0))
@@ -717,12 +780,22 @@ def open_image_viewer(self, path):
     prev_btn_id = canvas.create_window(28, 0, window=prev_btn, anchor="center", state="hidden")
     next_btn_id = canvas.create_window(0, 0, window=next_btn, anchor="center", state="hidden")
     image_id = canvas.create_image(0, 0, anchor="center")
+    focus_id = canvas.create_rectangle(
+        0,
+        0,
+        0,
+        0,
+        outline="#ff2d20",
+        width=4,
+        state="hidden",
+    )
     canvas.image = None
 
     state = {
         "win": win,
         "canvas": canvas,
         "image_id": image_id,
+        "focus_id": focus_id,
         "title_var": title_var,
         "prev_btn_id": prev_btn_id,
         "next_btn_id": next_btn_id,
@@ -730,6 +803,10 @@ def open_image_viewer(self, path):
         "index": start_index,
         "sw": sw,
         "sh": sh,
+        "zoom": 1.0,
+        "fit_zoom": 1.0,
+        "original_image": None,
+        "focus_bbox": focus_bbox,
     }
     self._viewer_state = state
 
@@ -748,6 +825,107 @@ def open_image_viewer(self, path):
         except Exception:
             pass
 
+    def _render_current_image():
+        original = state.get("original_image")
+        if original is None:
+            return
+        zoom = max(0.15, min(float(state.get("zoom") or 1.0), 5.0))
+        state["zoom"] = zoom
+        width = max(1, int(original.width * zoom))
+        height = max(1, int(original.height * zoom))
+        resized = original.resize((width, height), Image.Resampling.LANCZOS)
+        photo = ImageTk.PhotoImage(resized)
+        canvas.image = photo
+        canvas.itemconfigure(image_id, image=photo)
+        zoom_var.set(f"{zoom * 100:.0f}%")
+        _sync_image_position()
+        win.after_idle(_focus_selected_bbox)
+
+    def _set_zoom(zoom):
+        state["zoom"] = max(0.15, min(float(zoom), 5.0))
+        _render_current_image()
+
+    def _fit_image():
+        original = state.get("original_image")
+        if original is None:
+            return
+        canvas.update_idletasks()
+        available_w = max(1, canvas.winfo_width() - 20)
+        available_h = max(1, canvas.winfo_height() - 20)
+        fit_zoom = min(
+            available_w / max(1, original.width),
+            available_h / max(1, original.height),
+            1.0,
+        )
+        state["fit_zoom"] = max(0.15, fit_zoom)
+        _set_zoom(state["fit_zoom"])
+
+    def _focus_selected_bbox():
+        bbox = state.get("focus_bbox")
+        original = state.get("original_image")
+        current = getattr(canvas, "image", None)
+        if (
+            original is None
+            or current is None
+            or not isinstance(bbox, (list, tuple))
+            or len(bbox) != 4
+        ):
+            canvas.itemconfigure(focus_id, state="hidden")
+            return
+        try:
+            x1, y1, x2, y2 = [float(value) for value in bbox]
+        except (TypeError, ValueError):
+            canvas.itemconfigure(focus_id, state="hidden")
+            return
+
+        canvas.update_idletasks()
+        cw = max(1, canvas.winfo_width())
+        ch = max(1, canvas.winfo_height())
+        zoom = float(state.get("zoom") or 1.0)
+        target_w = max(1.0, (x2 - x1) * original.width / 1000.0)
+        target_h = max(1.0, (y2 - y1) * original.height / 1000.0)
+        desired_zoom = min(
+            5.0,
+            max(
+                float(state.get("fit_zoom") or 0.15),
+                min(cw * 0.72 / target_w, ch * 0.42 / target_h),
+            ),
+        )
+        if abs(desired_zoom - zoom) > 0.03:
+            state["zoom"] = desired_zoom
+            _render_current_image()
+            return
+
+        iw = current.width()
+        ih = current.height()
+        origin_x = max(cw / 2, iw / 2) - iw / 2
+        origin_y = max(ch / 2, ih / 2) - ih / 2
+        left = origin_x + x1 * iw / 1000.0
+        top = origin_y + y1 * ih / 1000.0
+        right = origin_x + x2 * iw / 1000.0
+        bottom = origin_y + y2 * ih / 1000.0
+        pad = 10
+        canvas.coords(
+            focus_id,
+            left - pad,
+            top - pad,
+            right + pad,
+            bottom + pad,
+        )
+        canvas.itemconfigure(focus_id, state="normal")
+        canvas.tag_raise(focus_id)
+
+        scrollregion = canvas.bbox("all")
+        if scrollregion:
+            total_w = max(cw, scrollregion[2] - scrollregion[0])
+            total_h = max(ch, scrollregion[3] - scrollregion[1])
+            center_x = (left + right) / 2
+            center_y = (top + bottom) / 2
+            if total_w > cw:
+                canvas.xview_moveto(max(0.0, min(1.0, (center_x - cw / 2) / total_w)))
+            if total_h > ch:
+                canvas.yview_moveto(max(0.0, min(1.0, (center_y - ch / 2) / total_h)))
+
     def _load_current_image():
         current_paths = list(state.get("paths") or [])
         if not current_paths:
@@ -756,22 +934,16 @@ def open_image_viewer(self, path):
         state["index"] = idx
         current_path = current_paths[idx]
         try:
-            img = Image.open(current_path)
+            img = Image.open(current_path).convert("RGB")
         except Exception as e:
             messagebox.showerror("Xem ảnh", f"Không mở được ảnh:\n{e}")
             return
-        img_copy = img.copy()
-        max_w = max(800, int(state["sw"]) - 120)
-        max_h = max(600, int(state["sh"]) - 180)
-        img_copy.thumbnail((max_w, max_h))
-        photo = ImageTk.PhotoImage(img_copy)
-        canvas.image = photo
-        canvas.itemconfigure(image_id, image=photo)
+        state["original_image"] = img.copy()
         title_var.set(f"{Path(current_path).name} ({idx + 1}/{len(current_paths)})")
         self.preview_image_index = idx
         self.image_path = current_path
         self._update_preview_counter()
-        _sync_image_position()
+        win.after_idle(_fit_image)
 
     def _move(delta):
         current_paths = list(state.get("paths") or [])
@@ -829,6 +1001,56 @@ def open_image_viewer(self, path):
     prev_btn.bind("<Leave>", _hover_off)
     next_btn.bind("<Enter>", _hover_on)
     next_btn.bind("<Leave>", _hover_off)
+
+    tk.Button(
+        toolbar,
+        text="−",
+        command=lambda: _set_zoom((state.get("zoom") or 1.0) / 1.2),
+        bg="#eef4ff",
+        fg=UI_TEXT,
+        relief="flat",
+        width=4,
+    ).pack(side="left")
+    tk.Label(
+        toolbar,
+        textvariable=zoom_var,
+        bg=UI_BG,
+        fg=UI_TEXT,
+        font=ui_font(10, bold=True),
+        width=7,
+    ).pack(side="left", padx=4)
+    tk.Button(
+        toolbar,
+        text="+",
+        command=lambda: _set_zoom((state.get("zoom") or 1.0) * 1.2),
+        bg="#eef4ff",
+        fg=UI_TEXT,
+        relief="flat",
+        width=4,
+    ).pack(side="left")
+    tk.Button(
+        toolbar,
+        text="Vừa màn hình",
+        command=_fit_image,
+        bg="#eef4ff",
+        fg=UI_TEXT,
+        relief="flat",
+        padx=12,
+    ).pack(side="left", padx=(8, 0))
+    tk.Label(
+        toolbar,
+        text="Ctrl + lăn chuột để zoom",
+        bg=UI_BG,
+        fg=UI_MUTED,
+        font=ui_font(9),
+    ).pack(side="right")
+
+    def _zoom_with_wheel(event):
+        factor = 1.12 if event.delta > 0 else (1 / 1.12)
+        _set_zoom((state.get("zoom") or 1.0) * factor)
+        return "break"
+
+    canvas.bind("<Control-MouseWheel>", _zoom_with_wheel)
 
     def _viewer_set_index(idx):
         state["index"] = idx
@@ -1235,6 +1457,8 @@ def install_ocr_ui(app_cls):
     app_cls.move_preview_image = move_preview_image
     app_cls.get_current_preview_image_path = get_current_preview_image_path
     app_cls.open_current_preview_image = open_current_preview_image
+    app_cls._source_image_context_for_selection = _source_image_context_for_selection
+    app_cls.show_source_image_for_selection = show_source_image_for_selection
     app_cls.set_image_path = set_image_path
     app_cls.set_image_paths = set_image_paths
     app_cls.append_image_paths = append_image_paths

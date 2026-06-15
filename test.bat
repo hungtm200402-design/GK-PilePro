@@ -18,3 +18,4 @@ if errorlevel 1 (
 echo.
 echo TEST OK: source Python compile duoc.
 pause
+

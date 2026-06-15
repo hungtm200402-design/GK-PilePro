@@ -610,11 +610,11 @@ def open_admin_approval_panel(self):
     stat_time_var = tk.StringVar(value="Cập nhật: --:--:--")
     stats_panel = RoundedPanel(
         sidebar,
-        height=72,
+        height=88,
         fill=SIDEBAR_BG,
         border="#16745a",
         radius=12,
-        padding=12,
+        padding=10,
     )
     stats_panel.pack(side="bottom", fill="x", padx=16, pady=(0, 12))
     stats_box = stats_panel.body

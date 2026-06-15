@@ -318,6 +318,21 @@ APP_DECOR_SIDEBAR_BOTTOM = Path("assets") / "goc_trai_moi.png.png"
 SERVER_OWNER_MACHINE_CODE = os.getenv("GK_PILEPRO_SERVER_OWNER", "").strip().upper()
 
 
+def _apply_initial_window_icon(window):
+    """Set the native icon before any loading UI is shown."""
+    try:
+        icon_file = resource_path(*APP_ICON_ICO.parts)
+        if not icon_file.exists():
+            return None
+        icon_path = str(icon_file)
+        window.iconbitmap(default=icon_path)
+        window.wm_iconbitmap(default=icon_path)
+        window._initial_icon_file = icon_file
+        return icon_file
+    except Exception:
+        return None
+
+
 
 
 
@@ -3777,11 +3792,11 @@ del "%~f0" >nul 2>nul
 
         status_card = RoundedPanel(
             sidebar,
-            height=72,
+            height=96,
             fill=sidebar_bg,
             border="#16745a",
             radius=12,
-            padding=12,
+            padding=10,
         )
         status_card.pack(fill="x", pady=(12, 0))
         status_inner = status_card.body
@@ -4553,6 +4568,18 @@ del "%~f0" >nul 2>nul
 
         self.table_editor = TableEditor(center_col)
         self.table_editor.on_change = self._on_ocr_table_change
+        self.table_editor.on_selection_change = (
+            lambda context: self.show_source_image_for_selection(
+                context,
+                open_viewer=False,
+            )
+        )
+        self.table_editor.on_compare_image = (
+            lambda context: self.show_source_image_for_selection(
+                context,
+                open_viewer=False,
+            )
+        )
         _pulse_startup_splash(self.root, force=True)
 
 
@@ -4591,6 +4618,7 @@ del "%~f0" >nul 2>nul
             font=ui_font(10),
         )
         self.daily_summary_text.pack(fill="x", expand=False, pady=(6, 0))
+        self._start_ocr_summary_sync()
 
         mapping_action_row = tk.Frame(right_col, bg=UI_SURFACE)
 
@@ -5124,8 +5152,67 @@ del "%~f0" >nul 2>nul
         return report
 
     def _on_ocr_table_change(self, tables=None):
-        self._refresh_daily_summary_panel(tables)
+        self._sync_ocr_summary_from_editor(force=True, fallback_tables=tables)
         self._refresh_ocr_validation()
+
+    def _ocr_summary_signature(self, tables):
+        comparable = []
+        for table in tables or []:
+            if not isinstance(table, dict):
+                continue
+            comparable.append(
+                {
+                    "columns": list(table.get("columns") or []),
+                    "rows": [
+                        list(row) if isinstance(row, (list, tuple)) else [row]
+                        for row in (table.get("rows") or [])
+                    ],
+                }
+            )
+        return json.dumps(
+            comparable,
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+
+    def _sync_ocr_summary_from_editor(self, force=False, fallback_tables=None):
+        editor = getattr(self, "table_editor", None)
+        latest_tables = (
+            editor.get_tables()
+            if editor is not None
+            else (
+                fallback_tables
+                if isinstance(fallback_tables, list)
+                else (self.tables or [])
+            )
+        )
+        signature = self._ocr_summary_signature(latest_tables)
+        if force or signature != getattr(self, "_last_ocr_summary_signature", None):
+            self.tables = latest_tables
+            self._last_ocr_summary_signature = signature
+            self._refresh_daily_summary_panel(latest_tables)
+        return latest_tables
+
+    def _start_ocr_summary_sync(self):
+        if getattr(self, "_ocr_summary_sync_started", False):
+            return
+        self._ocr_summary_sync_started = True
+
+        def sync_loop():
+            try:
+                self._sync_ocr_summary_from_editor()
+            except Exception:
+                pass
+            try:
+                self.root.after(250, sync_loop)
+            except Exception:
+                pass
+
+        try:
+            self.root.after(250, sync_loop)
+        except Exception:
+            self._ocr_summary_sync_started = False
 
     def _confirm_ocr_validation_before_export(self):
         report = self._refresh_ocr_validation()
@@ -5144,7 +5231,14 @@ del "%~f0" >nul 2>nul
 
         try:
 
-            tables_to_scan = tables if isinstance(tables, list) else (self.tables or [])
+            editor = getattr(self, "table_editor", None)
+            if editor is not None:
+                tables_to_scan = editor.get_tables()
+                self.tables = tables_to_scan
+            else:
+                tables_to_scan = (
+                    tables if isinstance(tables, list) else (self.tables or [])
+                )
 
             lines = build_static_jacking_daily_summary_lines(tables_to_scan)
 
@@ -6090,10 +6184,118 @@ from gk_pilepro.gk_overrides import install_app_overrides
 install_app_overrides(App)
 
 
+def _mapping_validation_report(self):
+    editor = getattr(self, "mapping_editor", None)
+    table_editor = getattr(self, "table_editor", None)
+    table = table_editor.get_current_table() if table_editor is not None else None
+    source_columns = list((table or {}).get("columns") or [])
+    rows = list((table or {}).get("rows") or [])
+    mapping = editor.get_mapping() if editor is not None else []
+    excel_headers = {
+        int(col_idx): str(name or "")
+        for col_idx, name in (getattr(self, "excel_headers", None) or [])
+    }
+
+    target_sources = {}
+    for source_idx, target_col in enumerate(mapping):
+        if target_col is None:
+            continue
+        target_sources.setdefault(int(target_col), []).append(source_idx)
+
+    duplicates = []
+    for target_col, source_indexes in target_sources.items():
+        if len(source_indexes) < 2:
+            continue
+        duplicates.append(
+            {
+                "target": excel_headers.get(target_col, f"Cột {target_col}"),
+                "sources": [
+                    source_columns[idx]
+                    for idx in source_indexes
+                    if idx < len(source_columns)
+                ],
+            }
+        )
+
+    important_tokens = (
+        "ngay", "date", "ten coc", "tim coc", "ma coc", "loai coc",
+        "pile", "d1", "d2", "d3", "d4", "d5", "d6", "chieu dai",
+        "do dai", "length", "so luong", "quantity", "khoi luong",
+        "weight", "luc ep", "tai ep", "load", "ghi chu", "note",
+    )
+    unmapped_important = []
+    for source_idx, source_name in enumerate(source_columns):
+        normalized = norm(source_name)
+        if normalized in {"stt", "so thu tu", "no", "no.", "tt"}:
+            continue
+        has_data = any(
+            source_idx < len(row)
+            and str(row[source_idx] or "").strip()
+            for row in rows
+            if isinstance(row, (list, tuple))
+        )
+        is_important = any(
+            normalized == token
+            or normalized.startswith(token + " ")
+            or token in normalized
+            for token in important_tokens
+        )
+        target = mapping[source_idx] if source_idx < len(mapping) else None
+        if has_data and is_important and target is None:
+            unmapped_important.append(str(source_name or f"Cột {source_idx + 1}"))
+
+    return {
+        "duplicates": duplicates,
+        "unmapped_important": unmapped_important,
+    }
+
+
+def _confirm_valid_mapping(self):
+    report = self._mapping_validation_report()
+    messages = []
+    if report["duplicates"]:
+        messages.append("Cột Excel đang bị nhiều cột OCR ghi đè:")
+        for item in report["duplicates"]:
+            messages.append(
+                f"- {item['target']}: {', '.join(item['sources'])}"
+            )
+    if report["unmapped_important"]:
+        if messages:
+            messages.append("")
+        messages.append("Cột quan trọng chưa mapping:")
+        messages.extend(f"- {name}" for name in report["unmapped_important"])
+    if not messages:
+        return True
+    messagebox.showwarning(
+        "Mapping chưa hợp lệ",
+        "\n".join(messages) + "\n\nHãy sửa mapping trước khi tiếp tục.",
+    )
+    self._set_status("Đã chặn thao tác vì mapping chưa hợp lệ.", "warn")
+    return False
+
+
+App._mapping_validation_report = _mapping_validation_report
+App._confirm_valid_mapping = _confirm_valid_mapping
+
+
+_preview_excel_without_mapping_validation = App.preview_excel
+
+
+def _preview_excel_with_mapping_validation(self):
+    if not self._confirm_valid_mapping():
+        return
+    return _preview_excel_without_mapping_validation(self)
+
+
+App.preview_excel = _preview_excel_with_mapping_validation
+
+
 _fill_excel_without_ocr_validation = App.fill_excel
 
 
 def _fill_excel_with_ocr_validation(self):
+    if not self._confirm_valid_mapping():
+        return
     if not self._confirm_ocr_validation_before_export():
         self._set_status(
             "Đã dừng xuất Excel để kiểm tra lại các dòng OCR nghi sai.",
@@ -6989,9 +7191,7 @@ def _startup_splash_process(
         except Exception:
             pass
         try:
-            icon_file = resource_path(*APP_ICON_ICO.parts)
-            if icon_file.exists():
-                splash_root.iconbitmap(default=str(icon_file))
+            _apply_initial_window_icon(splash_root)
         except Exception:
             pass
 
@@ -7636,6 +7836,7 @@ def main():
             pass
 
         root = tk.Tk()
+        _apply_initial_window_icon(root)
 
         try:
             root.withdraw()

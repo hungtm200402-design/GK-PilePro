@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
+import copy
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from openpyxl.utils import get_column_letter
+from PIL import Image, ImageTk
 
 from gk_pilepro.ui.gk_ui import (
     RoundedMappingDropdown,
@@ -16,6 +18,8 @@ from gk_pilepro.ui.gk_ui import (
 )
 
 from gk_pilepro.gk_excel import (
+    _static_jacking_to_float,
+    norm,
     short_header_name,
 )
 
@@ -648,6 +652,13 @@ class TableEditor(tk.Frame):
 
         self.active_cell = None
         self.on_change = None
+        self.on_selection_change = None
+        self.on_compare_image = None
+        self._selection_after_id = None
+        self._undo_stack = []
+        self._redo_stack = []
+        self._history_limit = 50
+        self._active_edit = None
         self.invalid_rows = set()
 
 
@@ -696,13 +707,53 @@ class TableEditor(tk.Frame):
 
         buttons.grid(row=0, column=2, sticky="e", pady=0)
 
+        ui_button(buttons, "Hoàn tác", self.undo, width=9, variant="soft").pack(side="left", padx=(0, 6))
+
+        ui_button(buttons, "Làm lại", self.redo, width=8, variant="soft").pack(side="left", padx=(0, 8))
+
         ui_button(buttons, "Thêm dòng", self.add_row, width=11, variant="soft").pack(side="left", padx=(0, 8))
 
         ui_button(buttons, "Xóa dòng", self.delete_row, width=10).pack(side="left", padx=(0, 8))
 
         ui_button(buttons, "Sửa ô", self.edit_selected_cell, width=10).pack(side="left", padx=(0, 8))
 
-        ui_button(buttons, "Xóa ô", self.clear_selected_cell, width=9).pack(side="left")
+        ui_button(buttons, "Xóa ô", self.clear_selected_cell, width=9).pack(side="left", padx=(0, 8))
+
+        ui_button(
+            buttons,
+            "Đối chiếu ảnh",
+            self.compare_selected_image,
+            width=12,
+            variant="soft",
+        ).pack(side="left")
+
+        self.source_crop_frame = tk.Frame(
+            self,
+            bg="#f8fbff",
+            highlightthickness=1,
+            highlightbackground=UI_BORDER,
+        )
+        self.source_crop_title = tk.Label(
+            self.source_crop_frame,
+            text="ẢNH DÒNG GỐC",
+            bg="#f8fbff",
+            fg=UI_MUTED,
+            font=("Segoe UI", 9, "bold"),
+            anchor="w",
+        )
+        self.source_crop_title.pack(fill="x", padx=8, pady=(5, 2))
+        self.source_crop_label = tk.Label(
+            self.source_crop_frame,
+            bg="#ffffff",
+            fg=UI_MUTED,
+            text="Click một ô để hiện đúng dòng ảnh gốc tại đây.",
+            font=("Segoe UI", 10),
+            anchor="center",
+            height=4,
+        )
+        self.source_crop_label.pack(fill="x", padx=8, pady=(0, 7))
+        self.source_crop_frame.pack(fill="x", pady=(0, 8))
+        self._source_crop_photo = None
 
 
 
@@ -788,6 +839,10 @@ class TableEditor(tk.Frame):
         self.tree.bind("<MouseWheel>", self._on_tree_mousewheel)
 
         self.tree.bind("<Shift-MouseWheel>", self._on_tree_shift_mousewheel)
+        self.tree.bind("<Control-z>", lambda _e: self.undo())
+        self.tree.bind("<Control-Z>", lambda _e: self.undo())
+        self.tree.bind("<Control-y>", lambda _e: self.redo())
+        self.tree.bind("<Control-Y>", lambda _e: self.redo())
 
 
 
@@ -944,6 +999,8 @@ class TableEditor(tk.Frame):
     def set_tables(self, tables):
 
         self.tables = tables or []
+        self._undo_stack = []
+        self._redo_stack = []
 
         self.current = 0
 
@@ -1073,6 +1130,27 @@ class TableEditor(tk.Frame):
 
             return
 
+        active_edit = getattr(self, "_active_edit", None)
+        if isinstance(active_edit, dict):
+            entry = active_edit.get("entry")
+            item = active_edit.get("item")
+            idx = active_edit.get("index")
+            try:
+                if (
+                    entry is not None
+                    and entry.winfo_exists()
+                    and item in self.tree.get_children()
+                    and isinstance(idx, int)
+                    and idx >= 0
+                ):
+                    values = list(self.tree.item(item, "values"))
+                    values += [""] * (idx + 1 - len(values))
+                    values[idx] = entry.get()
+                    self.tree.item(item, values=values)
+                    self._recalculate_combination_length(item, idx)
+            except Exception:
+                pass
+
         rows = []
 
         for item in self.tree.get_children():
@@ -1080,6 +1158,71 @@ class TableEditor(tk.Frame):
             rows.append(list(self.tree.item(item, "values")))
 
         self.tables[self.current]["rows"] = rows
+
+
+    def _recalculate_combination_length(self, item, changed_index):
+
+        columns = list(self.tree["columns"] or [])
+        if not columns or changed_index < 0 or changed_index >= len(columns):
+
+            return False
+
+        segment_names = {f"d{number}" for number in range(1, 7)}
+        if norm(columns[changed_index]) not in segment_names:
+
+            return False
+
+        target_names = {
+            "chieu dai to hop coc",
+            "tong chieu dai to hop coc",
+            "chieu dai coc",
+            "pile combination length",
+        }
+        target_index = next(
+            (
+                index
+                for index, name in enumerate(columns)
+                if norm(name) in target_names
+            ),
+            None,
+        )
+        if target_index is None:
+
+            return False
+
+        values = list(self.tree.item(item, "values"))
+        values += [""] * max(0, len(columns) - len(values))
+        total = 0.0
+        has_segment = False
+
+        for index, name in enumerate(columns):
+            if norm(name) not in segment_names:
+                continue
+            raw_value = str(values[index] or "").strip()
+            if not raw_value:
+                continue
+            number = _static_jacking_to_float(raw_value)
+            if number is None:
+                return False
+            total += number
+            has_segment = True
+
+        if not has_segment:
+            total_value = ""
+        elif abs(total - round(total)) < 1e-9:
+            total_value = str(int(round(total)))
+        else:
+            total_value = (
+                f"{total:.3f}".rstrip("0").rstrip(".").replace(".", ",")
+            )
+
+        if str(values[target_index] or "") == total_value:
+
+            return False
+
+        values[target_index] = total_value
+        self.tree.item(item, values=values)
+        return True
 
 
 
@@ -1102,6 +1245,69 @@ class TableEditor(tk.Frame):
         return self.tables[self.current]
 
 
+    def _history_snapshot(self):
+
+        self.sync_current_from_tree()
+
+        return {
+            "tables": copy.deepcopy(self.tables),
+            "current": self.current,
+        }
+
+
+    def _push_undo(self):
+
+        if not self.tables:
+
+            return
+
+        self._undo_stack.append(self._history_snapshot())
+        if len(self._undo_stack) > self._history_limit:
+            del self._undo_stack[0]
+        self._redo_stack = []
+
+
+    def _restore_history_snapshot(self, snapshot):
+
+        self.tables = copy.deepcopy(snapshot.get("tables") or [])
+        self.current = max(
+            0,
+            min(int(snapshot.get("current") or 0), max(0, len(self.tables) - 1)),
+        )
+        names = [
+            table.get("title") or f"Bảng {idx + 1}"
+            for idx, table in enumerate(self.tables)
+        ]
+        self.combo["values"] = names
+        if names:
+            self.combo.current(self.current)
+        self.active_cell = None
+        self.render()
+        self._notify_change()
+
+
+    def undo(self):
+
+        if not self._undo_stack:
+
+            return "break"
+
+        self._redo_stack.append(self._history_snapshot())
+        self._restore_history_snapshot(self._undo_stack.pop())
+        return "break"
+
+
+    def redo(self):
+
+        if not self._redo_stack:
+
+            return "break"
+
+        self._undo_stack.append(self._history_snapshot())
+        self._restore_history_snapshot(self._redo_stack.pop())
+        return "break"
+
+
 
     def add_row(self):
 
@@ -1109,6 +1315,7 @@ class TableEditor(tk.Frame):
 
             return
 
+        self._push_undo()
         cols = self.tables[self.current]["columns"]
 
         idx = len(self.tree.get_children())
@@ -1116,6 +1323,12 @@ class TableEditor(tk.Frame):
         tag = "preview_even" if idx % 2 else "preview_odd"
 
         self.tree.insert("", "end", values=[""] * len(cols), tags=(tag,))
+        row_sources = self.tables[self.current].setdefault("_row_source_indexes", [])
+        row_sources.append(None)
+        self.tables[self.current].setdefault("_row_bboxes", []).append(None)
+        self.tables[self.current].setdefault("_cell_bboxes", []).append(
+            [None] * len(cols)
+        )
 
         self.tree.after_idle(self._refresh_preview_grid)
 
@@ -1126,9 +1339,31 @@ class TableEditor(tk.Frame):
 
     def delete_row(self):
 
-        for item in self.tree.selection():
+        selected = list(self.tree.selection())
+        if not selected:
+            return
+        self._push_undo()
+        children = list(self.tree.get_children())
+        deleted_indexes = sorted(
+            (children.index(item) for item in selected if item in children),
+            reverse=True,
+        )
+
+        for item in selected:
 
             self.tree.delete(item)
+
+        row_sources = self.tables[self.current].get("_row_source_indexes")
+        if isinstance(row_sources, list):
+            for row_index in deleted_indexes:
+                if 0 <= row_index < len(row_sources):
+                    row_sources.pop(row_index)
+        for metadata_key in ("_row_bboxes", "_cell_bboxes"):
+            metadata = self.tables[self.current].get(metadata_key)
+            if isinstance(metadata, list):
+                for row_index in deleted_indexes:
+                    if 0 <= row_index < len(metadata):
+                        metadata.pop(row_index)
 
         self.sync_current_from_tree()
         self._notify_change()
@@ -1144,6 +1379,129 @@ class TableEditor(tk.Frame):
         if item and col:
 
             self.active_cell = (item, col)
+            callback = getattr(self, "on_selection_change", None)
+            if callable(callback):
+                try:
+                    if self._selection_after_id is not None:
+                        self.after_cancel(self._selection_after_id)
+                    context = self.get_selected_context()
+                    self._selection_after_id = self.after(
+                        240,
+                        lambda: self._dispatch_selection_change(callback, context),
+                    )
+                except Exception:
+                    pass
+
+
+    def _dispatch_selection_change(self, callback, context):
+
+        self._selection_after_id = None
+
+        try:
+
+            callback(context)
+
+        except Exception:
+
+            pass
+
+
+    def get_selected_context(self):
+
+        if not self.active_cell:
+
+            return None
+
+        item, col = self.active_cell
+        children = list(self.tree.get_children())
+
+        if item not in children:
+
+            return None
+
+        row_index = children.index(item)
+        col_index = max(0, int(str(col).replace("#", "")) - 1)
+        columns = list(self.tree["columns"] or [])
+        values = list(self.tree.item(item, "values"))
+
+        return {
+            "table_index": self.current,
+            "row_index": row_index,
+            "column_index": col_index,
+            "column": columns[col_index] if col_index < len(columns) else "",
+            "value": values[col_index] if col_index < len(values) else "",
+        }
+
+
+    def compare_selected_image(self):
+
+        callback = getattr(self, "on_compare_image", None)
+
+        if callable(callback):
+
+            try:
+
+                callback(self.get_selected_context())
+
+            except Exception:
+
+                pass
+
+
+    def show_source_row_crop(self, image_path, bbox, context=None):
+
+        if not image_path or not bbox or len(bbox) != 4:
+            self._source_crop_photo = None
+            self.source_crop_label.configure(
+                image="",
+                text="Dòng này chưa có tọa độ ảnh. Hãy OCR lại ảnh bằng bản mới.",
+                height=4,
+            )
+            return
+
+        try:
+            source = Image.open(image_path).convert("RGB")
+            x1, y1, x2, y2 = [float(value) for value in bbox]
+            left = int(source.width * x1 / 1000.0)
+            top = int(source.height * y1 / 1000.0)
+            right = int(source.width * x2 / 1000.0)
+            bottom = int(source.height * y2 / 1000.0)
+
+            row_height = max(1, bottom - top)
+            pad_x = max(12, int(source.width * 0.012))
+            pad_y = max(10, int(row_height * 0.8))
+            crop_box = (
+                max(0, left - pad_x),
+                max(0, top - pad_y),
+                min(source.width, right + pad_x),
+                min(source.height, bottom + pad_y),
+            )
+            crop = source.crop(crop_box)
+
+            self.update_idletasks()
+            display_width = max(420, self.winfo_width() - 20)
+            display_height = max(80, min(180, int(display_width * crop.height / max(1, crop.width))))
+            crop.thumbnail((display_width, display_height), Image.Resampling.LANCZOS)
+            self._source_crop_photo = ImageTk.PhotoImage(crop)
+
+            row_number = int((context or {}).get("row_index", 0)) + 1
+            column = str((context or {}).get("column") or "").strip()
+            title = f"ẢNH DÒNG GỐC - Dòng {row_number}"
+            if column:
+                title += f" - Ô {column}"
+            self.source_crop_title.configure(text=title)
+            self.source_crop_label.configure(
+                image=self._source_crop_photo,
+                text="",
+                height=0,
+            )
+        except Exception as exc:
+            self._source_crop_photo = None
+            self.source_crop_label.configure(
+                image="",
+                text=f"Không cắt được ảnh dòng gốc: {exc}",
+                height=4,
+            )
 
 
 
@@ -1201,9 +1559,13 @@ class TableEditor(tk.Frame):
 
         vals += [""] * (idx + 1 - len(vals))
 
+        if not vals[idx]:
+            return
+        self._push_undo()
         vals[idx] = ""
 
         self.tree.item(item, values=vals)
+        self._recalculate_combination_length(item, idx)
 
         self.sync_current_from_tree()
         self._notify_change()
@@ -1211,6 +1573,18 @@ class TableEditor(tk.Frame):
 
 
     def edit_cell(self, event):
+
+        try:
+
+            if self._selection_after_id is not None:
+
+                self.after_cancel(self._selection_after_id)
+
+                self._selection_after_id = None
+
+        except Exception:
+
+            pass
 
         item = self.tree.identify_row(event.y)
 
@@ -1254,36 +1628,86 @@ class TableEditor(tk.Frame):
 
 
 
-        ent = tk.Entry(self.tree)
+        edit_var = tk.StringVar(value=str(old))
+        ent = tk.Entry(self.tree, textvariable=edit_var)
+        self._active_edit = {
+            "entry": ent,
+            "item": item,
+            "index": idx,
+        }
 
         ent.place(x=x, y=y, width=w, height=h)
-
-        ent.insert(0, old)
 
         ent.focus()
 
         ent.select_range(0, "end")
 
+        edit_state = {
+            "done": False,
+            "history_pushed": False,
+            "last_value": str(old),
+        }
 
 
-        def save(_=None):
+        def apply_value(new_value):
+
+            new_value = str(new_value)
+            if new_value == edit_state["last_value"]:
+
+                return
+
+            if not edit_state["history_pushed"]:
+
+                self._push_undo()
+                edit_state["history_pushed"] = True
 
             vals2 = list(self.tree.item(item, "values"))
 
             vals2 += [""] * (idx + 1 - len(vals2))
 
-            vals2[idx] = ent.get()
+            vals2[idx] = new_value
 
             self.tree.item(item, values=vals2)
+            self._recalculate_combination_length(item, idx)
 
-            ent.destroy()
-
+            edit_state["last_value"] = new_value
             self.sync_current_from_tree()
             self._notify_change()
 
 
+        def save(_=None):
+
+            if edit_state["done"]:
+
+                return
+
+            apply_value(ent.get())
+            edit_state["done"] = True
+            self._active_edit = None
+
+            ent.destroy()
+
+
 
         def cancel(_=None):
+
+            if edit_state["done"]:
+
+                return
+
+            edit_state["done"] = True
+            self._active_edit = None
+            if edit_state["last_value"] != str(old):
+
+                vals2 = list(self.tree.item(item, "values"))
+                vals2 += [""] * (idx + 1 - len(vals2))
+                vals2[idx] = old
+                self.tree.item(item, values=vals2)
+                self._recalculate_combination_length(item, idx)
+                self.sync_current_from_tree()
+                self._notify_change()
+                if edit_state["history_pushed"] and self._undo_stack:
+                    self._undo_stack.pop()
 
             ent.destroy()
 
@@ -1294,3 +1718,4 @@ class TableEditor(tk.Frame):
         ent.bind("<FocusOut>", save)
 
         ent.bind("<Escape>", cancel)
+        edit_var.trace_add("write", lambda *_args: apply_value(edit_var.get()))
