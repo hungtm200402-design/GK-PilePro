@@ -3593,6 +3593,17 @@ del "%~f0" >nul 2>nul
                         "unmapped": max(0, total - mapped),
                         "total": total,
                     }
+            try:
+                report = self._mapping_validation_report()
+                data_unmapped = len(report.get("unmapped_with_data", []))
+                total_with_data = int(report.get("source_with_data_count", 0) or 0)
+                if total_with_data > 0:
+                    stats = dict(stats)
+                    stats["unmapped"] = data_unmapped
+                    stats["mapped"] = max(0, total_with_data - data_unmapped)
+                    stats["total"] = total_with_data
+            except Exception:
+                pass
             mapped = max(0, int(stats.get("mapped", 0)))
             unmapped = max(0, int(stats.get("unmapped", 0)))
             total = max(0, int(stats.get("total", mapped + unmapped)))
@@ -4185,11 +4196,11 @@ del "%~f0" >nul 2>nul
 
         toolbar_inner.pack(fill="x")
 
-        toolbar_inner.grid_columnconfigure(0, weight=6, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(0, weight=1, uniform="toolbar")
 
-        toolbar_inner.grid_columnconfigure(1, weight=3, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(1, weight=1, uniform="toolbar")
 
-        toolbar_inner.grid_columnconfigure(2, weight=2, uniform="toolbar")
+        toolbar_inner.grid_columnconfigure(2, weight=1, uniform="toolbar")
 
         toolbar_gap = 3 if self.tiny_ui else 4
 
@@ -4258,7 +4269,7 @@ del "%~f0" >nul 2>nul
 
         ]
 
-        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE, button_width=0, max_per_row=6, single_row=True)
+        make_group(toolbar_inner, 0, "NGUỒN DỮ LIỆU", source_btns, UI_SURFACE, button_width=0, max_per_row=3)
 
         process_btns = [
             ("Đọc bảng", self.run_gemini, "soft", "20_action_read_table.png"),
@@ -4270,7 +4281,8 @@ del "%~f0" >nul 2>nul
 
         export_btns = [
             ("Xem trước", self.preview_excel, "soft", "23_action_preview.png"),
-            ("Xuất Excel" if self.compact_ui else "Xuất ra Excel", self.fill_excel, "success", "24_action_export_excel.png"),
+            ("1 Click", self.one_click_export_excel, "success", "24_action_export_excel.png"),
+            ("Xuất Excel", self.fill_excel, "success", "24_action_export_excel.png"),
         ]
 
         make_group(toolbar_inner, 2, "XEM & XUẤT", export_btns, UI_SURFACE, button_width=0, single_row=True)
@@ -4694,7 +4706,14 @@ del "%~f0" >nul 2>nul
 
         self.mapping_editor = MappingEditor(right_col)
         self.mapping_editor.on_mapping_change = (
-            lambda stats: self._refresh_mapping_stats(stats, schedule=False)
+            lambda stats: (
+                self._refresh_mapping_stats(stats, schedule=False),
+                setattr(
+                    self,
+                    "_user_touched_mapping",
+                    True,
+                ) if not getattr(self, "_mapping_programmatic_update", False) else None,
+            )
         )
         _pulse_startup_splash(self.root, force=True)
 
@@ -5708,6 +5727,7 @@ del "%~f0" >nul 2>nul
         self.current_workflow_date = None
         self.current_workflow_label = None
         self.current_doc_kind = None
+        self._user_touched_mapping = False
         self.image_paths = []
         self.preview_image_index = 0
         self.excel_recent_selected_key = None
@@ -5784,6 +5804,113 @@ del "%~f0" >nul 2>nul
             pass
 
         self._set_status("Đã đặt lại Excel, ảnh OCR, preview và mapping.", "success")
+
+
+    def one_click_export_excel(self):
+        image_paths = list(
+            getattr(self, "image_paths", None)
+            or ([] if not getattr(self, "image_path", None) else [self.image_path])
+        )
+
+        if not image_paths:
+            messagebox.showwarning("Thiếu ảnh", "Bạn chưa chọn ảnh OCR.")
+            self._set_status("Chưa có ảnh để chạy 1 click.", "warn")
+            return
+
+        if not getattr(self, "excel_path", None):
+            messagebox.showwarning("Thiếu Excel", "Bạn chưa chọn file Excel.")
+            self._set_status("Chưa có Excel để chạy 1 click.", "warn")
+            return
+
+        api_key = self.api_key_var.get().strip()
+        if not api_key:
+            messagebox.showwarning("Thiếu khóa API", "Bạn chưa nhập khóa API.")
+            self._set_status("Chưa có API key để chạy OCR.", "warn")
+            return
+
+        if getattr(self, "_is_reading_table", False):
+            messagebox.showwarning(
+                "Đang đọc OCR",
+                "Tool đang đọc bảng. Vui lòng chờ tác vụ hiện tại hoàn tất rồi bấm lại.",
+            )
+            self._set_status("1 click chưa chạy vì OCR đang xử lý.", "warn")
+            return
+
+        def _handle_one_click_error(exc):
+            out = last_run_dir()
+            out.mkdir(exist_ok=True)
+            (out / "last_error_one_click_export.txt").write_text(
+                traceback.format_exc(),
+                encoding="utf-8",
+            )
+            write_role_error_log("one_click_export_excel", exc)
+            messagebox.showerror(
+                "Lỗi 1 click",
+                "Có lỗi khi chạy 1 click. Xem last_run_v12/last_error_one_click_export.txt",
+            )
+            self._set_status("Lỗi khi chạy 1 click.", "error")
+
+        def _continue_after_ocr():
+            try:
+                if getattr(self, "_is_reading_table", False):
+                    self.root.after(350, _continue_after_ocr)
+                    return
+
+                table_editor = getattr(self, "table_editor", None)
+                table = table_editor.get_current_table() if table_editor is not None else None
+                rows = list((table or {}).get("rows") or [])
+                if not rows:
+                    messagebox.showwarning(
+                        "Chưa có dữ liệu OCR",
+                        "OCR chưa trả về dòng dữ liệu nào. Hãy kiểm tra ảnh hoặc đọc lại.",
+                    )
+                    self._set_status("1 click dừng: OCR chưa có dữ liệu.", "warn")
+                    return
+
+                _save_ocr_structure_learning_from_current(self)
+                self._set_status("1 click: đang auto map...", "warn")
+                self.root.update()
+                self.build_mapping()
+
+                if not self._ensure_mapping_ready_for_output("one_click_preview"):
+                    self._set_status("1 click dừng: mapping chưa xong.", "warn")
+                    return
+
+                report = self._refresh_ocr_validation()
+                invalid_rows = list(report.get("invalid_rows") or [])
+                if invalid_rows:
+                    details = self._format_ocr_validation_details(report)
+                    messagebox.showwarning(
+                        "Dữ liệu OCR cần kiểm tra",
+                        f"Độ hợp lệ dữ liệu: {report.get('accuracy', 0.0):.1f}%\n"
+                        f"Có {len(invalid_rows)} dòng nghi sai:\n\n"
+                        f"{details}\n\n"
+                        "1 click đã dừng để bạn sửa dữ liệu trước khi xem trước.",
+                    )
+                    self._set_status("1 click dừng: OCR còn dòng nghi sai.", "warn")
+                    return
+
+                self._set_status("1 click: dữ liệu sạch, đang tạo file xem trước...", "warn")
+                self.root.update()
+                self.preview_excel()
+            except Exception as exc:
+                _handle_one_click_error(exc)
+
+        try:
+            self.tables = []
+            table_editor = getattr(self, "table_editor", None)
+            if table_editor is not None:
+                table_editor.set_tables([])
+            mapping_editor = getattr(self, "mapping_editor", None)
+            if mapping_editor is not None:
+                mapping_editor.clear()
+
+            self._set_status("1 click: đang đọc OCR...", "warn")
+            self.root.update()
+            self.run_gemini()
+            self.root.after(350, _continue_after_ocr)
+        except Exception as exc:
+            _handle_one_click_error(exc)
 
 
     def _clipboard_text_widget_has_focus(self):
@@ -6296,13 +6423,8 @@ def _mapping_validation_report(self):
             }
         )
 
-    important_tokens = (
-        "ngay", "date", "ten coc", "tim coc", "ma coc", "loai coc",
-        "pile", "d1", "d2", "d3", "d4", "d5", "d6", "chieu dai",
-        "do dai", "length", "so luong", "quantity", "khoi luong",
-        "weight", "luc ep", "tai ep", "load", "ghi chu", "note",
-    )
-    unmapped_important = []
+    unmapped_with_data = []
+    source_with_data_count = 0
     for source_idx, source_name in enumerate(source_columns):
         normalized = norm(source_name)
         if normalized in {"stt", "so thu tu", "no", "no.", "tt"}:
@@ -6313,19 +6435,17 @@ def _mapping_validation_report(self):
             for row in rows
             if isinstance(row, (list, tuple))
         )
-        is_important = any(
-            normalized == token
-            or normalized.startswith(token + " ")
-            or token in normalized
-            for token in important_tokens
-        )
+        if has_data:
+            source_with_data_count += 1
         target = mapping[source_idx] if source_idx < len(mapping) else None
-        if has_data and is_important and target is None:
-            unmapped_important.append(str(source_name or f"Cột {source_idx + 1}"))
+        if has_data and target is None:
+            unmapped_with_data.append(str(source_name or f"Cột {source_idx + 1}"))
 
     return {
         "duplicates": duplicates,
-        "unmapped_important": unmapped_important,
+        "unmapped_important": unmapped_with_data,
+        "unmapped_with_data": unmapped_with_data,
+        "source_with_data_count": source_with_data_count,
     }
 
 
@@ -6341,29 +6461,626 @@ def _confirm_valid_mapping(self):
     if report["unmapped_important"]:
         if messages:
             messages.append("")
-        messages.append("Cột quan trọng chưa mapping:")
+        messages.append("Cột OCR có dữ liệu chưa mapping:")
         messages.extend(f"- {name}" for name in report["unmapped_important"])
     if not messages:
         return True
-    messagebox.showwarning(
-        "Mapping chưa hợp lệ",
-        "\n".join(messages) + "\n\nHãy sửa mapping trước khi tiếp tục.",
-    )
-    self._set_status("Đã chặn thao tác vì mapping chưa hợp lệ.", "warn")
-    return False
+    try:
+        self._set_status(
+            f"Mapping còn {len(report.get('unmapped_important', []))} cột chưa map, vẫn tiếp tục.",
+            "warn",
+        )
+    except Exception:
+        pass
+    return True
 
 
 App._mapping_validation_report = _mapping_validation_report
 App._confirm_valid_mapping = _confirm_valid_mapping
 
 
+def _ensure_mapping_ready_for_output(self, context="preview"):
+    try:
+        self.build_mapping()
+    except Exception as exc:
+        write_role_error_log("ensure_mapping_ready_build", exc, {"context": context})
+
+    report = self._mapping_validation_report()
+    duplicates = list(report.get("duplicates") or [])
+    unmapped = list(report.get("unmapped_with_data") or report.get("unmapped_important") or [])
+    if not duplicates and not unmapped:
+        return True
+
+    parts = []
+    if unmapped:
+        shown = ", ".join(unmapped[:5])
+        if len(unmapped) > 5:
+            shown += f", +{len(unmapped) - 5}"
+        parts.append(f"còn {len(unmapped)} cột OCR chưa map: {shown}")
+    if duplicates:
+        parts.append(f"có {len(duplicates)} cột Excel bị map trùng")
+    self._set_status(
+        "Chưa tạo xem trước: " + "; ".join(parts) + ".",
+        "warn",
+    )
+    return False
+
+
+App._ensure_mapping_ready_for_output = _ensure_mapping_ready_for_output
+
+
+def _learned_mapping_path():
+    return app_data_path("tool_kl_learned_mapping.json")
+
+
+def _learned_excel_structure_path():
+    return app_data_path("tool_kl_excel_structure_learning.json")
+
+
+def _learned_ocr_structure_path():
+    return app_data_path("tool_kl_ocr_structure_learning.json")
+
+
+def _safe_norm_list(values):
+    return [norm(value) for value in values if str(value or "").strip()]
+
+
+def _excel_structure_signature(profile):
+    payload = {
+        "sheet": norm((profile or {}).get("sheet")),
+        "header_row": (profile or {}).get("header_row"),
+        "stt_col": (profile or {}).get("stt_col"),
+        "headers": _safe_norm_list((profile or {}).get("headers") or []),
+        "formula_columns": _safe_norm_list((profile or {}).get("formula_columns") or []),
+    }
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _ocr_structure_signature(profile):
+    payload = {
+        "title": norm((profile or {}).get("title")),
+        "columns": _safe_norm_list((profile or {}).get("columns") or []),
+        "column_count": (profile or {}).get("column_count"),
+        "row_shape": (profile or {}).get("row_shape"),
+        "value_kinds": list((profile or {}).get("value_kinds") or []),
+    }
+    text = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _load_ocr_structure_learning():
+    try:
+        path = _learned_ocr_structure_path()
+        if not path.exists():
+            return {"version": 1, "profiles": {}}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"version": 1, "profiles": {}}
+        data.setdefault("version", 1)
+        data.setdefault("profiles", {})
+        if not isinstance(data["profiles"], dict):
+            data["profiles"] = {}
+        return data
+    except Exception:
+        return {"version": 1, "profiles": {}}
+
+
+def _save_ocr_structure_learning(data):
+    try:
+        path = _learned_ocr_structure_path()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        write_role_error_log("save_ocr_structure_learning", exc)
+
+
+def _ocr_value_family(value):
+    text = str(value or "").strip()
+    if not text:
+        return "blank"
+    compact = text.replace(" ", "").replace(".", "").replace(",", ".")
+    if re.fullmatch(r"-?\d+(\.\d+)?", compact):
+        return "number"
+    if re.search(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", text):
+        return "date"
+    if re.search(r"[A-Za-zÀ-ỹ]", text) and re.search(r"\d", text):
+        return "mixed"
+    if re.search(r"[A-Za-zÀ-ỹ]", text):
+        return "text"
+    return "other"
+
+
+def _current_ocr_structure_profile(self):
+    table = None
+    try:
+        editor = getattr(self, "table_editor", None)
+        table = editor.get_current_table() if editor is not None else None
+    except Exception:
+        table = None
+    table = table or {}
+    columns = [str(col or "") for col in list(table.get("columns") or [])]
+    rows = list(table.get("rows") or [])
+    sample_rows = [row for row in rows[:8] if isinstance(row, (list, tuple))]
+    value_kinds = []
+    for col_idx in range(len(columns)):
+        kinds = []
+        for row in sample_rows[:5]:
+            if col_idx < len(row):
+                kinds.append(_ocr_value_family(row[col_idx]))
+        value_kinds.append("/".join(kinds[:5]))
+    image_paths = list(
+        getattr(self, "image_paths", None)
+        or ([] if not getattr(self, "image_path", None) else [self.image_path])
+    )
+    profile = {
+        "title": str(table.get("title") or ""),
+        "columns": columns,
+        "column_count": len(columns),
+        "row_count": len(rows),
+        "row_shape": [len(row) for row in sample_rows[:8]],
+        "value_kinds": value_kinds,
+        "image_count": len(image_paths),
+        "doc_kind": str(getattr(self, "current_doc_kind", "") or ""),
+    }
+    profile["signature"] = _ocr_structure_signature(profile)
+    return profile
+
+
+def _save_ocr_structure_learning_from_current(self):
+    try:
+        profile = _current_ocr_structure_profile(self)
+        if not profile.get("columns"):
+            return ""
+        data = _load_ocr_structure_learning()
+        profiles = data.setdefault("profiles", {})
+        signature = profile.get("signature")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        existing = profiles.get(signature) or {}
+        profile["first_seen"] = existing.get("first_seen") or now
+        profile["last_seen"] = now
+        profile["seen_count"] = int(existing.get("seen_count", 0) or 0) + 1
+        profiles[signature] = profile
+        ranked = sorted(
+            profiles.items(),
+            key=lambda kv: (int((kv[1] or {}).get("seen_count", 0) or 0), str((kv[1] or {}).get("last_seen", ""))),
+            reverse=True,
+        )
+        data["profiles"] = dict(ranked[:300])
+        data["updated_at"] = now
+        _save_ocr_structure_learning(data)
+        try:
+            self._current_ocr_structure_signature = signature
+        except Exception:
+            pass
+        return signature
+    except Exception as exc:
+        write_role_error_log("save_ocr_structure_learning_current", exc)
+        return ""
+
+
+def _load_excel_structure_learning():
+    try:
+        path = _learned_excel_structure_path()
+        if not path.exists():
+            return {"version": 1, "profiles": {}}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"version": 1, "profiles": {}}
+        data.setdefault("version", 1)
+        data.setdefault("profiles", {})
+        if not isinstance(data["profiles"], dict):
+            data["profiles"] = {}
+        return data
+    except Exception:
+        return {"version": 1, "profiles": {}}
+
+
+def _save_excel_structure_learning(data):
+    try:
+        path = _learned_excel_structure_path()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        write_role_error_log("save_excel_structure_learning", exc)
+
+
+def _current_excel_structure_profile(self):
+    excel_headers = list(getattr(self, "excel_headers", []) or [])
+    headers = [str(name or "") for _col, name in excel_headers]
+    sheet = ""
+    try:
+        sheet = str(self.sheet_var.get() or "")
+    except Exception:
+        sheet = ""
+
+    logic_sheet = {}
+    try:
+        logic_path = last_run_dir() / "excel_formula_logic.json"
+        if logic_path.exists():
+            logic = json.loads(logic_path.read_text(encoding="utf-8"))
+            for item in logic.get("sheets", []) or []:
+                if str(item.get("sheet") or "") == sheet:
+                    logic_sheet = item
+                    break
+    except Exception:
+        logic_sheet = {}
+
+    formula_columns = []
+    for item in logic_sheet.get("formula_columns", []) or []:
+        label = str(item.get("header") or item.get("col") or "").strip()
+        if label:
+            formula_columns.append(label)
+
+    total_formulas = []
+    for item in logic_sheet.get("total_formulas", []) or []:
+        text = str(item.get("formula") or "").strip()
+        cell = str(item.get("cell") or "").strip()
+        header = str(item.get("header") or "").strip()
+        if text or cell or header:
+            total_formulas.append({"cell": cell, "header": header, "formula": text})
+
+    profile = {
+        "file_name": Path(str(getattr(self, "excel_path", "") or "")).name,
+        "file_path": str(getattr(self, "excel_path", "") or ""),
+        "sheet": sheet,
+        "header_row": getattr(self, "header_row", None) or logic_sheet.get("header_row"),
+        "total_row": logic_sheet.get("total_row"),
+        "stt_col": logic_sheet.get("stt_col"),
+        "headers": headers,
+        "header_count": len(headers),
+        "formula_columns": formula_columns,
+        "total_formulas": total_formulas[:40],
+    }
+    profile["signature"] = _excel_structure_signature(profile)
+    return profile
+
+
+def _save_excel_structure_learning_from_current(self):
+    try:
+        profile = _current_excel_structure_profile(self)
+        if not profile.get("headers"):
+            return ""
+        data = _load_excel_structure_learning()
+        profiles = data.setdefault("profiles", {})
+        signature = profile.get("signature")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        existing = profiles.get(signature) or {}
+        profile["first_seen"] = existing.get("first_seen") or now
+        profile["last_seen"] = now
+        profile["seen_count"] = int(existing.get("seen_count", 0) or 0) + 1
+        profiles[signature] = profile
+        ranked = sorted(
+            profiles.items(),
+            key=lambda kv: (int((kv[1] or {}).get("seen_count", 0) or 0), str((kv[1] or {}).get("last_seen", ""))),
+            reverse=True,
+        )
+        data["profiles"] = dict(ranked[:200])
+        data["updated_at"] = now
+        _save_excel_structure_learning(data)
+        try:
+            self._current_excel_structure_signature = signature
+        except Exception:
+            pass
+        return signature
+    except Exception as exc:
+        write_role_error_log("save_excel_structure_learning_current", exc)
+        return ""
+
+
+def _load_learned_mapping():
+    try:
+        path = _learned_mapping_path()
+        if not path.exists():
+            return {"version": 1, "pairs": {}}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"version": 1, "pairs": {}}
+        data.setdefault("version", 1)
+        data.setdefault("pairs", {})
+        if not isinstance(data["pairs"], dict):
+            data["pairs"] = {}
+        return data
+    except Exception:
+        return {"version": 1, "pairs": {}}
+
+
+def _save_learned_mapping(data):
+    try:
+        path = _learned_mapping_path()
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        write_role_error_log("save_learned_mapping", exc)
+
+
+def _current_mapping_learning_pairs(self):
+    editor = getattr(self, "mapping_editor", None)
+    if editor is None:
+        return []
+    source_cols = list(getattr(editor, "table_cols", []) or [])
+    excel_headers = list(getattr(editor, "excel_headers", []) or getattr(self, "excel_headers", []) or [])
+    mapping = editor.get_mapping() if hasattr(editor, "get_mapping") else []
+    header_by_col = {}
+    for col_idx, name in excel_headers:
+        try:
+            header_by_col[int(col_idx)] = str(name or "")
+        except Exception:
+            pass
+    pairs = []
+    for source_idx, source_name in enumerate(source_cols):
+        target_col = mapping[source_idx] if source_idx < len(mapping) else None
+        if target_col is None:
+            continue
+        try:
+            target_col = int(target_col)
+        except Exception:
+            continue
+        target_name = header_by_col.get(target_col, "")
+        if not target_name:
+            continue
+        pairs.append({
+            "source": str(source_name or ""),
+            "source_norm": norm(source_name),
+            "target_col": target_col,
+            "target": target_name,
+            "target_norm": norm(target_name),
+        })
+    return pairs
+
+
+def _save_mapping_learning(self, context="mapping"):
+    pairs = _current_mapping_learning_pairs(self)
+    if not pairs:
+        return 0
+    structure_signature = (
+        getattr(self, "_current_excel_structure_signature", "")
+        or _save_excel_structure_learning_from_current(self)
+        or ""
+    )
+    ocr_signature = (
+        getattr(self, "_current_ocr_structure_signature", "")
+        or _save_ocr_structure_learning_from_current(self)
+        or ""
+    )
+    data = _load_learned_mapping()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    excel_name = Path(str(getattr(self, "excel_path", "") or "")).name
+    store = data.setdefault("pairs", {})
+    for pair in pairs:
+        source_norm = str(pair.get("source_norm") or "").strip()
+        target_norm = str(pair.get("target_norm") or "").strip()
+        if not source_norm or not target_norm:
+            continue
+        key_prefix = f"{structure_signature or 'excel_unknown'}|{ocr_signature or 'ocr_unknown'}"
+        key = f"{key_prefix}|{source_norm}=>{target_norm}"
+        item = store.get(key) or {
+            "source_norm": source_norm,
+            "target_norm": target_norm,
+            "structure_signature": structure_signature,
+            "ocr_structure_signature": ocr_signature,
+            "source_examples": [],
+            "target_examples": [],
+            "count": 0,
+        }
+        item["count"] = int(item.get("count", 0) or 0) + 1
+        item["last_seen"] = now
+        item["last_context"] = context
+        item["last_excel"] = excel_name
+        item["structure_signature"] = structure_signature
+        item["ocr_structure_signature"] = ocr_signature
+        source_example = str(pair.get("source") or "")
+        target_example = str(pair.get("target") or "")
+        for field, value in (("source_examples", source_example), ("target_examples", target_example)):
+            examples = list(item.get(field) or [])
+            if value and value not in examples:
+                examples.insert(0, value)
+            item[field] = examples[:8]
+        store[key] = item
+    data["updated_at"] = now
+    # Keep the learning file small and biased toward repeated recent behavior.
+    ranked = sorted(
+        store.items(),
+        key=lambda kv: (int((kv[1] or {}).get("count", 0) or 0), str((kv[1] or {}).get("last_seen", ""))),
+        reverse=True,
+    )
+    data["pairs"] = dict(ranked[:500])
+    _save_learned_mapping(data)
+    return len(pairs)
+
+
+def _schedule_mapping_learning(self, context="mapping_change"):
+    try:
+        pending = getattr(self, "_mapping_learning_after_id", None)
+        if pending:
+            self.root.after_cancel(pending)
+    except Exception:
+        pass
+
+    def _learn():
+        try:
+            self._mapping_learning_after_id = None
+            report = self._mapping_validation_report()
+            if report.get("duplicates") or report.get("unmapped_with_data"):
+                return
+            _save_mapping_learning(self, context)
+        except Exception as exc:
+            write_role_error_log("schedule_mapping_learning", exc)
+
+    try:
+        self._mapping_learning_after_id = self.root.after(2500, _learn)
+    except Exception:
+        pass
+
+
+def _learned_auto_map_indices(self, source_cols, excel_headers, current_indices=None):
+    source_cols = list(source_cols or [])
+    excel_headers = list(excel_headers or [])
+    current_indices = list(current_indices or [None] * len(source_cols))
+    if len(current_indices) < len(source_cols):
+        current_indices.extend([None] * (len(source_cols) - len(current_indices)))
+
+    target_index_by_norm = {}
+    for target_idx, (_col_idx, name) in enumerate(excel_headers):
+        target_norm = norm(name)
+        if target_norm and target_norm not in target_index_by_norm:
+            target_index_by_norm[target_norm] = target_idx
+
+    structure_signature = (
+        getattr(self, "_current_excel_structure_signature", "")
+        or _save_excel_structure_learning_from_current(self)
+        or ""
+    )
+    ocr_signature = (
+        getattr(self, "_current_ocr_structure_signature", "")
+        or _save_ocr_structure_learning_from_current(self)
+        or ""
+    )
+    if not structure_signature or not ocr_signature:
+        return current_indices, 0
+    learned = _load_learned_mapping().get("pairs", {})
+    best_by_source = {}
+    for item in learned.values():
+        if not isinstance(item, dict):
+            continue
+        source_norm = str(item.get("source_norm") or "").strip()
+        target_norm = str(item.get("target_norm") or "").strip()
+        if not source_norm or target_norm not in target_index_by_norm:
+            continue
+        if item.get("structure_signature") != structure_signature:
+            continue
+        if item.get("ocr_structure_signature") != ocr_signature:
+            continue
+        count = int(item.get("count", 0) or 0)
+        score = 100000 + count
+        previous = best_by_source.get(source_norm)
+        if previous is None or score > previous["score"]:
+            best_by_source[source_norm] = {
+                "target_index": target_index_by_norm[target_norm],
+                "count": count,
+                "score": score,
+                "target_norm": target_norm,
+            }
+
+    applied = 0
+    result = list(current_indices)
+    for idx, source_name in enumerate(source_cols):
+        match = best_by_source.get(norm(source_name))
+        if not match:
+            continue
+        # One-shot only applies when both Excel and OCR/image structures match.
+        if result[idx] is None or match.get("score", 0) >= 100000:
+            if result[idx] != match["target_index"]:
+                result[idx] = match["target_index"]
+                applied += 1
+    return result, applied
+
+
+_build_mapping_without_learning = App.build_mapping
+
+
+def _build_mapping_with_learning(self):
+    previous_programmatic = getattr(self, "_mapping_programmatic_update", False)
+    self._mapping_programmatic_update = True
+    try:
+        result = _build_mapping_without_learning(self)
+    finally:
+        self._mapping_programmatic_update = previous_programmatic
+    try:
+        table = self.table_editor.get_current_table()
+        source_cols = list((table or {}).get("columns") or [])
+        excel_headers = list(getattr(self, "excel_headers", []) or [])
+        editor = getattr(self, "mapping_editor", None)
+        if not source_cols or not excel_headers or editor is None:
+            return result
+        current_mapping = editor.get_mapping()
+        target_idx_by_col = {}
+        for target_idx, (col_idx, _name) in enumerate(excel_headers):
+            try:
+                target_idx_by_col[int(col_idx)] = target_idx
+            except Exception:
+                pass
+        current_indices = [
+            target_idx_by_col.get(int(col)) if col is not None else None
+            for col in current_mapping
+        ]
+        learned_indices, applied = _learned_auto_map_indices(
+            self,
+            source_cols,
+            excel_headers,
+            current_indices=current_indices,
+        )
+        if applied:
+            previous_programmatic = getattr(self, "_mapping_programmatic_update", False)
+            self._mapping_programmatic_update = True
+            try:
+                editor.set_mapping(source_cols, excel_headers, learned_indices)
+            finally:
+                self._mapping_programmatic_update = previous_programmatic
+            self._refresh_mapping_stats(schedule=False)
+            self._set_status(f"Đã tự áp {applied} mapping đã học từ các lần trước.", "success")
+    except Exception as exc:
+        write_role_error_log("apply_learned_mapping", exc)
+    return result
+
+
+App.build_mapping = _build_mapping_with_learning
+
+
+_save_current_mapping_template_without_learning = App.save_current_mapping_template
+
+
+def _save_current_mapping_template_with_learning(self):
+    before_templates = json.dumps(
+        getattr(self, "mapping_templates", []) or [],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    result = _save_current_mapping_template_without_learning(self)
+    after_templates = json.dumps(
+        getattr(self, "mapping_templates", []) or [],
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+    learned_count = _save_mapping_learning(self, "save_mapping_template") if after_templates != before_templates else 0
+    if learned_count:
+        try:
+            self._set_status(f"Đã lưu mẫu và học {learned_count} cặp mapping.", "success")
+        except Exception:
+            pass
+        self._user_touched_mapping = False
+    return result
+
+
+App.save_current_mapping_template = _save_current_mapping_template_with_learning
+
+
 _preview_excel_without_mapping_validation = App.preview_excel
 
 
 def _preview_excel_with_mapping_validation(self):
-    if not self._confirm_valid_mapping():
+    if not self._ensure_mapping_ready_for_output("preview"):
         return
-    return _preview_excel_without_mapping_validation(self)
+    preview_path = last_run_dir() / "preview_sau_khi_ghep.xlsx"
+    before_mtime = None
+    try:
+        before_mtime = preview_path.stat().st_mtime if preview_path.exists() else None
+    except Exception:
+        before_mtime = None
+    result = _preview_excel_without_mapping_validation(self)
+    preview_ok = False
+    try:
+        preview_ok = preview_path.exists() and preview_path.stat().st_mtime != before_mtime
+    except Exception:
+        preview_ok = False
+    if preview_ok and getattr(self, "_user_touched_mapping", False):
+        learned_count = _save_mapping_learning(self, "preview_excel")
+        if learned_count:
+            try:
+                self._set_status(f"Đã tạo xem trước và học {learned_count} cặp mapping.", "success")
+            except Exception:
+                pass
+            self._user_touched_mapping = False
+    return result
 
 
 App.preview_excel = _preview_excel_with_mapping_validation
@@ -6373,7 +7090,7 @@ _fill_excel_without_ocr_validation = App.fill_excel
 
 
 def _fill_excel_with_ocr_validation(self):
-    if not self._confirm_valid_mapping():
+    if not self._ensure_mapping_ready_for_output("export_excel"):
         return
     if not self._confirm_ocr_validation_before_export():
         self._set_status(
@@ -6381,10 +7098,344 @@ def _fill_excel_with_ocr_validation(self):
             "warn",
         )
         return
-    return _fill_excel_without_ocr_validation(self)
+    before_history_len = len(getattr(self, "history_entries", []) or [])
+    result = _fill_excel_without_ocr_validation(self)
+    latest_history = None
+    try:
+        entries = list(getattr(self, "history_entries", []) or [])
+        if len(entries) > before_history_len:
+            latest_history = entries[0] if entries else None
+    except Exception:
+        latest_history = None
+    exported_ok = str((latest_history or {}).get("action") or "").lower() == "export_excel"
+    learned_count = _save_mapping_learning(self, "export_excel") if exported_ok else 0
+    if learned_count:
+        try:
+            self._set_status(f"Đã học {learned_count} cặp mapping cho lần sau.", "success")
+        except Exception:
+            pass
+        self._user_touched_mapping = False
+    return result
 
 
 App.fill_excel = _fill_excel_with_ocr_validation
+
+
+_choose_excel_without_auto_one_click = App.choose_excel
+_choose_image_without_auto_one_click = App.choose_image
+_set_image_paths_without_auto_one_click = App.set_image_paths
+_load_excel_file_without_auto_one_click = App._load_excel_file
+
+
+def _ocr_straightened_image_path(source_path):
+    try:
+        source = Path(source_path)
+        out = last_run_dir() / "straightened_images"
+        out.mkdir(parents=True, exist_ok=True)
+        stamp = hashlib.sha1(f"{source}|{source.stat().st_mtime_ns}|{source.stat().st_size}".encode("utf-8")).hexdigest()[:12]
+        return out / f"{source.stem[:48]}_{stamp}_straight.png"
+    except Exception:
+        out = last_run_dir() / "straightened_images"
+        out.mkdir(parents=True, exist_ok=True)
+        return out / f"{new_workflow_id()}_straight.png"
+
+
+def _dominant_grid_angle(gray):
+    try:
+        import cv2
+        import numpy as np
+
+        h, w = gray.shape[:2]
+        scale = min(1.0, 1400.0 / max(1, max(h, w)))
+        work = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA) if scale < 1 else gray
+        blur = cv2.GaussianBlur(work, (3, 3), 0)
+        edges = cv2.Canny(blur, 50, 150, apertureSize=3)
+        min_len = max(80, int(min(work.shape[:2]) * 0.20))
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=90, minLineLength=min_len, maxLineGap=18)
+        if lines is None:
+            return 0.0
+
+        candidates = []
+        for line in lines[:, 0]:
+            x1, y1, x2, y2 = [float(v) for v in line]
+            length = math.hypot(x2 - x1, y2 - y1)
+            if length < min_len:
+                continue
+            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+            while angle <= -45:
+                angle += 90
+            while angle > 45:
+                angle -= 90
+            if abs(angle) <= 18:
+                candidates.append((angle, length))
+        if not candidates:
+            return 0.0
+        total = sum(length for _, length in candidates) or 1.0
+        return sum(angle * length for angle, length in candidates) / total
+    except Exception as exc:
+        write_role_error_log("dominant_grid_angle", exc)
+        return 0.0
+
+
+def _should_rotate_landscape_table(gray):
+    try:
+        import cv2
+        import numpy as np
+
+        h, w = gray.shape[:2]
+        if h <= w * 1.08:
+            return False
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(
+            blur,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            35,
+            11,
+        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        ink = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
+        points = cv2.findNonZero(ink)
+        if points is None:
+            return False
+        x, y, bw, bh = cv2.boundingRect(points)
+        content_ratio = bh / max(1, bw)
+        black_ratio = float(np.count_nonzero(ink)) / max(1, ink.size)
+        return content_ratio > 1.08 and black_ratio > 0.015
+    except Exception as exc:
+        write_role_error_log("rotate_landscape_table_check", exc)
+        return False
+
+
+def _straighten_ocr_image_file(source_path):
+    try:
+        import cv2
+        import numpy as np
+        from PIL import ImageOps
+
+        source = Path(source_path)
+        if not source.exists():
+            return str(source_path)
+        if source.parent.name == "straightened_images" and source.name.lower().endswith("_straight.png"):
+            return str(source)
+        target = _ocr_straightened_image_path(source)
+        if target.exists():
+            return str(target)
+
+        pil_img = ImageOps.exif_transpose(Image.open(source)).convert("RGB")
+        img = np.array(pil_img)
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        rotated = False
+        if _should_rotate_landscape_table(gray):
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            rotated = True
+
+        angle = _dominant_grid_angle(gray)
+        deskewed = False
+        if abs(angle) >= 0.35:
+            h, w = img.shape[:2]
+            matrix = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+            cos = abs(matrix[0, 0])
+            sin = abs(matrix[0, 1])
+            new_w = int((h * sin) + (w * cos))
+            new_h = int((h * cos) + (w * sin))
+            matrix[0, 2] += (new_w / 2) - w / 2
+            matrix[1, 2] += (new_h / 2) - h / 2
+            img = cv2.warpAffine(
+                img,
+                matrix,
+                (new_w, new_h),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(255, 255, 255),
+            )
+            deskewed = True
+
+        if rotated or deskewed:
+            Image.fromarray(img).save(target, "PNG", optimize=True)
+            return str(target)
+        return str(source)
+    except Exception as exc:
+        write_role_error_log("straighten_ocr_image_file", exc)
+        return str(source_path)
+
+
+def _straighten_ocr_image_paths(paths):
+    cleaned = [str(p) for p in (paths or []) if str(p or "").strip()]
+    return [_straighten_ocr_image_file(path) for path in cleaned]
+
+
+def _current_image_batch_id(self):
+    return int(getattr(self, "_auto_image_batch_id", 0) or 0)
+
+
+def _mark_excel_confirmed_for_auto(self):
+    batch_id = _current_image_batch_id(self)
+    image_paths = list(
+        getattr(self, "image_paths", None)
+        or ([] if not getattr(self, "image_path", None) else [self.image_path])
+    )
+    self._auto_excel_confirmed_path = str(getattr(self, "excel_path", "") or "")
+    self._auto_excel_confirmed_image_batch = batch_id
+    self._auto_excel_pending_next_image = not bool(image_paths)
+
+
+def _excel_confirmed_for_current_images(self):
+    excel_path = str(getattr(self, "excel_path", "") or "")
+    if not excel_path:
+        return False
+    confirmed_path = str(getattr(self, "_auto_excel_confirmed_path", "") or "")
+    if confirmed_path != excel_path:
+        return False
+    return int(getattr(self, "_auto_excel_confirmed_image_batch", -1) or -1) == _current_image_batch_id(self)
+
+
+def _image_paths_are_append(before, after):
+    if not before or len(after) < len(before):
+        return False
+    return tuple(after[: len(before)]) == tuple(before)
+
+
+def _mark_image_batch_changed_for_auto(self, before, after):
+    before = tuple(before or ())
+    after = tuple(after or ())
+    if before == after:
+        return
+    if not _image_paths_are_append(before, after):
+        self._auto_image_batch_id = _current_image_batch_id(self) + 1
+    elif not before:
+        self._auto_image_batch_id = _current_image_batch_id(self) + 1
+
+    if getattr(self, "_auto_excel_pending_next_image", False) and getattr(self, "excel_path", None):
+        self._auto_excel_confirmed_image_batch = _current_image_batch_id(self)
+        self._auto_excel_pending_next_image = False
+
+
+def _has_one_click_inputs(self):
+    image_paths = list(
+        getattr(self, "image_paths", None)
+        or ([] if not getattr(self, "image_path", None) else [self.image_path])
+    )
+    return bool(
+        image_paths
+        and getattr(self, "excel_path", None)
+        and self.api_key_var.get().strip()
+    )
+
+
+def _schedule_auto_one_click_if_ready(self, source=""):
+    if getattr(self, "_auto_one_click_scheduled", False):
+        return
+    if getattr(self, "_is_reading_table", False):
+        return
+    if not _has_one_click_inputs(self):
+        return
+    if not _excel_confirmed_for_current_images(self):
+        try:
+            self._set_status("Đã có ảnh mới. Chọn Excel cho lượt này rồi tool mới tự chạy.", "warn")
+        except Exception:
+            pass
+        return
+
+    self._auto_one_click_scheduled = True
+
+    def _run():
+        self._auto_one_click_scheduled = False
+        if getattr(self, "_is_reading_table", False):
+            self.root.after(350, lambda: _schedule_auto_one_click_if_ready(self, source))
+            return
+        if not _has_one_click_inputs(self):
+            return
+        if not _excel_confirmed_for_current_images(self):
+            try:
+                self._set_status("Chưa tự chạy: Excel cũ chưa được xác nhận cho ảnh mới.", "warn")
+            except Exception:
+                pass
+            return
+        if not getattr(self, "excel_headers", None):
+            _prepare_excel_after_selection(self)
+        self._set_status("Đã đủ Excel và ảnh, tự chạy 1 click...", "warn")
+        self.one_click_export_excel()
+
+    self.root.after(250, _run)
+
+
+def _prepare_excel_after_selection(self):
+    if not getattr(self, "excel_path", None):
+        return
+    try:
+        self._set_status("Đang đọc lại Excel và công thức...", "warn")
+        self.root.update()
+    except Exception:
+        pass
+
+    try:
+        self.read_current_excel_formulas()
+    except Exception as exc:
+        write_role_error_log("auto_read_formula_after_selection", exc)
+
+    try:
+        self.refresh_excel_header_info()
+    except Exception as exc:
+        write_role_error_log("auto_refresh_excel_after_selection", exc)
+
+    try:
+        sig = _save_excel_structure_learning_from_current(self)
+        if sig:
+            self._set_status("Đã học cấu trúc Excel và sẵn sàng mapping.", "success")
+    except Exception as exc:
+        write_role_error_log("auto_save_excel_structure_learning", exc)
+
+
+def _choose_excel_with_auto_one_click(self):
+    return _choose_excel_without_auto_one_click(self)
+
+
+def _load_excel_file_with_auto_one_click(self, *args, **kwargs):
+    result = _load_excel_file_without_auto_one_click(self, *args, **kwargs)
+    if getattr(self, "excel_path", None):
+        _mark_excel_confirmed_for_auto(self)
+        _prepare_excel_after_selection(self)
+        _schedule_auto_one_click_if_ready(self, "excel")
+    return result
+
+
+def _choose_image_with_auto_one_click(self):
+    before = tuple(getattr(self, "image_paths", None) or [])
+    result = _choose_image_without_auto_one_click(self)
+    after = tuple(getattr(self, "image_paths", None) or [])
+    if after and after != before:
+        if getattr(self, "excel_path", None) and _excel_confirmed_for_current_images(self):
+            _prepare_excel_after_selection(self)
+        _schedule_auto_one_click_if_ready(self, "image")
+    return result
+
+
+def _set_image_paths_with_auto_one_click(self, paths, status_prefix="Đã chọn ảnh: "):
+    before = tuple(getattr(self, "image_paths", None) or [])
+    straight_paths = _straighten_ocr_image_paths(paths)
+    result = _set_image_paths_without_auto_one_click(self, straight_paths, status_prefix=status_prefix)
+    after = tuple(getattr(self, "image_paths", None) or [])
+    if after and after != before:
+        _mark_image_batch_changed_for_auto(self, before, after)
+        if tuple(straight_paths) != tuple(str(p) for p in (paths or []) if str(p or "").strip()):
+            try:
+                self._set_status("Đã tự căn thẳng ảnh trước khi đọc OCR.", "success")
+            except Exception:
+                pass
+        if getattr(self, "excel_path", None) and _excel_confirmed_for_current_images(self):
+            _prepare_excel_after_selection(self)
+        _schedule_auto_one_click_if_ready(self, "image")
+    return result
+
+
+App._load_excel_file = _load_excel_file_with_auto_one_click
+App.choose_excel = _choose_excel_with_auto_one_click
+App.choose_image = _choose_image_with_auto_one_click
+App.set_image_paths = _set_image_paths_with_auto_one_click
 
 
 def _canvas_round_rect(canvas, x1, y1, x2, y2, radius=12, **kwargs):

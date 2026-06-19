@@ -1469,7 +1469,13 @@ class TableEditor(tk.Frame):
 
             row_height = max(1, bottom - top)
             pad_x = max(12, int(source.width * 0.012))
-            pad_y = max(4, int(row_height * 0.25))
+            min_row_height = max(36, int(source.height * 0.028))
+            if row_height < min_row_height:
+                center = (top + bottom) // 2
+                top = max(0, center - min_row_height // 2)
+                bottom = min(source.height, center + min_row_height // 2)
+                row_height = max(1, bottom - top)
+            pad_y = max(8, int(row_height * 0.35))
             crop_box = (
                 max(0, left - pad_x),
                 max(0, top - pad_y),
@@ -1480,7 +1486,7 @@ class TableEditor(tk.Frame):
 
             self.update_idletasks()
             display_width = max(420, self.winfo_width() - 20)
-            display_height = max(80, min(180, int(display_width * crop.height / max(1, crop.width))))
+            display_height = max(118, min(240, int(display_width * crop.height / max(1, crop.width))))
             crop.thumbnail((display_width, display_height), Image.Resampling.LANCZOS)
             self._source_crop_photo = ImageTk.PhotoImage(crop)
 

@@ -100,6 +100,32 @@ def _select_even_line_window(lines, needed, min_pos, max_pos):
     return best or []
 
 
+def _select_grid_lines(lines, needed, min_pos, max_pos):
+    candidates = [float(line) for line in lines if min_pos <= line <= max_pos]
+    if len(candidates) < needed:
+        return []
+    candidates = sorted(candidates)
+    best = None
+    best_score = None
+    for start in range(0, len(candidates) - needed + 1):
+        window = candidates[start:start + needed]
+        gaps = [window[i + 1] - window[i] for i in range(len(window) - 1)]
+        if not gaps:
+            continue
+        sorted_gaps = sorted(gaps)
+        median = sorted_gaps[len(sorted_gaps) // 2]
+        if median <= 4:
+            continue
+        variance = sum(abs(gap - median) for gap in gaps) / len(gaps)
+        span = window[-1] - window[0]
+        edge_score = abs(window[0] - min_pos) * 0.005 + abs(max_pos - window[-1]) * 0.002
+        score = variance - span * 0.01 + edge_score
+        if best is None or score < best_score:
+            best = window
+            best_score = score
+    return best or []
+
+
 def _bbox_from_thumb(left, top, right, bottom, width, height):
     return [
         max(0.0, min(1000.0, left * 1000.0 / max(1, width))),
@@ -109,9 +135,98 @@ def _bbox_from_thumb(left, top, right, bottom, width, height):
     ]
 
 
+def _opencv_table_grid_bboxes(image_path, row_count, column_count):
+    try:
+        import cv2
+        import numpy as np
+
+        img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return [], []
+        h, w = img.shape[:2]
+        scale = min(1.0, 1600.0 / max(1, max(h, w)))
+        if scale < 1:
+            work = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            work = img
+        th = cv2.adaptiveThreshold(
+            work,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            35,
+            12,
+        )
+        wh, ww = work.shape[:2]
+        horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(30, ww // 18), 1))
+        vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(25, wh // 22)))
+        horizontal = cv2.morphologyEx(th, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+        vertical = cv2.morphologyEx(th, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+
+        h_profile = np.count_nonzero(horizontal, axis=1)
+        v_profile = np.count_nonzero(vertical, axis=0)
+        h_hits = [idx for idx, value in enumerate(h_profile) if value >= ww * 0.22]
+        v_hits = [idx for idx, value in enumerate(v_profile) if value >= wh * 0.16]
+        h_lines = _merge_line_candidates(h_hits, max_gap=max(2, int(4 * scale)))
+        v_lines = _merge_line_candidates(v_hits, max_gap=max(2, int(4 * scale)))
+
+        needed_y = row_count + 2
+        y_lines = _select_grid_lines(h_lines, needed_y, wh * 0.08, wh * 0.98)
+        if not y_lines:
+            y_lines = _select_even_line_window(h_lines, needed_y, wh * 0.12, wh * 0.98)
+        if not y_lines:
+            return [], []
+
+        needed_x = max(2, column_count + 1)
+        x_lines = _select_grid_lines(v_lines, needed_x, ww * 0.01, ww * 0.99)
+        if not x_lines:
+            x_lines = _select_even_line_window(v_lines, needed_x, ww * 0.01, ww * 0.99)
+        if not x_lines:
+            contours, _hier = cv2.findContours(cv2.bitwise_or(horizontal, vertical), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            boxes = [cv2.boundingRect(c) for c in contours]
+            boxes = [box for box in boxes if box[2] > ww * 0.25 and box[3] > wh * 0.20]
+            if boxes:
+                x, y, bw, bh = max(boxes, key=lambda box: box[2] * box[3])
+                x_lines = [x, x + bw]
+        if not x_lines:
+            return [], []
+
+        row_bboxes = []
+        cell_bboxes = []
+        pad_y = max(1.0, min(6.0, (y_lines[-1] - y_lines[0]) / max(1, row_count) * 0.08))
+        for row_idx in range(row_count):
+            top = y_lines[row_idx + 1]
+            bottom = y_lines[row_idx + 2] if row_idx + 2 < len(y_lines) else y_lines[-1]
+            if bottom <= top:
+                continue
+            safe_top = max(0.0, top - pad_y)
+            safe_bottom = min(float(wh), bottom + pad_y)
+            row_bboxes.append(_bbox_from_thumb(x_lines[0], safe_top, x_lines[-1], safe_bottom, ww, wh))
+            row_cells = []
+            if len(x_lines) >= column_count + 1:
+                for col_idx in range(column_count):
+                    left = x_lines[col_idx]
+                    right = x_lines[col_idx + 1]
+                    row_cells.append(_bbox_from_thumb(left, safe_top, right, safe_bottom, ww, wh))
+            else:
+                step = (x_lines[-1] - x_lines[0]) / max(1, column_count)
+                for col_idx in range(column_count):
+                    left = x_lines[0] + step * col_idx
+                    right = x_lines[0] + step * (col_idx + 1)
+                    row_cells.append(_bbox_from_thumb(left, safe_top, right, safe_bottom, ww, wh))
+            cell_bboxes.append(row_cells)
+        return row_bboxes, cell_bboxes
+    except Exception as exc:
+        write_role_error_log("opencv_table_grid_bboxes", exc)
+        return [], []
+
+
 def _fallback_table_grid_bboxes(image_path, row_count, column_count):
     if row_count <= 0:
         return [], []
+    cv_rows, cv_cells = _opencv_table_grid_bboxes(image_path, row_count, column_count)
+    if len(cv_rows) >= row_count:
+        return cv_rows[:row_count], cv_cells[:row_count]
     try:
         img = Image.open(image_path).convert("L")
         thumb = img.copy()
@@ -239,6 +354,24 @@ def _fallback_cell_bboxes_for_image(image_path, row_count, column_count):
     return cell_bboxes
 
 
+def _bbox_needs_grid_fallback(bbox):
+    if not bbox or len(bbox) != 4:
+        return True
+    try:
+        x1, y1, x2, y2 = [float(value) for value in bbox]
+        width = x2 - x1
+        height = y2 - y1
+        if width <= 120 or height <= 8:
+            return True
+        if height > 95:
+            return True
+        if y1 < 120 or y2 > 990:
+            return True
+        return False
+    except Exception:
+        return True
+
+
 def ensure_table_image_metadata(table, image_index=0, image_path=None, allow_fallback=True):
     if not isinstance(table, dict):
         return table
@@ -281,15 +414,16 @@ def ensure_table_image_metadata(table, image_index=0, image_path=None, allow_fal
     if allow_fallback and image_path:
         needs_row_fallback = not row_bboxes or not any(row_bboxes)
         needs_cell_fallback = not cell_bboxes or not any(any(row_cells) for row_cells in cell_bboxes)
-        if needs_row_fallback or needs_cell_fallback:
+        needs_tight_row_fallback = any(_bbox_needs_grid_fallback(bbox) for bbox in row_bboxes)
+        if needs_row_fallback or needs_cell_fallback or needs_tight_row_fallback:
             fallback_rows, fallback_cells = _fallback_table_grid_bboxes(
                 image_path,
                 row_count,
                 column_count,
             )
-            if needs_row_fallback:
+            if needs_row_fallback or needs_tight_row_fallback:
                 row_bboxes = fallback_rows
-            if needs_cell_fallback:
+            if needs_cell_fallback or needs_tight_row_fallback:
                 cell_bboxes = fallback_cells
     table["_row_bboxes"] = row_bboxes
     table["_cell_bboxes"] = cell_bboxes
@@ -1244,7 +1378,14 @@ def show_source_image_for_selection(self, context=None, open_viewer=False):
             if bbox and len(bbox) == 4:
                 y1 = float(bbox[1])
                 y2 = float(bbox[3])
-                needs_fallback = y1 < 260 or (y2 - y1) > 120
+                x1 = float(bbox[0])
+                x2 = float(bbox[2])
+                needs_fallback = (
+                    y1 < 120
+                    or (y2 - y1) < 10
+                    or (y2 - y1) > 120
+                    or (x2 - x1) < 180
+                )
         except Exception:
             needs_fallback = True
         if needs_fallback:
