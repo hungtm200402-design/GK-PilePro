@@ -1469,7 +1469,7 @@ class TableEditor(tk.Frame):
 
             row_height = max(1, bottom - top)
             pad_x = max(12, int(source.width * 0.012))
-            pad_y = max(10, int(row_height * 0.8))
+            pad_y = max(4, int(row_height * 0.25))
             crop_box = (
                 max(0, left - pad_x),
                 max(0, top - pad_y),

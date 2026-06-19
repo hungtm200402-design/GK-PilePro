@@ -31,6 +31,7 @@ DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 DEFAULT_DB = Path("presence_state.db")
 USER_EXE_NAME = "GK PilePro.exe"
+USER_UPDATE_INFO_CACHE = {}
 
 
 DB_LOCK = threading.Lock()
@@ -42,6 +43,21 @@ def file_sha256(path: Path):
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def cached_file_sha256(path: Path):
+    try:
+        resolved = Path(path).resolve()
+        stat = resolved.stat()
+        signature = (str(resolved), int(stat.st_size), int(stat.st_mtime))
+        cached = USER_UPDATE_INFO_CACHE.get("sha256")
+        if cached and cached.get("signature") == signature:
+            return cached.get("sha") or ""
+        sha = file_sha256(resolved)
+        USER_UPDATE_INFO_CACHE["sha256"] = {"signature": signature, "sha": sha}
+        return sha
+    except Exception:
+        return file_sha256(path)
 
 
 def user_update_exe_path():
@@ -450,7 +466,7 @@ class PresenceHandler(BaseHTTPRequestHandler):
                     "filename": USER_EXE_NAME,
                     "size": stat.st_size,
                     "mtime": int(stat.st_mtime),
-                    "sha256": file_sha256(exe_path),
+                    "sha256": cached_file_sha256(exe_path),
                     "download_url": "/updates/user-exe",
                 }
             )

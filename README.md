@@ -83,3 +83,18 @@ specs/legacy/          Spec build cu de tham khao
 pyi_hooks/             Hook PyInstaller
 runtime_data/          Du lieu tam/legacy da tach khoi root
 ```
+
+## Phan chia pham vi lam viec
+
+Xem `handoff/` de gui source cho tung nguoi theo mang. Moi folder trong `handoff/` co README rieng cho nguoi phu trach.
+
+Tai lieu tong hop nam o `docs/OWNERSHIP.md`.
+
+- User Client
+- Admin Client
+- Presence/Update Server
+- Gemini OCR Service
+- Excel/Data Files
+- Local App Data
+- Build System
+- Assets/UI Resources

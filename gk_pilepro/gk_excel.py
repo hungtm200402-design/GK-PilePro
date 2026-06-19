@@ -189,6 +189,10 @@ def clean_text(v):
 
     s = s.replace("−","-").replace("–","-").replace("—","-")
 
+    if re.fullmatch(r"\+\s*\d+(?:[,.]\d+)?", s):
+
+        s = s.replace("+", "").replace(" ", "")
+
     if re.fullmatch(r"-?\d+\.\d+", s):
 
         s = s.replace(".", ",")

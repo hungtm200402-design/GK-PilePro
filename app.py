@@ -21,7 +21,6 @@ import socket
 import threading
 
 import tempfile
-import multiprocessing
 import queue
 
 from datetime import datetime
@@ -298,11 +297,11 @@ APP_TITLE = "GK PilePro"
 
 APP_LOGO_PNG = Path("assets") / "gk_logo.png"
 
+APP_SIDEBAR_LOGO_PNG = Path("assets") / "gk_logo_sidebar_no_bg.png"
+
 APP_TASKBAR_PNG = Path("assets") / "gk_taskbar_icon.png"
 
 APP_ICON_ICO = Path("assets") / "gk_app_icon.ico"
-
-APP_SPLASH_LOGO_PNG = Path("assets") / "gk_splash_logo.png"
 
 APP_SPLASH_BG_PNG = Path("assets") / "loading" / "loading_bg.png"
 APP_SPLASH_BG_CLEAN_PNG = Path("assets") / "loading" / "loading_bg_clean.png"
@@ -707,9 +706,10 @@ class App:
         self._presence_server_runtime_lock = threading.Lock()
         self._user_minimized = False
         self._presence_server_down_dialog_shown = False
-        self._presence_server_check_interval_ms = 150
+        self._presence_server_check_interval_ms = 2000
         self._update_check_inflight = False
         self._update_installing = False
+        self._local_update_sha_cache = None
         self._last_status_text = "Sẵn sàng"
         self._last_status_tone = "success"
         self._ui_images = []
@@ -808,7 +808,6 @@ class App:
         try:
 
             message = str(text or "")
-
             if tone is None:
 
                 lowered = message.lower()
@@ -841,6 +840,7 @@ class App:
             if hasattr(self, "status") and self.status is not None:
                 sidebar_color = "#31d181" if tone == "success" else color
                 self.status.config(text=message, fg=sidebar_color)
+                self._resize_status_card(message)
 
             footer_status = getattr(self, "footer_status_var", None)
             if footer_status is not None:
@@ -859,6 +859,22 @@ class App:
 
         except Exception:
 
+            pass
+
+    def _resize_status_card(self, message):
+        try:
+            card = getattr(self, "status_card", None)
+            if card is None:
+                return
+            text = str(message or "")
+            wrap_chars = 28 if not (self.tiny_ui or self.micro_ui) else 25
+            visual_lines = 0
+            for line in text.splitlines() or [""]:
+                visual_lines += max(1, math.ceil(len(line) / max(1, wrap_chars)))
+            base = 78 if not (self.tiny_ui or self.micro_ui) else 72
+            desired = max(92, min(168, base + visual_lines * 18))
+            card.configure(height=scale_px(desired))
+        except Exception:
             pass
 
     def _send_log_to_admin(self):
@@ -2022,16 +2038,16 @@ class App:
             height = max(42, int(canvas.winfo_height() or scale_px(44)))
             active = bool(widgets.get("active"))
             hovered = bool(widgets.get("hovered"))
-            bg = "#0a4a38" if active else ("#083b2d" if hovered else "#042115")
-            text_color = "#FFFFFF" if active else "#D9E9E4"
+            bg = "#042115"
+            text_color = "#FFFFFF" if (active or hovered) else "#D9E9E4"
             icon_img = widgets.get(
                 "icon_active" if active else ("icon_hover" if hovered else "icon_inactive")
             )
-            if active:
+            if active or hovered:
                 nav_bg = Image.new("RGBA", (width, height), (0, 0, 0, 0))
                 nav_pixels = nav_bg.load()
-                start_rgb = (15, 141, 109)
-                end_rgb = (8, 82, 62)
+                start_rgb = (8, 97, 70)
+                end_rgb = (35, 166, 107)
                 for x in range(width):
                     ratio = x / max(1, width - 1)
                     color = tuple(
@@ -2040,10 +2056,15 @@ class App:
                     )
                     for y in range(height):
                         nav_pixels[x, y] = (*color, 255)
+                stripe_right = scale_px(3)
+                ImageDraw.Draw(nav_bg).rectangle(
+                    (1, 1, stripe_right, height - 2),
+                    fill="#F6C640",
+                )
                 mask = Image.new("L", (width, height), 0)
                 ImageDraw.Draw(mask).rounded_rectangle(
                     (1, 1, width - 2, height - 2),
-                    radius=scale_px(10),
+                    radius=scale_px(9),
                     fill=255,
                 )
                 nav_bg.putalpha(mask)
@@ -2055,17 +2076,6 @@ class App:
                     canvas, 1, 1, width - 1, height - 1,
                     radius=scale_px(10), fill=bg, outline=bg
                 )
-            if active:
-                self._nav_round_rect(
-                    canvas,
-                    scale_px(4),
-                    (height - scale_px(24)) // 2,
-                    scale_px(8),
-                    (height + scale_px(24)) // 2,
-                    radius=scale_px(2),
-                    fill="#F6C640",
-                    outline="#F6C640",
-                )
             icon_x = scale_px(36)
             if icon_img is not None:
                 canvas.create_image(icon_x, height // 2, image=icon_img)
@@ -2075,14 +2085,14 @@ class App:
                     page_name,
                     icon_x,
                     height // 2,
-                    "#F6C640" if active else ("#F2F7F5" if hovered else "#D7E7E1"),
+                    "#F6C640" if (active or hovered) else "#D7E7E1",
                 )
             canvas.create_text(
                 icon_x + scale_px(26),
                 height // 2,
                 text=widgets.get("text", ""),
                 fill=text_color,
-                font=ui_font(11, bold=active),
+                font=ui_font(11, bold=(active or hovered)),
                 anchor="w",
             )
         except Exception:
@@ -2318,7 +2328,7 @@ class App:
             inner = tk.Frame(dlg, bg=UI_SURFACE, padx=scale_px(14), pady=scale_px(10))
             inner.pack(fill="both", expand=True, padx=1, pady=1)
             tk.Label(
-                inner, text="\u1f504  \u0110ang t\u1ea3i b\u1ea3n c\u1eadp nh\u1eadt...",
+                inner, text="\u0110ang t\u1ea3i b\u1ea3n c\u1eadp nh\u1eadt...",
                 font=ui_font(10, bold=True), bg=UI_SURFACE, fg=UI_TEXT, anchor="w"
             ).pack(fill="x")
             pb = ttk.Progressbar(inner, mode="indeterminate", length=scale_px(292))
@@ -2359,6 +2369,34 @@ class App:
         except Exception:
             pass
 
+    def _set_update_progress_installing(self):
+        """Keep the update window visible while the downloaded exe is being installed."""
+        try:
+            dlg = getattr(self, "_update_progress_dialog", None)
+            if not dlg:
+                self._show_update_progress_dialog()
+                dlg = getattr(self, "_update_progress_dialog", None)
+            if not dlg:
+                return
+            pb = getattr(dlg, "_pb", None)
+            info_lbl = getattr(dlg, "_info_lbl", None)
+            if pb is not None:
+                try:
+                    pb.stop()
+                except Exception:
+                    pass
+                pb.config(mode="indeterminate")
+                pb.start(12)
+                dlg._pb_determinate = False
+            if info_lbl is not None:
+                info_lbl.config(text="\u0110ang c\u00e0i \u0111\u1eb7t b\u1ea3n c\u1eadp nh\u1eadt v\u00e0 m\u1edf l\u1ea1i \u1ee9ng d\u1ee5ng...")
+            try:
+                dlg.lift()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _close_update_progress_dialog(self):
         """Destroy the floating update progress window."""
         try:
@@ -2368,6 +2406,20 @@ class App:
         except Exception:
             pass
         self._update_progress_dialog = None
+
+    def _current_exe_sha_cached(self):
+        try:
+            exe_path = Path(sys.executable).resolve()
+            stat = exe_path.stat()
+            signature = (str(exe_path), int(stat.st_size), int(stat.st_mtime))
+            cached = getattr(self, "_local_update_sha_cache", None)
+            if cached and cached.get("signature") == signature:
+                return str(cached.get("sha") or "").lower()
+            sha = file_sha256(exe_path).lower()
+            self._local_update_sha_cache = {"signature": signature, "sha": sha}
+            return sha
+        except Exception:
+            return ""
 
     def _user_update_check_loop(self):
 
@@ -2399,7 +2451,7 @@ class App:
                             if update_info:
 
                                 remote_sha = str(update_info.get("sha256") or "").strip().lower()
-                                local_sha = file_sha256(sys.executable).lower()
+                                local_sha = self._current_exe_sha_cached()
 
                                 if remote_sha and remote_sha != local_sha:
 
@@ -2465,18 +2517,9 @@ class App:
 
         self._update_installing = True
 
-        # Close the download progress dialog before showing the install message
-        self._close_update_progress_dialog()
-
         try:
-
-            messagebox.showinfo(
-                "Cập nhật ứng dụng",
-                "Đã có bản cập nhật mới.\n\nỨng dụng sẽ tự cập nhật và mở lại ngay.",
-            )
-
+            self._set_update_progress_installing()
         except Exception:
-
             pass
 
         try:
@@ -2484,6 +2527,15 @@ class App:
             current_exe = Path(sys.executable).resolve()
             update_path = Path(update_path).resolve()
             bat_path = update_path.parent / "install_update.bat"
+            notice_path = app_data_path("startup_update_notice.txt")
+            try:
+                notice_path.parent.mkdir(parents=True, exist_ok=True)
+                notice_path.write_text(
+                    "\u0110\u00e3 c\u1eadp nh\u1eadt xong, \u0111ang m\u1edf b\u1ea3n m\u1edbi nh\u1ea5t...",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             pid = os.getpid()
             bat = f"""@echo off
 set "SRC={update_path}"
@@ -2928,10 +2980,7 @@ del "%~f0" >nul 2>nul
             startup_splash = getattr(self.root, "_startup_splash", None)
             startup_active = bool(
                 startup_splash is not None
-                and (
-                    isinstance(startup_splash, _ProcessSplashHandle)
-                    or startup_splash.winfo_exists()
-                )
+                and startup_splash.winfo_exists()
             )
             if not startup_active and current_state != "zoomed":
                 x = max(0, (sw - win_w) // 2)
@@ -3676,9 +3725,11 @@ del "%~f0" >nul 2>nul
 
 
         brand = tk.Frame(sidebar, bg=sidebar_bg)
-        brand.pack(fill="x", pady=(0, 12 if self.tiny_ui else 18))
+        brand.pack(fill="x", pady=(8 if self.tiny_ui else 12, 14 if self.tiny_ui else 18))
 
-        logo_file = resource_path(*APP_LOGO_PNG.parts)
+        logo_file = resource_path(*APP_SIDEBAR_LOGO_PNG.parts)
+        if not logo_file.exists():
+            logo_file = resource_path(*APP_LOGO_PNG.parts)
 
         try:
 
@@ -3692,7 +3743,13 @@ del "%~f0" >nul 2>nul
 
                     logo_source = logo_source.crop(bbox)
 
-                logo_source.thumbnail((self.logo_max[0] - scale_px(16), self.logo_max[1] - scale_px(16)), Image.LANCZOS)
+                logo_source.thumbnail(
+                    (
+                        max(scale_px(160), self.sidebar_w - scale_px(12)),
+                        scale_px(208 if not (self.tiny_ui or self.micro_ui) else 186),
+                    ),
+                    Image.LANCZOS,
+                )
 
                 self.app_logo_img = ImageTk.PhotoImage(logo_source)
                 tk.Label(brand, image=self.app_logo_img, bg=sidebar_bg).pack(anchor="center")
@@ -3725,7 +3782,7 @@ del "%~f0" >nul 2>nul
             _pulse_startup_splash(self.root)
 
             icon_inactive = self._sidebar_icon(icon, 24, "#D7E7E1")
-            icon_hover = self._sidebar_icon(icon, 24, "#F2F7F5")
+            icon_hover = self._sidebar_icon(icon, 24, "#F6C640")
             icon_active = self._sidebar_icon(icon, 24, "#F6C640")
             nav_canvas = tk.Canvas(
                 sidebar,
@@ -3737,7 +3794,7 @@ del "%~f0" >nul 2>nul
             )
             nav_canvas.pack(
                 fill="x",
-                padx=(0, scale_px(8)),
+                padx=(scale_px(12), scale_px(18)),
                 pady=3,
             )
 
@@ -3792,12 +3849,13 @@ del "%~f0" >nul 2>nul
 
         status_card = RoundedPanel(
             sidebar,
-            height=96,
+            height=96 if not (self.tiny_ui or self.micro_ui) else 92,
             fill=sidebar_bg,
             border="#16745a",
             radius=12,
-            padding=10,
+            padding=11,
         )
+        self.status_card = status_card
         status_card.pack(fill="x", pady=(12, 0))
         status_inner = status_card.body
         status_title = tk.Frame(status_inner, bg=sidebar_bg)
@@ -3810,11 +3868,11 @@ del "%~f0" >nul 2>nul
             anchor="w",
             fg="#31d181",
             bg=sidebar_bg,
-            font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 9, bold=True),
-            wraplength=max(88, self.sidebar_w - 62),
+            font=ui_font(8 if (self.tiny_ui or self.micro_ui) else 8, bold=True),
+            wraplength=max(112, self.sidebar_w - 44),
             justify="left",
         )
-        self.status.pack(fill="x", pady=(5, 0))
+        self.status.pack(fill="both", expand=True, pady=(5, 0))
 
         sidebar_spacer = tk.Frame(sidebar, bg=sidebar_bg, height=8 if (self.tiny_ui or self.micro_ui) else 12)
         sidebar_spacer.pack(fill="x")
@@ -4408,6 +4466,7 @@ del "%~f0" >nul 2>nul
         self.img_label.bind("<Button-1>", self.open_current_preview_image)
         self.img_label.bind("<Control-v>", self.paste_image_from_clipboard)
         self.img_label.bind("<Control-V>", self.paste_image_from_clipboard)
+        self.img_label.bind("<BackSpace>", self.delete_current_preview_image)
 
         self.preview_prev_btn = tk.Button(
             self.preview_frame,
@@ -4484,12 +4543,19 @@ del "%~f0" >nul 2>nul
 
         self.preview_frame.bind("<Enter>", _preview_hover)
         self.preview_frame.bind("<Leave>", _preview_leave)
+        self.preview_frame.bind("<BackSpace>", self.delete_current_preview_image)
         self.img_label.bind("<Enter>", _preview_hover)
         self.img_label.bind("<Leave>", _preview_leave)
         self.preview_prev_btn.bind("<Enter>", _preview_hover)
         self.preview_prev_btn.bind("<Leave>", _preview_leave)
+        self.preview_prev_btn.bind("<BackSpace>", self.delete_current_preview_image)
         self.preview_next_btn.bind("<Enter>", _preview_hover)
         self.preview_next_btn.bind("<Leave>", _preview_leave)
+        self.preview_next_btn.bind("<BackSpace>", self.delete_current_preview_image)
+        try:
+            self.root.bind_all("<BackSpace>", self.delete_current_preview_image, add="+")
+        except Exception:
+            pass
 
         self.preview_counter_var = tk.StringVar(value="")
         self.preview_counter_label = tk.Label(
@@ -5205,12 +5271,12 @@ del "%~f0" >nul 2>nul
             except Exception:
                 pass
             try:
-                self.root.after(250, sync_loop)
+                self.root.after(800, sync_loop)
             except Exception:
                 pass
 
         try:
-            self.root.after(250, sync_loop)
+            self.root.after(800, sync_loop)
         except Exception:
             self._ocr_summary_sync_started = False
 
@@ -5667,12 +5733,25 @@ del "%~f0" >nul 2>nul
                 )
             if hasattr(self, "preview_counter_var") and self.preview_counter_var is not None:
                 self.preview_counter_var.set("")
+            if hasattr(self, "preview_prev_btn") and self.preview_prev_btn is not None:
+                self.preview_prev_btn.configure(state="disabled")
+            if hasattr(self, "preview_next_btn") and self.preview_next_btn is not None:
+                self.preview_next_btn.configure(state="disabled")
         except Exception:
             pass
 
         try:
             if hasattr(self, "table_editor") and self.table_editor is not None:
                 self.table_editor.set_tables([])
+                if hasattr(self.table_editor, "source_crop_label"):
+                    self.table_editor._source_crop_photo = None
+                    if hasattr(self.table_editor, "source_crop_title"):
+                        self.table_editor.source_crop_title.configure(text="ẢNH DÒNG GỐC")
+                    self.table_editor.source_crop_label.configure(
+                        image="",
+                        text="Chọn một dòng trong bảng để xem ảnh đã cắt.",
+                        height=4,
+                    )
         except Exception:
             pass
 
@@ -6383,6 +6462,7 @@ def _fit_logo_for_splash(path, max_size):
 
 
 def _load_startup_update_notice():
+    notice_path = None
     try:
         value = str(os.getenv("STARTUP_UPDATE_NOTICE") or "").strip()
         if value:
@@ -6390,13 +6470,19 @@ def _load_startup_update_notice():
     except Exception:
         pass
     try:
-        path = app_data_path("startup_update_notice.txt")
-        if path.exists():
-            value = path.read_text(encoding="utf-8", errors="replace").strip()
+        notice_path = app_data_path("startup_update_notice.txt")
+        if notice_path.exists():
+            value = notice_path.read_text(encoding="utf-8", errors="replace").strip()
             if value:
                 return value.splitlines()[0].strip()
     except Exception:
         pass
+    finally:
+        try:
+            if notice_path and notice_path.exists():
+                notice_path.unlink(missing_ok=True)
+        except Exception:
+            pass
     return ""
 
 
@@ -7034,9 +7120,6 @@ def _pulse_startup_splash(root, step_text=None, force=False):
         splash = getattr(root, "_startup_splash", None)
         if splash is None:
             return
-        if isinstance(splash, _ProcessSplashHandle):
-            splash.pulse(step_text, force=force)
-            return
         if not splash.winfo_exists():
             return
 
@@ -7067,301 +7150,6 @@ def _pulse_startup_splash(root, step_text=None, force=False):
         splash.update()
     except Exception:
         pass
-
-
-class _ProcessSplashHandle:
-    def __init__(self, process, command_queue, complete_event, abort_event):
-        self.process = process
-        self.command_queue = command_queue
-        self.complete_event = complete_event
-        self.abort_event = abort_event
-        self.progress = 0.0
-        self.step_text = "Đang khởi động hệ thống..."
-        self._last_pulse = 0.0
-        self._shown_at = time.perf_counter()
-
-    def _send(self, command):
-        try:
-            self.command_queue.put_nowait(command)
-        except Exception:
-            pass
-
-    def update(self, progress, step_text):
-        self.progress = max(0.0, min(23.0, float(progress or 0)))
-        self.step_text = str(step_text or self.step_text)
-        self._send(("update", self.progress, self.step_text))
-
-    def pulse(self, step_text=None, force=False):
-        now = time.perf_counter()
-        if not force and now - self._last_pulse < 0.08:
-            return
-        self._last_pulse = now
-        if step_text:
-            self.step_text = str(step_text)
-        self._send(("update", self.progress, self.step_text))
-
-    def wait_until_complete(self, timeout=2.0):
-        deadline = time.perf_counter() + max(0.0, float(timeout))
-        while time.perf_counter() < deadline:
-            try:
-                if self.complete_event.is_set() or self.abort_event.is_set():
-                    return True
-                if not self.process.is_alive():
-                    return self.abort_event.is_set()
-            except Exception:
-                return False
-            time.sleep(0.02)
-        return False
-
-    def was_aborted(self):
-        try:
-            return self.abort_event.is_set()
-        except Exception:
-            return False
-
-    def close(self):
-        # The app initialization controls longer durations; fast machines still
-        # keep the animated banner visible for at least six seconds.
-        aborted = self.was_aborted()
-        remaining = 0.0 if aborted else 5.5 - (time.perf_counter() - self._shown_at)
-        if remaining > 0:
-            time.sleep(remaining)
-        if not aborted:
-            self._send(("close", 260))
-        try:
-            self.process.join(timeout=2.0)
-        except Exception:
-            pass
-        try:
-            if self.process.is_alive():
-                self.process.terminate()
-                self.process.join(timeout=0.5)
-        except Exception:
-            pass
-        try:
-            self.command_queue.close()
-        except Exception:
-            pass
-
-
-def _prepare_fixed_maximized_splash(window):
-    """Maximize once, then lock the splash at the resulting client size."""
-    alpha_hidden = False
-    try:
-        window.attributes("-alpha", 0.0)
-        alpha_hidden = True
-    except Exception:
-        pass
-    try:
-        window.resizable(True, True)
-        window.state("zoomed")
-    except Exception:
-        sw = max(1, window.winfo_screenwidth())
-        sh = max(1, window.winfo_screenheight())
-        window.geometry(f"{sw}x{sh}+0+0")
-    window.deiconify()
-    window.update_idletasks()
-    width = max(1, window.winfo_width())
-    height = max(1, window.winfo_height())
-    window.withdraw()
-    window.resizable(False, False)
-    if alpha_hidden:
-        try:
-            window.attributes("-alpha", 1.0)
-        except Exception:
-            pass
-    return width, height
-
-
-def _startup_splash_process(
-    command_queue,
-    ready_event,
-    complete_event,
-    abort_event,
-    update_text,
-):
-    splash_root = None
-    try:
-        splash_root = tk.Tk()
-        splash_root.withdraw()
-        splash_root.title("GK PilePro - Đang khởi động")
-        splash_root.configure(bg="#050b14")
-        try:
-            splash_root.attributes("-topmost", True)
-        except Exception:
-            pass
-        try:
-            _apply_initial_window_icon(splash_root)
-        except Exception:
-            pass
-
-        w, h = _prepare_fixed_maximized_splash(splash_root)
-
-        canvas = tk.Canvas(
-            splash_root,
-            width=w,
-            height=h,
-            bg="#050b14",
-            bd=0,
-            highlightthickness=0,
-        )
-        canvas.pack(fill="both", expand=True)
-        state = {
-            "progress": 0.0,
-            "target": 0.0,
-            "step_text": "Đang khởi động hệ thống...",
-            "closing": False,
-            "fade_started_at": None,
-            "fade_duration": 0.26,
-            "shown_at": time.perf_counter(),
-            "progress_duration": 5.5,
-        }
-
-        def render_frame():
-            try:
-                while True:
-                    command = command_queue.get_nowait()
-                    if not command:
-                        continue
-                    if command[0] == "close":
-                        state["closing"] = True
-                        state["fade_started_at"] = time.perf_counter()
-                        if len(command) > 1:
-                            state["fade_duration"] = max(
-                                0.08,
-                                float(command[1]) / 1000.0,
-                            )
-                        break
-                    if command[0] == "update":
-                        state["target"] = max(0.0, min(23.0, float(command[1])))
-                        state["step_text"] = str(command[2] or state["step_text"])
-            except queue.Empty:
-                pass
-            except Exception:
-                pass
-
-            if state["closing"]:
-                elapsed = time.perf_counter() - state["fade_started_at"]
-                fade = min(1.0, elapsed / state["fade_duration"])
-                try:
-                    splash_root.attributes("-alpha", max(0.0, 1.0 - fade))
-                except Exception:
-                    fade = 1.0
-                if fade >= 1.0:
-                    animator.stop()
-                    splash_root.destroy()
-                    return
-
-            elapsed_visible = time.perf_counter() - state["shown_at"]
-            timed_limit = min(
-                23.0,
-                23.0 * elapsed_visible / state["progress_duration"],
-            )
-            desired_progress = min(state["target"], timed_limit)
-            if desired_progress > state["progress"]:
-                state["progress"] = desired_progress
-            elif desired_progress < state["progress"]:
-                state["progress"] = desired_progress
-            if (
-                state["target"] >= 23.0
-                and elapsed_visible >= state["progress_duration"]
-            ):
-                state["progress"] = 23.0
-                complete_event.set()
-            _draw_startup_splash(
-                canvas,
-                w,
-                h,
-                state["progress"],
-                state["step_text"],
-                update_text,
-                animator,
-            )
-
-        def abort_application():
-            abort_event.set()
-            if not state["closing"]:
-                state["closing"] = True
-                state["fade_started_at"] = time.perf_counter()
-                state["fade_duration"] = 0.08
-
-        splash_root.protocol("WM_DELETE_WINDOW", abort_application)
-        animator = _SplashVideoAnimator(canvas, w, h, render_frame)
-        animator.wait_until_ready(timeout=2.0)
-        animator.set_size(w, h, high_quality=True)
-        animator.refresh_display_frame()
-        render_frame()
-        try:
-            splash_root.attributes("-alpha", 0.0)
-        except Exception:
-            pass
-        animator.start()
-        splash_root.update_idletasks()
-        splash_root.deiconify()
-        splash_root.lift()
-        try:
-            splash_root.focus_force()
-        except Exception:
-            pass
-        splash_root.update()
-        _animate_window_alpha(splash_root, 0.0, 1.0, 240)
-        ready_event.set()
-        splash_root.mainloop()
-    except Exception:
-        try:
-            ready_event.set()
-        except Exception:
-            pass
-        try:
-            if "animator" in locals():
-                animator.stop()
-        except Exception:
-            pass
-        try:
-            if splash_root is not None:
-                splash_root.destroy()
-        except Exception:
-            pass
-
-
-def _start_process_startup_splash(update_text=""):
-    try:
-        context = multiprocessing.get_context("spawn")
-        command_queue = context.Queue()
-        ready_event = context.Event()
-        complete_event = context.Event()
-        abort_event = context.Event()
-        process = context.Process(
-            target=_startup_splash_process,
-            args=(
-                command_queue,
-                ready_event,
-                complete_event,
-                abort_event,
-                str(update_text or "").strip(),
-            ),
-            daemon=True,
-        )
-        process.start()
-        if not ready_event.wait(timeout=6.0) or not process.is_alive():
-            try:
-                process.terminate()
-                process.join(timeout=0.5)
-            except Exception:
-                pass
-            try:
-                command_queue.close()
-            except Exception:
-                pass
-            return None
-        return _ProcessSplashHandle(
-            process,
-            command_queue,
-            complete_event,
-            abort_event,
-        )
-    except Exception:
-        return None
 
 
 def _animate_window_alpha(root, start, end, duration_ms):
@@ -7692,9 +7480,6 @@ def _show_startup_splash(root, update_text=""):
 
 def _update_startup_splash(splash, progress, step_text):
     try:
-        if isinstance(splash, _ProcessSplashHandle):
-            splash.update(progress, step_text)
-            return
         if splash is None or not splash.winfo_exists():
             return
         canvas = splash._canvas
@@ -7721,9 +7506,6 @@ def _update_startup_splash(splash, progress, step_text):
 
 def _close_startup_splash(splash):
     try:
-        if isinstance(splash, _ProcessSplashHandle):
-            splash.close()
-            return
         if splash is not None and splash.winfo_exists():
             shown_at = float(getattr(splash, "_shown_at", time.perf_counter()))
             deadline = shown_at + 5.5
@@ -7790,8 +7572,6 @@ def _close_startup_splash(splash):
 
 
 def _wait_startup_splash_complete(splash, timeout=2.5):
-    if isinstance(splash, _ProcessSplashHandle):
-        return splash.wait_until_complete(timeout=timeout)
     try:
         return bool(getattr(splash, "_aborted", False)) or float(
             getattr(splash, "_progress", 0.0)
@@ -7801,7 +7581,7 @@ def _wait_startup_splash_complete(splash, timeout=2.5):
 
 
 def _prime_startup_splash(splash, duration=1.2):
-    if splash is None or isinstance(splash, _ProcessSplashHandle):
+    if splash is None:
         return
     deadline = time.perf_counter() + max(0.0, float(duration))
     while splash.winfo_exists() and time.perf_counter() < deadline:
@@ -7813,8 +7593,6 @@ def _prime_startup_splash(splash, duration=1.2):
 
 
 def _startup_splash_was_aborted(splash):
-    if isinstance(splash, _ProcessSplashHandle):
-        return splash.was_aborted()
     try:
         return bool(getattr(splash, "_aborted", False))
     except Exception:
@@ -7868,9 +7646,7 @@ def main():
                 return
 
         update_notice = _load_startup_update_notice()
-        splash = _start_process_startup_splash(update_notice)
-        if splash is None:
-            splash = _show_startup_splash(root, update_notice)
+        splash = _show_startup_splash(root, update_notice)
         root._startup_splash = splash
         _update_startup_splash(splash, 3, "Đang khởi động hệ thống...")
         _update_startup_splash(splash, 8, "Đang khởi động hệ thống...")
@@ -7883,11 +7659,7 @@ def main():
                 pass
             return
         app = App(root)
-        if (
-            splash is not None
-            and not isinstance(splash, _ProcessSplashHandle)
-            and splash.winfo_exists()
-        ):
+        if splash is not None and splash.winfo_exists():
             try:
                 root.protocol(
                     "WM_DELETE_WINDOW",
@@ -7915,42 +7687,25 @@ def main():
                     shell.pack(fill="both", expand=True)
                 shell.update_idletasks()
             root.update_idletasks()
-            if isinstance(splash, _ProcessSplashHandle):
-                startup_window_state = {
-                    "state": "zoomed",
-                    "geometry": "",
-                    "restored": False,
-                }
-            else:
-                window_w = max(1, root.winfo_width())
-                window_h = max(1, root.winfo_height())
-                screen_w = max(1, root.winfo_screenwidth())
-                screen_h = max(1, root.winfo_screenheight())
-                startup_window_state = {
-                    "state": root.state(),
-                    "geometry": (
-                        f"{window_w}x{window_h}"
-                        f"+{root.winfo_x()}+{root.winfo_y()}"
-                    ),
-                    "restored": (
-                        window_w < int(screen_w * 0.92)
-                        or window_h < int(screen_h * 0.92)
-                    ),
-                }
-            if (
-                splash is not None
-                and not isinstance(splash, _ProcessSplashHandle)
-                and splash.winfo_exists()
-            ):
+            window_w = max(1, root.winfo_width())
+            window_h = max(1, root.winfo_height())
+            screen_w = max(1, root.winfo_screenwidth())
+            screen_h = max(1, root.winfo_screenheight())
+            startup_window_state = {
+                "state": root.state(),
+                "geometry": (
+                    f"{window_w}x{window_h}"
+                    f"+{root.winfo_x()}+{root.winfo_y()}"
+                ),
+                "restored": (
+                    window_w < int(screen_w * 0.92)
+                    or window_h < int(screen_h * 0.92)
+                ),
+            }
+            if splash is not None and splash.winfo_exists():
                 splash.lift()
         except Exception:
             pass
-        if isinstance(splash, _ProcessSplashHandle):
-            try:
-                root.attributes("-alpha", 0.0)
-            except Exception:
-                pass
-            root._startup_needs_fade_in = True
         _close_startup_splash(splash)
         root._startup_splash = None
         if _startup_splash_was_aborted(splash):
@@ -8047,7 +7802,6 @@ def main():
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
     if "--presence-server" in sys.argv:
         try:
             sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[1:] if arg != "--presence-server"]

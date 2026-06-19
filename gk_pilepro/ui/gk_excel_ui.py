@@ -1017,7 +1017,6 @@ def _load_excel_file(self, path):
 
         self.current_workflow_id = new_workflow_id()
 
-
 def read_current_excel_formulas(self):
 
     if not self.excel_path:

@@ -3,19 +3,18 @@
 import json
 import math
 import os
-import subprocess
 import shutil
-import tempfile
 import threading
 import tkinter as tk
 import traceback
+import time
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from gk_pilepro.gk_core import last_run_dir, new_workflow_id, write_role_error_log
+from gk_pilepro.gk_core import last_run_dir, new_workflow_id, resource_path, write_role_error_log
 from gk_pilepro.gk_excel import (
     call_gemini,
     call_gemini_phieu_coc,
@@ -37,6 +36,527 @@ from gk_pilepro.ui.gk_ui import (
     ui_button,
     ui_font,
 )
+
+
+def _valid_ocr_bbox(value):
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        x1, y1, x2, y2 = [max(0.0, min(1000.0, float(item))) for item in value]
+    except (TypeError, ValueError):
+        return None
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return [x1, y1, x2, y2]
+
+
+def _strip_positive_number_sign(value):
+    text = str(value or "").strip()
+    if not text.startswith("+"):
+        return value
+    compact = text.replace(" ", "")
+    if not compact[1:]:
+        return value
+    if all(ch.isdigit() or ch in {",", "."} for ch in compact[1:]) and any(ch.isdigit() for ch in compact[1:]):
+        return compact[1:]
+    return value
+
+
+def _merge_line_candidates(candidates, max_gap=2):
+    if not candidates:
+        return []
+    groups = []
+    current = [candidates[0]]
+    for value in candidates[1:]:
+        if value - current[-1] <= max_gap:
+            current.append(value)
+        else:
+            groups.append(current)
+            current = [value]
+    groups.append(current)
+    return [sum(group) / len(group) for group in groups]
+
+
+def _select_even_line_window(lines, needed, min_pos, max_pos):
+    candidates = [line for line in lines if min_pos <= line <= max_pos]
+    if len(candidates) < needed:
+        return []
+    best = None
+    best_score = None
+    for start in range(0, len(candidates) - needed + 1):
+        window = candidates[start:start + needed]
+        gaps = [window[i + 1] - window[i] for i in range(len(window) - 1)]
+        if not gaps:
+            continue
+        sorted_gaps = sorted(gaps)
+        median = sorted_gaps[len(sorted_gaps) // 2]
+        if median <= 2:
+            continue
+        variance = sum(abs(gap - median) for gap in gaps) / len(gaps)
+        score = variance + max(0, min_pos - window[0]) * 0.02
+        if best is None or score < best_score:
+            best = window
+            best_score = score
+    return best or []
+
+
+def _bbox_from_thumb(left, top, right, bottom, width, height):
+    return [
+        max(0.0, min(1000.0, left * 1000.0 / max(1, width))),
+        max(0.0, min(1000.0, top * 1000.0 / max(1, height))),
+        max(0.0, min(1000.0, right * 1000.0 / max(1, width))),
+        max(0.0, min(1000.0, bottom * 1000.0 / max(1, height))),
+    ]
+
+
+def _fallback_table_grid_bboxes(image_path, row_count, column_count):
+    if row_count <= 0:
+        return [], []
+    try:
+        img = Image.open(image_path).convert("L")
+        thumb = img.copy()
+        thumb.thumbnail((900, 1200), Image.Resampling.LANCZOS)
+        threshold = 190
+        pixels = thumb.load()
+        width, height = thumb.size
+
+        horizontal_hits = []
+        for y in range(height):
+            hits = 0
+            for x in range(width):
+                if pixels[x, y] < threshold:
+                    hits += 1
+            if hits >= width * 0.34:
+                horizontal_hits.append(y)
+        horizontal_lines = _merge_line_candidates(horizontal_hits, max_gap=3)
+        needed_y = row_count + 2
+        y_lines = _select_even_line_window(
+            horizontal_lines,
+            needed_y,
+            height * 0.22,
+            height * 0.98,
+        )
+
+        if y_lines:
+            top = y_lines[0]
+            bottom = y_lines[-1]
+        else:
+            lower_top = int(height * 0.30)
+            xs = []
+            ys = []
+            for y in range(lower_top, height):
+                for x in range(width):
+                    if pixels[x, y] < 220:
+                        xs.append(x)
+                        ys.append(y)
+            if xs and ys:
+                top = max(0, min(ys) - 6)
+                bottom = min(height, max(ys) + 6)
+            else:
+                top, bottom = int(height * 0.36), int(height * 0.92)
+            header_h = max(12, (bottom - top) / max(5, row_count + 1))
+            row_h = max(1, (bottom - top - header_h) / max(1, row_count))
+            y_lines = [top, top + header_h] + [
+                top + header_h + row_h * (idx + 1)
+                for idx in range(row_count)
+            ]
+
+        vertical_hits = []
+        y1_scan = int(max(0, y_lines[0]))
+        y2_scan = int(min(height, y_lines[-1]))
+        scan_h = max(1, y2_scan - y1_scan)
+        for x in range(width):
+            hits = 0
+            for y in range(y1_scan, y2_scan):
+                if pixels[x, y] < threshold:
+                    hits += 1
+            if hits >= scan_h * 0.34:
+                vertical_hits.append(x)
+        vertical_lines = _merge_line_candidates(vertical_hits, max_gap=3)
+        needed_x = max(2, column_count + 1)
+        x_lines = _select_even_line_window(
+            vertical_lines,
+            needed_x,
+            width * 0.03,
+            width * 0.98,
+        )
+
+        if not x_lines:
+            xs = []
+            for y in range(y1_scan, y2_scan):
+                for x in range(width):
+                    if pixels[x, y] < 220:
+                        xs.append(x)
+            if xs:
+                left = max(0, min(xs) - 6)
+                right = min(width, max(xs) + 6)
+            else:
+                left, right = int(width * 0.06), int(width * 0.94)
+            step = (right - left) / max(1, column_count)
+            x_lines = [left + step * idx for idx in range(column_count + 1)]
+
+        row_bboxes = []
+        cell_bboxes = []
+        for row_idx in range(row_count):
+            top = y_lines[row_idx + 1]
+            bottom = y_lines[row_idx + 2] if row_idx + 2 < len(y_lines) else y_lines[-1]
+            row_bboxes.append(_bbox_from_thumb(x_lines[0], top, x_lines[-1], bottom, width, height))
+            row_cells = []
+            for col_idx in range(column_count):
+                left = x_lines[col_idx] if col_idx < len(x_lines) else x_lines[0]
+                right = x_lines[col_idx + 1] if col_idx + 1 < len(x_lines) else x_lines[-1]
+                row_cells.append(_bbox_from_thumb(left, top, right, bottom, width, height))
+            cell_bboxes.append(row_cells)
+        return row_bboxes, cell_bboxes
+    except Exception:
+        step = 560.0 / max(1, row_count)
+        row_bboxes = [
+            [70.0, 360.0 + row_idx * step, 930.0, 360.0 + (row_idx + 1) * step]
+            for row_idx in range(row_count)
+        ]
+        cell_bboxes = []
+        col_step = 860.0 / max(1, column_count)
+        for row_bbox in row_bboxes:
+            row_cells = []
+            for col_idx in range(column_count):
+                row_cells.append([
+                    70.0 + col_idx * col_step,
+                    row_bbox[1],
+                    70.0 + (col_idx + 1) * col_step,
+                    row_bbox[3],
+                ])
+            cell_bboxes.append(row_cells)
+        return row_bboxes, cell_bboxes
+
+
+def _fallback_row_bboxes_for_image(image_path, row_count, column_count=0):
+    row_bboxes, _cell_bboxes = _fallback_table_grid_bboxes(image_path, row_count, column_count)
+    return row_bboxes
+
+
+def _fallback_cell_bboxes_for_image(image_path, row_count, column_count):
+    _row_bboxes, cell_bboxes = _fallback_table_grid_bboxes(image_path, row_count, column_count)
+    return cell_bboxes
+
+
+def ensure_table_image_metadata(table, image_index=0, image_path=None, allow_fallback=True):
+    if not isinstance(table, dict):
+        return table
+    rows = [
+        [_strip_positive_number_sign(cell) for cell in row]
+        if isinstance(row, list)
+        else row
+        for row in (table.get("rows") or [])
+    ]
+    table["rows"] = rows
+    row_count = len(rows)
+    table["_source_image_index"] = image_index
+    if image_path is not None:
+        table["_source_image_path"] = str(image_path)
+    table["_row_source_indexes"] = [image_index] * row_count
+
+    raw_row_bboxes = list(table.get("_row_bboxes") or table.get("row_bboxes") or [])
+    row_bboxes = [
+        _valid_ocr_bbox(raw_row_bboxes[row_idx])
+        if row_idx < len(raw_row_bboxes)
+        else None
+        for row_idx in range(row_count)
+    ]
+    columns = list(table.get("columns") or [])
+    column_count = len(columns)
+    raw_cell_bboxes = list(table.get("_cell_bboxes") or table.get("cell_bboxes") or [])
+    cell_bboxes = []
+    for row_idx in range(row_count):
+        source_cells = (
+            raw_cell_bboxes[row_idx]
+            if row_idx < len(raw_cell_bboxes) and isinstance(raw_cell_bboxes[row_idx], list)
+            else []
+        )
+        cell_bboxes.append([
+            _valid_ocr_bbox(source_cells[col_idx])
+            if col_idx < len(source_cells)
+            else None
+            for col_idx in range(column_count)
+        ])
+    if allow_fallback and image_path:
+        needs_row_fallback = not row_bboxes or not any(row_bboxes)
+        needs_cell_fallback = not cell_bboxes or not any(any(row_cells) for row_cells in cell_bboxes)
+        if needs_row_fallback or needs_cell_fallback:
+            fallback_rows, fallback_cells = _fallback_table_grid_bboxes(
+                image_path,
+                row_count,
+                column_count,
+            )
+            if needs_row_fallback:
+                row_bboxes = fallback_rows
+            if needs_cell_fallback:
+                cell_bboxes = fallback_cells
+    table["_row_bboxes"] = row_bboxes
+    table["_cell_bboxes"] = cell_bboxes
+    return table
+
+
+def _clip_notify_text(value, limit):
+    text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    return text[: max(0, limit - 1)]
+
+
+def _play_app_notification_sound():
+    try:
+        import winsound
+
+        winsound.PlaySound("SystemNotification", winsound.SND_ALIAS | winsound.SND_ASYNC)
+    except Exception:
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONASTERISK)
+        except Exception:
+            pass
+
+
+def _format_elapsed(seconds):
+    try:
+        seconds = max(0.0, float(seconds))
+    except Exception:
+        seconds = 0.0
+    if seconds < 60:
+        return f"{seconds:.1f} giây"
+    minutes = int(seconds // 60)
+    remain = seconds - minutes * 60
+    return f"{minutes} phút {remain:.0f} giây"
+
+
+def _write_ocr_timing_log(file_name, action, started_at, ended_at, image_count, status, message):
+    try:
+        out = last_run_dir()
+        out.mkdir(exist_ok=True)
+        elapsed = max(0.0, (ended_at - started_at).total_seconds())
+        payload = {
+            "action": action,
+            "status": status,
+            "started_at": started_at.isoformat(timespec="seconds"),
+            "ended_at": ended_at.isoformat(timespec="seconds"),
+            "elapsed_seconds": round(elapsed, 3),
+            "elapsed_text": _format_elapsed(elapsed),
+            "image_count": image_count,
+            "message": message,
+        }
+        (out / file_name).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _bring_app_to_front(app):
+    try:
+        root = getattr(app, "root", None)
+        if root is None or not root.winfo_exists():
+            return
+        try:
+            root.deiconify()
+        except Exception:
+            pass
+        try:
+            root.lift()
+            root.focus_force()
+        except Exception:
+            pass
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetForegroundWindow(root.winfo_id())
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _flash_app_taskbar(app):
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        root = getattr(app, "root", None)
+        if root is None or not root.winfo_exists():
+            return
+
+        class FLASHWINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.UINT),
+                ("hwnd", wintypes.HWND),
+                ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT),
+                ("dwTimeout", wintypes.DWORD),
+            ]
+
+        info = FLASHWINFO(
+            ctypes.sizeof(FLASHWINFO),
+            root.winfo_id(),
+            0x00000002 | 0x00000004,
+            5,
+            0,
+        )
+        ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+    except Exception:
+        pass
+
+
+def _show_windows_balloon_notification(app, title, message):
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        root = getattr(app, "root", None)
+        if root is None or not root.winfo_exists():
+            return False
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", wintypes.DWORD),
+                ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class NOTIFYICONDATAW(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("hWnd", wintypes.HWND),
+                ("uID", wintypes.UINT),
+                ("uFlags", wintypes.UINT),
+                ("uCallbackMessage", wintypes.UINT),
+                ("hIcon", wintypes.HICON),
+                ("szTip", wintypes.WCHAR * 128),
+                ("dwState", wintypes.DWORD),
+                ("dwStateMask", wintypes.DWORD),
+                ("szInfo", wintypes.WCHAR * 256),
+                ("uTimeoutOrVersion", wintypes.UINT),
+                ("szInfoTitle", wintypes.WCHAR * 64),
+                ("dwInfoFlags", wintypes.DWORD),
+                ("guidItem", GUID),
+                ("hBalloonIcon", wintypes.HICON),
+            ]
+
+        NIM_ADD = 0x00000000
+        NIM_MODIFY = 0x00000001
+        NIM_DELETE = 0x00000002
+        NIF_MESSAGE = 0x00000001
+        NIF_ICON = 0x00000002
+        NIF_TIP = 0x00000004
+        NIF_INFO = 0x00000010
+        NIIF_USER = 0x00000004
+        NIIF_LARGE_ICON = 0x00000020
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x00000010
+        LR_DEFAULTSIZE = 0x00000040
+
+        shell32 = ctypes.windll.shell32
+        user32 = ctypes.windll.user32
+
+        icon_path = resource_path("assets", "gk_app_icon.ico")
+        hicon = None
+        if icon_path.exists():
+            hicon = user32.LoadImageW(
+                None,
+                str(icon_path),
+                IMAGE_ICON,
+                0,
+                0,
+                LR_LOADFROMFILE | LR_DEFAULTSIZE,
+            )
+
+        nid = NOTIFYICONDATAW()
+        nid.cbSize = ctypes.sizeof(NOTIFYICONDATAW)
+        nid.hWnd = wintypes.HWND(root.winfo_id())
+        nid.uID = int(time.time() * 1000) & 0xFFFFFFFF
+        nid.uFlags = NIF_MESSAGE | NIF_TIP
+        nid.uCallbackMessage = 0x0400 + 88
+        nid.szTip = _clip_notify_text("GK PilePro", 128)
+        if hicon:
+            nid.uFlags |= NIF_ICON
+            nid.hIcon = hicon
+            nid.hBalloonIcon = hicon
+
+        if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
+            if hicon:
+                user32.DestroyIcon(hicon)
+            return False
+
+        nid.uFlags |= NIF_INFO
+        nid.szInfoTitle = _clip_notify_text(title, 64)
+        nid.szInfo = _clip_notify_text(message, 256)
+        nid.uTimeoutOrVersion = 10000
+        nid.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON
+        shown = bool(shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid)))
+
+        live_icons = getattr(app, "_notification_area_icons", None)
+        if live_icons is None:
+            live_icons = []
+            app._notification_area_icons = live_icons
+        live_icons.append((nid, hicon))
+
+        def _cleanup_notification():
+            try:
+                shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(nid))
+            except Exception:
+                pass
+            try:
+                if hicon:
+                    user32.DestroyIcon(hicon)
+            except Exception:
+                pass
+            try:
+                live_icons.remove((nid, hicon))
+            except ValueError:
+                pass
+
+        root.after(12000, _cleanup_notification)
+        return shown
+    except Exception:
+        return False
+
+
+def _is_app_in_foreground(app):
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        root = getattr(app, "root", None)
+        if root is None or not root.winfo_exists():
+            return False
+
+        try:
+            if root.state() == "iconic":
+                return False
+        except Exception:
+            pass
+
+        user32 = ctypes.windll.user32
+        foreground_hwnd = user32.GetForegroundWindow()
+        if not foreground_hwnd:
+            return False
+
+        foreground_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(foreground_pid))
+        return int(foreground_pid.value) == os.getpid()
+    except Exception:
+        return False
+
+
+def _show_ocr_done_notification(app, title, message):
+    if _is_app_in_foreground(app):
+        return
+
+    now = time.monotonic()
+    key = (str(title), str(message))
+    last_key = getattr(app, "_last_ocr_notification_key", None)
+    last_at = getattr(app, "_last_ocr_notification_at", 0.0)
+    if last_key == key and now - float(last_at or 0.0) < 8.0:
+        return
+    app._last_ocr_notification_key = key
+    app._last_ocr_notification_at = now
+    _play_app_notification_sound()
+    _show_windows_balloon_notification(app, title, message)
 
 
 def run_gemini_phieu_coc(self):
@@ -92,6 +612,7 @@ def run_gemini_phieu_coc(self):
 
 
     self.save_key()
+    started_at = datetime.now()
 
     excel_col_names = [name for _, name in self.excel_headers]
 
@@ -131,10 +652,7 @@ def run_gemini_phieu_coc(self):
 
             for table in tables_one or []:
                 if isinstance(table, dict):
-                    row_count = len(table.get("rows") or [])
-                    table["_source_image_index"] = idx - 1
-                    table["_source_image_path"] = str(image_path)
-                    table["_row_source_indexes"] = [idx - 1] * row_count
+                    ensure_table_image_metadata(table, idx - 1, image_path)
             all_tables.extend(tables_one or [])
             raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
 
@@ -273,6 +791,24 @@ def run_gemini_phieu_coc(self):
             "success",
 
         )
+        ended_at = datetime.now()
+        elapsed_text = _format_elapsed((ended_at - started_at).total_seconds())
+        _write_ocr_timing_log(
+            "ocr_timing_phieu_coc.json",
+            "read_phieu_coc",
+            started_at,
+            ended_at,
+            len(image_paths),
+            "success",
+            f"Đọc phiếu cọc xong: {data_rows} dòng, {len(data_cols)} cột.",
+        )
+        _show_ocr_done_notification(
+            self,
+            "Đọc phiếu cọc xong",
+            f"Đã đọc xong {len(image_paths)} ảnh phiếu cọc.\n"
+            f"Kết quả: {data_rows} dòng, {len(data_cols)} cột.\n"
+            f"Thời gian: {elapsed_text}.",
+        )
 
 
 
@@ -370,8 +906,24 @@ def run_gemini_phieu_coc(self):
         out.mkdir(exist_ok=True)
 
         (out / "last_error_phieu_coc.txt").write_text(traceback.format_exc(), encoding="utf-8")
-
-        messagebox.showerror("Lỗi đọc phiếu cọc", "Có lỗi. Xem last_run_v12/last_error_phieu_coc.txt")
+        ended_at = datetime.now()
+        elapsed_text = _format_elapsed((ended_at - started_at).total_seconds())
+        _write_ocr_timing_log(
+            "ocr_timing_phieu_coc.json",
+            "read_phieu_coc",
+            started_at,
+            ended_at,
+            len(image_paths),
+            "error",
+            "Lỗi đọc phiếu cọc. Xem last_run_v12/last_error_phieu_coc.txt",
+        )
+        _show_ocr_done_notification(
+            self,
+            "Lỗi đọc phiếu cọc",
+            "Có lỗi khi đọc phiếu cọc.\n"
+            f"Thời gian: {elapsed_text}.\n"
+            "Xem last_run_v12\\last_error_phieu_coc.txt",
+        )
 
         self._set_status("Lỗi đọc phiếu cọc.", "error")
 
@@ -532,6 +1084,77 @@ def move_preview_image(self, delta):
     self._show_preview_image_index((getattr(self, "preview_image_index", 0) or 0) + delta)
 
 
+def delete_current_preview_image(self, event=None):
+
+    widget = getattr(event, "widget", None)
+
+    try:
+
+        if widget is not None and widget.winfo_class() in {"Entry", "Text", "TEntry", "TCombobox", "Spinbox"}:
+
+            return None
+
+    except Exception:
+
+        pass
+
+    if getattr(self, "_is_reading_table", False):
+
+        try:
+
+            self._set_status("Đang đọc bảng, chưa thể bỏ ảnh lúc này.", "warn")
+
+        except Exception:
+
+            pass
+
+        return "break"
+
+    paths = list(getattr(self, "image_paths", None) or [])
+
+    if not paths:
+
+        return None
+
+    idx = getattr(self, "preview_image_index", 0) or 0
+
+    idx = max(0, min(int(idx), len(paths) - 1))
+
+    removed_path = paths.pop(idx)
+
+    removed_name = Path(removed_path).name
+
+    self.image_paths = paths
+
+    if paths:
+
+        self.image_path = paths[min(idx, len(paths) - 1)]
+
+        first_name = Path(paths[0]).name
+
+        self.current_workflow_label = (
+            f"{first_name} (+{len(paths) - 1} ảnh)" if len(paths) > 1 else first_name
+        )
+
+        self._show_preview_image_index(min(idx, len(paths) - 1))
+
+        self._set_status(f"Đã bỏ ảnh: {removed_name}. Còn {len(paths)} ảnh.", "success")
+
+    else:
+
+        self.image_path = None
+
+        self.preview_image_index = 0
+
+        self.current_workflow_label = ""
+
+        self._clear_preview_image()
+
+        self._set_status(f"Đã bỏ ảnh: {removed_name}. Chưa còn ảnh nào.", "warn")
+
+    return "break"
+
+
 def get_current_preview_image_path(self):
 
     paths = list(getattr(self, "image_paths", None) or [])
@@ -576,7 +1199,6 @@ def _source_image_context_for_selection(self, context=None):
 
     table = editor.get_current_table() if editor is not None else None
     row_index = int((context or {}).get("row_index", 0))
-    column_index = int((context or {}).get("column_index", 0))
     row_sources = list((table or {}).get("_row_source_indexes") or [])
     source_index = (
         row_sources[row_index]
@@ -611,6 +1233,27 @@ def show_source_image_for_selection(self, context=None, open_viewer=False):
 
     self._show_preview_image_index(source_index)
     path = self.get_current_preview_image_path()
+    if path:
+        editor = getattr(self, "table_editor", None)
+        table = editor.get_current_table() if editor is not None else None
+        row_index = int((context or {}).get("row_index", 0))
+        rows = list((table or {}).get("rows") or [])
+        columns = list((table or {}).get("columns") or [])
+        needs_fallback = bbox is None
+        try:
+            if bbox and len(bbox) == 4:
+                y1 = float(bbox[1])
+                y2 = float(bbox[3])
+                needs_fallback = y1 < 260 or (y2 - y1) > 120
+        except Exception:
+            needs_fallback = True
+        if needs_fallback:
+            fallback_rows, fallback_cells = _fallback_table_grid_bboxes(path, len(rows), len(columns))
+            if 0 <= row_index < len(fallback_rows):
+                bbox = fallback_rows[row_index]
+            if isinstance(table, dict):
+                table["_row_bboxes"] = fallback_rows
+                table["_cell_bboxes"] = fallback_cells
     editor = getattr(self, "table_editor", None)
     if editor is not None and hasattr(editor, "show_source_row_crop"):
         editor.show_source_row_crop(path, bbox, context=context)
@@ -1337,7 +1980,13 @@ def run_gemini(self):
 
             tables_one, raw_one = call_gemini(image_path, api_key, self.model_var.get().strip())
 
+            for table in tables_one or []:
+                ensure_table_image_metadata(table, idx - 1, image_path)
+
             tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
+
+            for table in tables_one or []:
+                ensure_table_image_metadata(table, idx - 1, image_path)
 
             all_tables.extend(tables_one or [])
             raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
@@ -1373,6 +2022,12 @@ def run_gemini(self):
         total_rows = sum(len(t["rows"]) for t in tables)
 
         self._set_status(f"Đọc xong: {len(image_paths)} ảnh, {len(tables)} bảng, {total_rows} dòng. Đã giữ cấu trúc đúng theo ảnh.", "success")
+        _show_ocr_done_notification(
+            self,
+            "Đọc bảng xong",
+            f"Đã đọc xong {len(image_paths)} ảnh.\n"
+            f"Kết quả: {len(tables)} bảng, {total_rows} dòng.",
+        )
 
         self._record_history(
 
@@ -1425,8 +2080,6 @@ def run_gemini(self):
 
         (out / "last_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
 
-        messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
-
         self._set_status("Lỗi đọc ảnh", "error")
 
         self._record_history(
@@ -1455,6 +2108,7 @@ def install_ocr_ui(app_cls):
     app_cls._update_preview_counter = _update_preview_counter
     app_cls._show_preview_image_index = _show_preview_image_index
     app_cls.move_preview_image = move_preview_image
+    app_cls.delete_current_preview_image = delete_current_preview_image
     app_cls.get_current_preview_image_path = get_current_preview_image_path
     app_cls.open_current_preview_image = open_current_preview_image
     app_cls._source_image_context_for_selection = _source_image_context_for_selection

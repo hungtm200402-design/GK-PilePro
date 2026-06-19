@@ -1,0 +1,6 @@
+pillow
+python-dotenv
+openpyxl
+google-genai
+pyinstaller
+opencv-python-headless

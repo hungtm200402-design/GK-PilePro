@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import re
+import threading
 import traceback
 import uuid
 from datetime import datetime
@@ -48,6 +49,12 @@ from gk_pilepro.gk_excel import (
     row_has_grey_background,
     select_longest_stt_chain,
     update_total_formulas,
+)
+from gk_pilepro.ui.gk_ocr_ui import (
+    _format_elapsed,
+    _show_ocr_done_notification,
+    _write_ocr_timing_log,
+    ensure_table_image_metadata,
 )
 
 def _apply_rows_insert_before_total_chot(self, wb):
@@ -2297,6 +2304,13 @@ def _v23_apply_rows_to_workbook(self, wb):
 
 def _v23_run_gemini(self):
 
+    if getattr(self, "_is_reading_table", False):
+        try:
+            self._set_status("Đang đọc bảng, vui lòng chờ tác vụ hiện tại hoàn tất.", "warn")
+        except Exception:
+            pass
+        return
+
     image_paths = list(getattr(self, "image_paths", None) or ([] if not self.image_path else [self.image_path]))
 
     if not image_paths:
@@ -2314,94 +2328,139 @@ def _v23_run_gemini(self):
         return
 
     self.save_key()
+    started_at = datetime.now()
+    model_name = self.model_var.get().strip()
+    self._is_reading_table = True
 
     try:
 
         self._set_status(f"Đang đọc bảng... ({len(image_paths)} ảnh)", "warn")
 
-        self.root.update_idletasks()
-
-        self.root.update()
-
     except Exception:
 
         pass
 
-    try:
+    def _ui_alive():
+        try:
+            return bool(self.root.winfo_exists())
+        except Exception:
+            return False
 
-        all_tables = []
+    def _status(text, tone="warn"):
+        try:
+            self.root.after(0, lambda: self._set_status(text, tone) if _ui_alive() else None)
+        except Exception:
+            pass
 
-        raw_parts = []
+    def _finish_success(tables, raw):
+        if not _ui_alive():
+            return
+        try:
+            out = last_run_dir()
+            out.mkdir(exist_ok=True)
+            (out / "ai_raw_response.txt").write_text(raw, encoding="utf-8")
+            (out / "ai_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        for idx, image_path in enumerate(image_paths, start=1):
+            self.tables = tables
+            self.table_editor.set_tables(tables)
+            self._refresh_daily_summary_panel(tables)
+            self.current_doc_kind = "bang_khoi_luong"
 
-            self._set_status(f"Đang đọc ảnh {idx}/{len(image_paths)}...", "warn")
+            if self.excel_headers and tables:
+                self.build_mapping()
 
-            self.root.update_idletasks()
+            total_rows = sum(len(t.get("rows", [])) for t in tables if isinstance(t, dict))
+            self._set_status(
+                f"Đọc xong: {len(image_paths)} ảnh, {len(tables)} bảng sau gộp, {total_rows} dòng. Kiểm tra preview trước khi xuất.",
+                "success",
+            )
+            ended_at = datetime.now()
+            elapsed_text = _format_elapsed((ended_at - started_at).total_seconds())
+            _write_ocr_timing_log(
+                "ocr_timing_bang.json",
+                "read_table",
+                started_at,
+                ended_at,
+                len(image_paths),
+                "success",
+                f"Đọc bảng xong: {len(tables)} bảng, {total_rows} dòng.",
+            )
+            _show_ocr_done_notification(
+                self,
+                "Đọc bảng xong",
+                f"Đã đọc xong {len(image_paths)} ảnh.\n"
+                f"Kết quả: {len(tables)} bảng, {total_rows} dòng.\n"
+                f"Thời gian: {elapsed_text}.",
+            )
+        finally:
+            self._is_reading_table = False
 
-            self.root.update()
+    def _finish_error(error_text):
+        if not _ui_alive():
+            return
+        try:
+            out = last_run_dir()
+            out.mkdir(exist_ok=True)
+            (out / "last_error.txt").write_text(error_text, encoding="utf-8")
+            ended_at = datetime.now()
+            elapsed_text = _format_elapsed((ended_at - started_at).total_seconds())
+            _write_ocr_timing_log(
+                "ocr_timing_bang.json",
+                "read_table",
+                started_at,
+                ended_at,
+                len(image_paths),
+                "error",
+                "Lỗi đọc bảng. Xem last_run_v12/last_error.txt",
+            )
+            _show_ocr_done_notification(
+                self,
+                "Lỗi đọc bảng",
+                "Có lỗi khi đọc bảng.\n"
+                f"Thời gian: {elapsed_text}.\n"
+                "Xem last_run_v12\\last_error.txt",
+            )
+            self._set_status("Lỗi đọc ảnh.", "error")
+        finally:
+            self._is_reading_table = False
 
-            tables_one, raw_one = call_gemini(image_path, api_key, self.model_var.get().strip())
+    def _worker():
+        try:
+            all_tables = []
+            raw_parts = []
 
-            tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
+            for idx, image_path in enumerate(image_paths, start=1):
+                _status(f"Đang đọc ảnh {idx}/{len(image_paths)}...", "warn")
+                tables_one, raw_one = call_gemini(image_path, api_key, model_name)
 
-            for table in tables_one or []:
+                for table in tables_one or []:
+                    ensure_table_image_metadata(table, idx - 1, image_path)
+
+                tables_one = postprocess_to_hop_coc_d1_d2(tables_one)
+
+                for table in tables_one or []:
+                    ensure_table_image_metadata(table, idx - 1, image_path)
+                all_tables.extend(tables_one or [])
+                raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
+
+            tables = merge_ocr_tables_for_continuous_read(all_tables)
+            for table in tables:
                 if isinstance(table, dict):
-                    row_count = len(table.get("rows") or [])
-                    table["_source_image_index"] = idx - 1
-                    table["_source_image_path"] = str(image_path)
-                    table["_row_source_indexes"] = [idx - 1] * row_count
-            all_tables.extend(tables_one or [])
+                    table["_source_image_count"] = len(image_paths)
 
-            raw_parts.append(f"=== IMAGE {idx}/{len(image_paths)}: {Path(image_path).name} ===\n{raw_one}")
+            raw = "\n\n".join(raw_parts)
+            try:
+                self.root.after(0, lambda: _finish_success(tables, raw))
+            except Exception:
+                pass
+        except Exception:
+            error_text = traceback.format_exc()
+            try:
+                self.root.after(0, lambda: _finish_error(error_text))
+            except Exception:
+                pass
 
-        tables = merge_ocr_tables_for_continuous_read(all_tables)
-        for table in tables:
-            if isinstance(table, dict):
-                table["_source_image_count"] = len(image_paths)
-
-        raw = "\n\n".join(raw_parts)
-
-        out = last_run_dir()
-
-        out.mkdir(exist_ok=True)
-
-        (out / "ai_raw_response.txt").write_text(raw, encoding="utf-8")
-
-        (out / "ai_tables.json").write_text(json.dumps(tables, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        self.tables = tables
-
-        self.table_editor.set_tables(tables)
-        self._refresh_daily_summary_panel(tables)
-
-        self.current_doc_kind = "bang_khoi_luong"
-
-        if self.excel_headers and tables:
-
-            self.build_mapping()
-
-        total_rows = sum(len(t.get("rows", [])) for t in tables if isinstance(t, dict))
-
-        self._set_status(
-
-            f"Đọc xong: {len(image_paths)} ảnh, {len(tables)} bảng sau gộp, {total_rows} dòng. Kiểm tra preview trước khi xuất.",
-
-            "success",
-
-        )
-
-    except Exception:
-
-        out = last_run_dir()
-
-        out.mkdir(exist_ok=True)
-
-        (out / "last_error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-
-        messagebox.showerror("Lỗi đọc ảnh", "Có lỗi. Xem last_run_v12/last_error.txt")
-
-        self._set_status("Lỗi đọc ảnh.", "error")
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 
